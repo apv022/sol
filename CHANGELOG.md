@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Redesigned panel for non-technical users: status hero with Tor progress, getting-started
+  checklist, add-service presets, plain-language access choices, a pairing wizard that detects
+  the new device, drag-and-drop files with names, readable activity log, dark mode.
+- Live "connected and verified" status per device and service, and a `connect` event.
+- Service health check: the panel warns when nothing listens on a service's port.
+- `sol pair`/`sol connect` wait for Tor with progress, retry while an onion publishes, and explain
+  failures in plain English.
 - Node mode: Tor onion service with v3 client authorization, managed through tor's control port.
 - `sol/1` handshake: one signed challenge-response per connection, then a raw TCP pipe.
 - Pairing with single-use, 10-minute links and QR codes; per-device instant revocation.

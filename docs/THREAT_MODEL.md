@@ -15,6 +15,7 @@ says plainly what is and isn't protected in the current build. The longer design
 | A man in the middle changing the target service | The signature covers op, service, name, secret, node key, and nonce | `protocol.signedMessage` |
 | A stolen or lost device | Remove it in the panel. Its live connections close at once, and its Tor key is removed from the onion | `node` hooks, `auth.Devices.Remove` |
 | A leaked pairing link | Single use, expires in 10 minutes, and the secret is compared by hash | `pairing` |
+| Knowing who is really connected | The panel's "Connected and verified" status lists only streams that passed the handshake with that device's paired key | `node.Devices` |
 | Malicious web pages attacking the panel | Loopback-only bind, Host header check (DNS rebinding), CSRF token, strict CSP, HTML escaping | `api.guard`, `web/app.js` |
 | Linking a public site to your private node | Each public service gets its own onion key | `node.publishService` |
 | Network observers | Tor encrypts end to end. Onion services use no exit nodes | Tor |

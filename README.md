@@ -66,6 +66,10 @@ sol connect 'sol://pair?v=1&node=…'    # first time: pairs, then opens tunnels
 
 Open `http://127.0.0.1:9000`. Next time, just run `sol connect`.
 
+The panel walks you through it: a getting-started checklist, presets for common apps (Navidrome,
+Jellyfin, Immich, Home Assistant, SSH…), a warning if the app isn't running, and a live view of
+which devices are connected to what, each one cryptographically verified.
+
 > Tor is slow to start the first time (around 30 s to bootstrap, plus up to a minute for a new
 > onion to become reachable). After that, connections are quick.
 
@@ -107,7 +111,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Tor onion services with client authorization | ✅ |
 | Signed handshake, per-device pairing and instant revocation | ✅ |
 | Any TCP service, tunnels with `sol connect` | ✅ |
-| Web panel with QR pairing | ✅ |
+| Web panel: guided setup, pairing wizard, live "connected and verified" status per device | ✅ |
 | Public services on their own onion | ✅ |
 | Content-addressed files with streaming (`_files` service) | ✅ |
 | LAN / clearnet transport (testing) | ✅ |

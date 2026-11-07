@@ -7,89 +7,192 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>Sol</h1>
-  <span id="node-id" class="mono" title="Node ID"></span>
+<header class="topbar">
+  <div class="brand"><span class="sun" aria-hidden="true"></span>Sol</div>
+  <div id="status-pill" class="pill"><span class="dot"></span><span id="status-pill-text">Starting…</span></div>
 </header>
-<nav>
-  <button data-screen="dashboard" class="active">Dashboard</button>
+
+<nav class="tabs" aria-label="Sections">
+  <button data-screen="home" class="active">Home</button>
   <button data-screen="services">Services</button>
   <button data-screen="devices">Devices</button>
   <button data-screen="files">Files</button>
-  <button data-screen="logs">Logs</button>
+  <button data-screen="activity">Activity</button>
 </nav>
+
 <main>
-  <p id="error" class="error" hidden></p>
-
-  <section id="dashboard" class="screen active">
-    <h2>Transports</h2>
-    <div id="transports" class="cards"></div>
-    <p class="muted">Version <span id="version">-</span> · up <span id="uptime">-</span></p>
-    <div id="audit-card" hidden>
-      <h2>Leak check</h2>
-      <table id="audit-table"><thead>
-        <tr><th>Result</th><th>Service</th><th>Check</th><th>Detail</th></tr>
-      </thead><tbody></tbody></table>
+  <!-- HOME -->
+  <section id="home" class="screen active">
+    <div id="hero" class="hero">
+      <h1 id="hero-title">Starting up…</h1>
+      <p id="hero-text" class="muted"></p>
+      <div id="hero-progress" class="progress" hidden><div id="hero-progress-bar"></div></div>
     </div>
+
+    <div id="checklist" class="card" hidden>
+      <h2>Get started</h2>
+      <ol class="steps">
+        <li id="step-service"><span class="check"></span><div><b>Add a service</b>
+          <p class="muted">Tell Sol about an app on this computer, like a music or photo server.</p></div>
+          <button data-action="add-service" class="small">Add service</button></li>
+        <li id="step-device"><span class="check"></span><div><b>Pair a device</b>
+          <p class="muted">Give another computer permission to reach your services.</p></div>
+          <button data-action="pair" class="small">Pair device</button></li>
+        <li id="step-connect"><span class="check"></span><div><b>Connect from that device</b>
+          <p class="muted">Run <code>sol connect</code> on it and open the address it prints.</p></div></li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>Connected right now</h2>
+      <div id="live-list"></div>
+    </div>
+
+    <details class="card advanced">
+      <summary>Advanced details</summary>
+      <dl class="kv">
+        <dt>Node ID</dt><dd class="mono" id="node-id">-</dd>
+        <dt>Version</dt><dd id="version">-</dd>
+        <dt>Running for</dt><dd id="uptime">-</dd>
+      </dl>
+      <h3>Networks</h3>
+      <div id="transports"></div>
+      <div id="audit-card" hidden>
+        <h3>Leak check (anonymous services)</h3>
+        <div id="audit-list"></div>
+      </div>
+    </details>
   </section>
 
+  <!-- SERVICES -->
   <section id="services" class="screen">
-    <h2>Services</h2>
-    <p class="muted">A service is an app on this machine (e.g. Navidrome on port 4533).
-      <b>Private</b> services are reachable only by paired devices. <b>Public</b> ones get their own
-      onion address that anyone can open in Tor Browser.</p>
-    <div class="scroll">
-      <table id="services-table"><thead>
-        <tr><th>Name</th><th>Port</th><th>Protocol</th><th>Visibility</th><th>Public address</th><th></th></tr>
-      </thead><tbody></tbody></table>
+    <div class="section-head">
+      <div><h2>Services</h2>
+        <p class="muted">Apps on this computer that your devices can reach.</p></div>
+      <button data-action="add-service">+ Add service</button>
     </div>
-    <form id="add-service">
-      <input name="name" placeholder="name, e.g. navidrome" pattern="[a-z0-9][a-z0-9-]{0,31}" required>
-      <input name="local_port" type="number" min="1" max="65535" placeholder="port, e.g. 4533" required>
-      <select name="protocol" title="Protocol">
-        <option value="tcp">tcp (anything)</option>
-        <option value="http">http</option>
-      </select>
-      <select name="visibility" title="Visibility">
-        <option value="private">private</option>
-        <option value="public">public</option>
-        <option value="anonymous-public">anonymous-public</option>
-      </select>
-      <button>Add service</button>
-    </form>
+    <div id="service-list" class="grid"></div>
   </section>
 
+  <!-- DEVICES -->
   <section id="devices" class="screen">
-    <h2>Devices</h2>
-    <div class="scroll">
-      <table id="devices-table"><thead>
-        <tr><th>Name</th><th>ID</th><th>Last seen</th><th></th></tr>
-      </thead><tbody></tbody></table>
+    <div class="section-head">
+      <div><h2>Devices</h2>
+        <p class="muted">Computers allowed to reach your private services. Remove one and its access ends instantly.</p></div>
+      <button data-action="pair">+ Pair a device</button>
     </div>
-    <button id="pair-btn">Pair a device</button>
-    <div id="pair-out" hidden>
-      <p>On the other device run:</p>
-      <pre id="pair-cmd" class="mono"></pre>
-      <div id="qr"></div>
-      <p class="muted">Single use. Expires <span id="pair-expires"></span>. Treat it like a password.</p>
-      <button id="copy-link" type="button" class="secondary">Copy link</button>
-    </div>
+    <div id="device-list" class="grid"></div>
   </section>
 
+  <!-- FILES -->
   <section id="files" class="screen">
-    <h2>Files</h2>
-    <p class="muted">Files are stored by SHA-256, so the same file has the same address everywhere.
-      Paired devices can fetch them through the <code>_files</code> service.</p>
-    <form id="upload"><input type="file" name="file" required><button>Upload</button></form>
-    <ul id="file-list"></ul>
+    <div class="section-head">
+      <div><h2>Files</h2>
+        <p class="muted">Paired devices can download these through the <code>_files</code> service.
+          Each file's address is its SHA-256 fingerprint, so it can be checked after download.</p></div>
+    </div>
+    <label id="dropzone" class="dropzone">
+      <input type="file" id="file-input" multiple hidden>
+      <b>Drop files here</b> or click to choose
+      <span id="upload-status" class="muted"></span>
+    </label>
     <audio id="player" controls hidden></audio>
+    <div id="file-list"></div>
   </section>
 
-  <section id="logs" class="screen">
-    <h2>Logs</h2>
-    <ul id="log-list" class="log"></ul>
+  <!-- ACTIVITY -->
+  <section id="activity" class="screen">
+    <h2>Activity</h2>
+    <p class="muted">Pairings, connections, and blocked attempts. Newest first.</p>
+    <ul id="event-list" class="events"></ul>
   </section>
 </main>
+
+<!-- ADD SERVICE DIALOG -->
+<dialog id="dlg-service">
+  <form id="service-form" method="dialog">
+    <h2>Add a service</h2>
+    <p class="muted">Pick the app, or choose Custom. The app must already be running on this computer.</p>
+    <div id="templates" class="templates"></div>
+
+    <label>Name <span class="muted">(lowercase letters, numbers, dashes)</span>
+      <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,31}" placeholder="music"></label>
+    <label>Port the app listens on
+      <input name="local_port" type="number" min="1" max="65535" required placeholder="4533"></label>
+
+    <fieldset class="choices">
+      <legend>Who can open it?</legend>
+      <label class="choice"><input type="radio" name="visibility" value="private" checked>
+        <span><b>Only my devices</b> <span class="tag">Recommended</span>
+        <span class="muted">Invisible to everyone else, even if they find the address.</span></span></label>
+      <label class="choice"><input type="radio" name="visibility" value="public">
+        <span><b>Anyone with Tor Browser</b>
+        <span class="muted">Gets its own .onion address you can share, or open on a phone. Your IP stays hidden.</span></span></label>
+      <label class="choice"><input type="radio" name="visibility" value="anonymous-public">
+        <span><b>Anonymous public</b> <span class="tag warn">Experimental</span>
+        <span class="muted">Like public, with extra leak protection. Not complete yet: don't rely on it.</span></span></label>
+    </fieldset>
+
+    <details>
+      <summary>Advanced</summary>
+      <label>Protocol
+        <select name="protocol">
+          <option value="tcp">Any (tcp): works for everything</option>
+          <option value="http">Web (http): lets Sol hide server headers on public sites</option>
+        </select></label>
+    </details>
+
+    <p id="service-error" class="error" hidden></p>
+    <div class="actions">
+      <button value="cancel" formnovalidate class="ghost">Cancel</button>
+      <button id="service-submit" value="ok">Add service</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- PAIR DIALOG -->
+<dialog id="dlg-pair">
+  <div class="pair">
+    <h2>Pair a device</h2>
+    <div id="pair-steps">
+      <div class="step"><span class="num">1</span><div>
+        <b>On the other computer, install Tor and Sol</b>
+        <div class="os-tabs">
+          <button data-os="arch" class="active">Arch</button><button data-os="debian">Ubuntu / Debian</button>
+          <button data-os="mac">macOS</button>
+        </div>
+        <div class="copyrow"><pre id="install-cmd"></pre><button data-copy="install-cmd" class="ghost small">Copy</button></div>
+      </div></div>
+      <div class="step"><span class="num">2</span><div>
+        <b>Run this command there</b>
+        <div class="copyrow"><pre id="pair-cmd">Creating a link…</pre><button data-copy="pair-cmd" class="ghost small">Copy</button></div>
+        <p class="muted small">Works once and expires in <span id="pair-countdown">10:00</span>. Treat it like a password.</p>
+        <details><summary>Show as QR code</summary>
+          <div id="qr"></div>
+          <p class="muted small">For the <code>sol</code> app on another computer. Phones can't use it yet:
+            to reach a service from a phone, make it "Anyone with Tor Browser" and open its address in Tor Browser.</p>
+        </details>
+      </div></div>
+      <div class="step"><span class="num">3</span><div>
+        <b id="pair-wait-title">Waiting for your device…</b>
+        <p id="pair-wait-text" class="muted">Keep this open. The first connection over Tor usually takes 30 seconds to 2 minutes.</p>
+      </div></div>
+    </div>
+    <p id="pair-error" class="error" hidden></p>
+    <div class="actions"><button id="pair-close" class="ghost">Close</button></div>
+  </div>
+</dialog>
+
+<!-- QR DIALOG (public addresses) -->
+<dialog id="dlg-qr">
+  <h2 id="qr-title">Open in Tor Browser</h2>
+  <div id="qr-big"></div>
+  <pre id="qr-text"></pre>
+  <div class="actions"><button data-close class="ghost">Close</button></div>
+</dialog>
+
+<div id="toasts" aria-live="polite"></div>
+
 <script src="/vendor/qrcode.js"></script>
 <script src="/app.js"></script>
 </body>

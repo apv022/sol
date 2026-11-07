@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/connect"
 	"github.com/apv022/sol/internal/identity"
@@ -128,9 +129,17 @@ func TestPairConnectRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devs := h.node.Devices()
-	if len(devs) != 1 {
-		t.Fatalf("devices: %+v", devs)
+	// The panel shows the device online, with a verified connection to "web".
+	var devs []api.DeviceView
+	for range 50 {
+		devs = h.node.Devices()
+		if len(devs) == 1 && devs[0].Online {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(devs) != 1 || !devs[0].Online || len(devs[0].Connections) != 1 || devs[0].Connections[0].Service != "web" {
+		t.Fatalf("live connection not reported: %+v", devs)
 	}
 	if err := h.node.RemoveDevice(devs[0].ID); err != nil {
 		t.Fatal(err)
@@ -138,6 +147,10 @@ func TestPairConnectRevoke(t *testing.T) {
 	live.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := live.Read(make([]byte, 1)); err == nil || errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 		t.Fatalf("live connection survived revocation: %v", err)
+	}
+
+	if devs := h.node.Devices(); len(devs) != 0 {
+		t.Fatalf("revoked device still listed: %+v", devs)
 	}
 
 	// 4. New connections after revocation get nothing.

@@ -9,6 +9,7 @@ package blob
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,11 +32,18 @@ var ErrNotFound = errors.New("blob not found")
 // temp file and are renamed into place, so readers never see partial data.
 type Store struct {
 	Dir string
+
+	mu sync.Mutex // guards the names file
 }
+
+// namesFile maps hash -> original filename. Names are display labels only;
+// content is always addressed by hash.
+const namesFile = ".names.json"
 
 // Entry describes one stored blob.
 type Entry struct {
 	Hash     string    `json:"hash"`
+	Name     string    `json:"name,omitempty"`
 	Size     int64     `json:"size"`
 	Modified time.Time `json:"modified"`
 }
@@ -72,6 +81,32 @@ func (s *Store) Put(r io.Reader) (string, error) {
 	return sum, nil
 }
 
+// PutNamed is Put plus a display name (e.g. the uploaded filename).
+func (s *Store) PutNamed(r io.Reader, name string) (string, error) {
+	hash, err := s.Put(r)
+	if err != nil || name == "" {
+		return hash, err
+	}
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names := s.readNames()
+	names[hash] = name
+	data, _ := json.Marshal(names)
+	return hash, os.WriteFile(filepath.Join(s.Dir, namesFile), data, 0o600)
+}
+
+func (s *Store) readNames() map[string]string {
+	names := map[string]string{}
+	if data, err := os.ReadFile(filepath.Join(s.Dir, namesFile)); err == nil {
+		json.Unmarshal(data, &names)
+	}
+	return names
+}
+
 // Open returns the blob with the given hash.
 func (s *Store) Open(hash string) (*os.File, error) {
 	if !ValidHash(hash) {
@@ -99,6 +134,9 @@ func (s *Store) List() ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	names := s.readNames()
+	s.mu.Unlock()
 	var out []Entry
 	for _, de := range des {
 		if !ValidHash(de.Name()) {
@@ -108,7 +146,7 @@ func (s *Store) List() ([]Entry, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Entry{Hash: de.Name(), Size: info.Size(), Modified: info.ModTime().UTC()})
+		out = append(out, Entry{Hash: de.Name(), Name: names[de.Name()], Size: info.Size(), Modified: info.ModTime().UTC()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
 	return out, nil

@@ -82,6 +82,16 @@ a good reason.
    public key → replies with the service list. The key set is unchanged (it moved from "pending"
    to "device"), so the onion is not republished.
 
+### Live status in the panel
+
+`node.handleConnect` records every open stream as `connInfo{device, service, since}`.
+`Node.Devices()` groups them into `api.DeviceView.Connections`, so the panel can show a device as
+"connected and verified". Every listed stream passed the sol/1 handshake signed by that device's
+paired key. The first stream of a device to a service also logs a `connect` event.
+`Node.Services()` probes each service's local port, so the panel can warn when the app isn't
+running. Uploaded files keep a display name in `blobs/.names.json`. Content is still addressed
+only by hash.
+
 ### Revocation
 
 Panel `DELETE /api/devices/{id}` → `Devices.Remove` → its hooks fire:
@@ -110,7 +120,7 @@ anonymous-public). Anonymous-public services are never published on clearnet.
 ~/.sol/                     node
 ├── node.key                ed25519 seed (0600). Back this up: it is the node's identity
 ├── config.json             services, devices, ports, transports (0600, atomic writes)
-├── blobs/<sha256>
+├── blobs/<sha256>         (+ .names.json: display names for uploads)
 ├── bin/                    extracted bundled binaries
 └── tor/                    torrc, tor.log, data/, onions/<id>.key
 

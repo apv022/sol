@@ -15,6 +15,7 @@ const (
 	KindReject    = "reject"    // a connection failed the handshake
 	KindPair      = "pair"      // a device paired
 	KindRevoke    = "revoke"    // a device was removed
+	KindConnect   = "connect"   // a device opened a verified connection to a service
 	KindTransport = "transport" // a transport changed state
 	KindService   = "service"   // a service was added/removed/changed
 	KindAudit     = "audit"

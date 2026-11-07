@@ -94,7 +94,10 @@ type Node struct {
 	lastAuth string // last client-auth key set published for the node
 }
 
-type connInfo struct{ device, service string }
+type connInfo struct {
+	device, service string
+	since           time.Time
+}
 
 type publicService struct {
 	addrs map[string]string
@@ -416,8 +419,18 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request) {
 	n.devices.Touch(dev.ID)
 
 	n.mu.Lock()
-	n.conns[c] = connInfo{device: dev.ID, service: req.Service}
+	first := true
+	for _, ci := range n.conns {
+		if ci.device == dev.ID && ci.service == req.Service {
+			first = false
+			break
+		}
+	}
+	n.conns[c] = connInfo{device: dev.ID, service: req.Service, since: time.Now().UTC()}
 	n.mu.Unlock()
+	if first {
+		n.log.Add(events.KindConnect, fmt.Sprintf("%s connected to %s (signature verified)", auth.Describe(dev), req.Service))
+	}
 	defer func() {
 		n.mu.Lock()
 		delete(n.conns, c)
@@ -539,13 +552,26 @@ func (n *Node) Status() api.StatusInfo {
 func (n *Node) Services() []api.ServiceView {
 	var out []api.ServiceView
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	for _, s := range n.cfg.ServiceList() {
 		v := api.ServiceView{Service: s}
 		if p := n.public[s.Name]; p != nil {
 			v.Addresses = p.addrs
 		}
+		for _, ci := range n.conns {
+			if ci.service == s.Name {
+				v.ActiveStreams++
+			}
+		}
 		out = append(out, v)
+	}
+	n.mu.Unlock()
+	// Probe outside the lock: is something actually listening on the port?
+	for i := range out {
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", out[i].LocalPort), 300*time.Millisecond)
+		if err == nil {
+			c.Close()
+			out[i].Running = true
+		}
 	}
 	if out == nil {
 		out = []api.ServiceView{}
@@ -592,8 +618,40 @@ func (n *Node) SetServiceVisibility(name, visibility string) error {
 	return nil
 }
 
-// Devices implements api.Backend.
-func (n *Node) Devices() []config.Device { return n.devices.List() }
+// Devices implements api.Backend. Each device carries its live,
+// handshake-verified connections grouped by service.
+func (n *Node) Devices() []api.DeviceView {
+	type key struct{ dev, svc string }
+	live := map[key]*api.ConnectionView{}
+	n.mu.Lock()
+	for _, ci := range n.conns {
+		k := key{ci.device, ci.service}
+		cv := live[k]
+		if cv == nil {
+			cv = &api.ConnectionView{Service: ci.service, Since: ci.since}
+			live[k] = cv
+		}
+		cv.Streams++
+		if ci.since.Before(cv.Since) {
+			cv.Since = ci.since
+		}
+	}
+	n.mu.Unlock()
+
+	out := []api.DeviceView{}
+	for _, d := range n.devices.List() {
+		v := api.DeviceView{Device: d, Connections: []api.ConnectionView{}, TorAuth: d.TorAuthPub != "", KeyFingerprint: d.ID}
+		for k, cv := range live {
+			if k.dev == d.ID {
+				v.Connections = append(v.Connections, *cv)
+			}
+		}
+		sort.Slice(v.Connections, func(i, j int) bool { return v.Connections[i].Service < v.Connections[j].Service })
+		v.Online = len(v.Connections) > 0
+		out = append(out, v)
+	}
+	return out
+}
 
 // RemoveDevice implements api.Backend.
 func (n *Node) RemoveDevice(id string) error { return n.devices.Remove(id) }

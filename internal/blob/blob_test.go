@@ -24,6 +24,12 @@ func TestPutGetRange(t *testing.T) {
 	if hash != hex.EncodeToString(want[:]) {
 		t.Fatalf("hash = %s", hash)
 	}
+	if _, err := s.PutNamed(strings.NewReader(content), `C:\music\song.flac`); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.List(); len(l) != 1 || l[0].Name != "song.flac" {
+		t.Fatalf("name not stored: %+v", l)
+	}
 	if !s.Has(hash) || s.Has("../etc/passwd") {
 		t.Fatal("Has wrong")
 	}

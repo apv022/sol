@@ -32,6 +32,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -54,7 +55,7 @@ type Backend interface {
 	AddService(config.Service) error
 	RemoveService(name string) error
 	SetServiceVisibility(name, visibility string) error
-	Devices() []config.Device
+	Devices() []DeviceView
 	RemoveDevice(id string) error
 	NewPairing() (PairingInfo, error)
 	Blobs() *blob.Store
@@ -72,10 +73,31 @@ type StatusInfo struct {
 	CSRF       string             `json:"csrf,omitempty"`
 }
 
-// ServiceView is a service plus its public addresses (public services only).
+// ServiceView is a service plus live state.
 type ServiceView struct {
 	config.Service
-	Addresses map[string]string `json:"addresses,omitempty"`
+	Addresses     map[string]string `json:"addresses,omitempty"` // public services only
+	Running       bool              `json:"running"`             // something listens on local_port
+	ActiveStreams int               `json:"active_streams"`      // open device connections
+}
+
+// DeviceView is a paired device plus its live connections.
+type DeviceView struct {
+	config.Device
+	// Online is true while the device has at least one open connection.
+	// Every connection passed the sol/1 handshake: the device proved it
+	// holds the private key paired as PubKey by signing a fresh nonce.
+	Online         bool             `json:"online"`
+	Connections    []ConnectionView `json:"connections"`
+	KeyFingerprint string           `json:"key_fingerprint"`
+	TorAuth        bool             `json:"tor_auth"` // also locked at the Tor layer
+}
+
+// ConnectionView groups one device's open connections to one service.
+type ConnectionView struct {
+	Service string    `json:"service"`
+	Streams int       `json:"streams"` // open TCP streams (a browser opens several)
+	Since   time.Time `json:"since"`   // oldest open stream
 }
 
 // PairingInfo is the body of POST /api/devices/pair.
@@ -261,12 +283,12 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Stream straight to disk; the file is never held in memory.
-		hash, err := s.b.Blobs().Put(part)
+		hash, err := s.b.Blobs().PutNamed(part, part.FileName())
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		s.b.Events().Add(events.KindService, "file stored: "+hash[:12])
+		s.b.Events().Add(events.KindService, fmt.Sprintf("file stored: %s (%s…)", part.FileName(), hash[:12]))
 		writeJSON(w, http.StatusCreated, map[string]string{"hash": hash})
 		return
 	}
