@@ -12,8 +12,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -152,15 +155,19 @@ func (s *Store) List() ([]Entry, error) {
 	return out, nil
 }
 
-// Handler serves GET <prefix><hash> with range support. The ETag is the
-// hash itself, so clients can verify content.
+// Handler serves GET <prefix><hash>[/<filename>] with range support. The
+// ETag is the hash itself, so clients can verify content. The optional
+// filename only sets the Content-Type and the saved name.
+//
+// Responses carry "Content-Security-Policy: sandbox": an uploaded HTML file
+// opened in a browser cannot run scripts in the origin it is served from.
 func (s *Store) Handler(prefix string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		hash := strings.TrimPrefix(r.URL.Path, prefix)
+		hash, name, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, prefix), "/")
 		f, err := s.Open(hash)
 		if err != nil {
 			http.NotFound(w, r)
@@ -172,9 +179,97 @@ func (s *Store) Handler(prefix string) http.Handler {
 			http.Error(w, "read error", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("ETag", `"`+hash+`"`)
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeContent(w, r, "", info.ModTime(), f)
+		h := w.Header()
+		h.Set("ETag", `"`+hash+`"`)
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Content-Security-Policy", "sandbox")
+		if r.URL.Query().Has("download") {
+			if name == "" {
+				name = hash
+			}
+			h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		}
+		http.ServeContent(w, r, name, info.ModTime(), f)
 	})
 }
+
+// Browser serves a file-list page at "/" and the files under "/blob/".
+// It is what paired devices see when they open the _files service.
+func (s *Store) Browser() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /blob/", s.Handler("/blob/"))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		entries, err := s.List()
+		if err != nil {
+			http.Error(w, "could not list files", http.StatusInternalServerError)
+			return
+		}
+		rows := make([]listRow, 0, len(entries))
+		for _, e := range entries {
+			name := e.Name
+			if name == "" {
+				name = e.Hash[:12] + "…"
+			}
+			link := "/blob/" + e.Hash
+			if e.Name != "" {
+				link += "/" + url.PathEscape(e.Name)
+			}
+			rows = append(rows, listRow{Name: name, Link: link, Hash: e.Hash, Size: humanSize(e.Size), When: e.Modified.Format("2 Jan 2006 15:04")})
+		}
+		h := w.Header()
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("Cache-Control", "no-store")
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		listPage.Execute(w, rows)
+	})
+	return mux
+}
+
+type listRow struct{ Name, Link, Hash, Size, When string }
+
+func humanSize(n int64) string {
+	switch {
+	case n < 1<<10:
+		return fmt.Sprintf("%d B", n)
+	case n < 1<<20:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	case n < 1<<30:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%.2f GB", float64(n)/(1<<30))
+	}
+}
+
+// listPage is rendered with html/template, which escapes every value.
+var listPage = template.Must(template.New("files").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared files · Sol</title>
+<style>
+:root{--bg:#f6f5f1;--panel:#fff;--ink:#1c1d21;--muted:#636672;--line:#e3e0d8;--accent:#e08a00;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0e0f13;--panel:#17191f;--ink:#ecedf0;--muted:#969aa6;--line:#2a2d36;--accent:#f5b13d;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:24px 16px 48px}h1{font-size:22px;margin:16px 0 4px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px}
+.sun{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,var(--accent) 55%,transparent 58%),repeating-conic-gradient(var(--accent) 0 10deg,transparent 10deg 30deg)}
+.lock{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:99px;background:color-mix(in srgb,#1f8a57 15%,transparent);color:#1f8a57}
+.muted{color:var(--muted);font-size:13px}
+.file{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
+.file .name{flex:1;min-width:180px;font-weight:600;word-break:break-word}
+.file code{font-size:12px;color:var(--muted);word-break:break-all}
+a.btn{display:inline-block;padding:6px 12px;border-radius:8px;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:600;font-size:13px}
+a.btn.primary{background:var(--accent);border-color:transparent;color:#1c1d21}
+</style></head><body><main>
+<div class="brand"><span class="sun"></span>Sol</div>
+<h1>Shared files</h1>
+<p class="muted"><span class="lock">🔒 Verified connection</span> Shared from your Sol node over Tor. Only
+paired devices can open this page. The fingerprint (SHA-256) under each file lets you check
+that what you downloaded is exactly what was shared.</p>
+{{range .}}<div class="file">
+  <div class="name">{{.Name}}<div class="muted">{{.Size}} · {{.When}}</div><code title="SHA-256">{{.Hash}}</code></div>
+  <a class="btn" href="{{.Link}}">Open</a>
+  <a class="btn primary" href="{{.Link}}?download">Download</a>
+</div>{{else}}<p>No files shared yet. Add some in the Sol panel on your node (Files tab).</p>{{end}}
+</main></body></html>`))

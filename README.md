@@ -113,7 +113,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Any TCP service, tunnels with `sol connect` | ✅ |
 | Web panel: guided setup, pairing wizard, live "connected and verified" status per device | ✅ |
 | Public services on their own onion | ✅ |
-| Content-addressed files with streaming (`_files` service) | ✅ |
+| Shared files: browsable page for paired devices, streaming, SHA-256 verified | ✅ |
 | LAN / clearnet transport (testing) | ✅ |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |

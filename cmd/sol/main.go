@@ -245,11 +245,11 @@ func runConnect(ctx context.Context, args []string) error {
 						scheme = "http"
 					}
 				}
-				hint := ""
+				label := svc
 				if svc == node.FilesService {
-					hint = "  (files: /blob/<sha256>)"
+					label = "shared files" // the node's Files tab, as a browsable page
 				}
-				fmt.Printf("  %-12s -> %s://%s%s\n", svc, scheme, bound, hint)
+				fmt.Printf("  %-12s -> %s://%s\n", label, scheme, bound)
 			})
 		}()
 	}

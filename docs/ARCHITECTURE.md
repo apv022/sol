@@ -90,7 +90,9 @@ a good reason.
 paired key. The first stream of a device to a service also logs a `connect` event.
 `Node.Services()` probes each service's local port, so the panel can warn when the app isn't
 running. Uploaded files keep a display name in `blobs/.names.json`. Content is still addressed
-only by hash.
+only by hash. The built-in `_files` service is `blob.Store.Browser()`: a file-list page at `/`
+(html/template, strict CSP) and `/blob/<hash>[/<name>][?download]`. Blobs are served with
+`Content-Security-Policy: sandbox`, so an uploaded HTML file can't run scripts.
 
 ### Revocation
 

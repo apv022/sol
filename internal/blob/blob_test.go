@@ -63,3 +63,45 @@ func TestPutGetRange(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserListsAndEscapes(t *testing.T) {
+	s, _ := New(t.TempDir())
+	hash, _ := s.PutNamed(strings.NewReader("# notes"), "devpost.md")
+	evil, _ := s.PutNamed(strings.NewReader("x"), "<script>alert(1)</script>.html")
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(page)
+	if !strings.Contains(body, "devpost.md") || !strings.Contains(body, "/blob/"+hash+"/devpost.md") {
+		t.Fatalf("listing missing file: %s", body)
+	}
+	if strings.Contains(body, "<script>alert(1)") {
+		t.Fatal("file name was not escaped")
+	}
+
+	// Named link: content type from the name, attachment on ?download.
+	resp, err = http.Get(srv.URL + "/blob/" + hash + "/devpost.md?download")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, `filename=devpost.md`) {
+		t.Fatalf("Content-Disposition = %q", cd)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox" {
+		t.Fatalf("blob CSP = %q", csp)
+	}
+
+	// Uploaded HTML is served sandboxed, never as a live page in this origin.
+	resp, _ = http.Get(srv.URL + "/blob/" + evil)
+	resp.Body.Close()
+	if resp.Header.Get("Content-Security-Policy") != "sandbox" {
+		t.Fatal("uploaded HTML not sandboxed")
+	}
+}

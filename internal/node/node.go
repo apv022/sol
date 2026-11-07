@@ -211,7 +211,7 @@ func (n *Node) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	filesSrv := &http.Server{Handler: n.blobs.Handler("/blob/"), ReadHeaderTimeout: 30 * time.Second}
+	filesSrv := &http.Server{Handler: n.blobs.Browser(), ReadHeaderTimeout: 30 * time.Second}
 	go filesSrv.Serve(filesLn)
 	defer filesSrv.Close()
 	n.filesAddr = filesLn.Addr().String()
