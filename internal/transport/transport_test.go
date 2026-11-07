@@ -88,6 +88,15 @@ func (f *fakeTorControl) serve(t *testing.T, c net.Conn) {
 		f.mu.Lock()
 		f.cmds = append(f.cmds, line)
 		f.mu.Unlock()
+		// Mirror real tor: client auth keys without Flags=V3Auth are refused.
+		if strings.HasPrefix(line, "ADD_ONION") && strings.Contains(line, "ClientAuthV3=") && !strings.Contains(line, "Flags=V3Auth") {
+			tp.PrintfLine("512 No auth type specified")
+			continue
+		}
+		if strings.Contains(line, "ClientAuthV3=REJECTME") {
+			tp.PrintfLine("512 Failed to decode v3 client authorization")
+			continue
+		}
 		switch {
 		case strings.HasPrefix(line, "AUTHENTICATE"), line == "TAKEOWNERSHIP",
 			strings.HasPrefix(line, "DEL_ONION"), strings.HasPrefix(line, "ONION_CLIENT_AUTH_ADD"):
@@ -169,7 +178,7 @@ func TestTorPublishPersistsKeyAndClientAuth(t *testing.T) {
 		t.Fatalf("key not persisted: %q %v", key, err)
 	}
 	last := f.cmds[len(f.cmds)-1]
-	if !strings.Contains(last, "Port=80,127.0.0.1:8081") || !strings.Contains(last, "ClientAuthV3=KEYA") || !strings.Contains(last, "ClientAuthV3=KEYB") {
+	if !strings.Contains(last, "Flags=V3Auth") || !strings.Contains(last, "Port=80,127.0.0.1:8081") || !strings.Contains(last, "ClientAuthV3=KEYA") || !strings.Contains(last, "ClientAuthV3=KEYB") {
 		t.Fatalf("ADD_ONION = %q", last)
 	}
 
@@ -180,6 +189,17 @@ func TestTorPublishPersistsKeyAndClientAuth(t *testing.T) {
 	n := len(f.cmds)
 	if !strings.HasPrefix(f.cmds[n-2], "DEL_ONION") || !strings.HasPrefix(f.cmds[n-1], "ADD_ONION ED25519-V3:secretkeyblob") {
 		t.Fatalf("republish commands = %q", f.cmds[n-2:])
+	}
+
+	// A failed update must not take the onion offline: the old one is restored.
+	if _, err := tor.Publish(context.Background(), Publication{ID: "node", Target: "127.0.0.1:8081", ClientAuth: []string{"REJECTME"}}); err == nil {
+		t.Fatal("expected tor to reject the bad key")
+	}
+	if last := f.cmds[len(f.cmds)-1]; !strings.HasPrefix(last, "ADD_ONION ED25519-V3:") || strings.Contains(last, "REJECTME") {
+		t.Fatalf("previous onion not restored, last command %q", last)
+	}
+	if _, ok := tor.Status().Addresses["node"]; !ok {
+		t.Fatal("node onion dropped from status after failed update")
 	}
 
 	if err := tor.AuthorizeClient(strings.Repeat("y", 56)+".onion:80", "PRIV"); err != nil {

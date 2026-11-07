@@ -294,12 +294,17 @@ func (t *Tor) addOnion(p Publication) (string, error) {
 		}
 	}
 
-	cmd := fmt.Sprintf("ADD_ONION %s Port=%d,%s", keyArg, onionVirtualPort, p.Target)
-	for _, k := range p.ClientAuth {
-		cmd += " ClientAuthV3=" + k
-	}
-	lines, err := ctrl.do(cmd)
+	lines, err := ctrl.do(addOnionCommand(keyArg, p))
 	if err != nil {
+		if old != nil {
+			// Don't leave the service offline: restore the previous
+			// publication (its key file exists, so the address is the same).
+			if _, rerr := ctrl.do(addOnionCommand(keyArg, old.pub)); rerr != nil {
+				t.mu.Lock()
+				delete(t.onions, p.ID)
+				t.mu.Unlock()
+			}
+		}
 		return "", fmt.Errorf("ADD_ONION: %w", err)
 	}
 	sid := replyValue(lines, "ServiceID")
@@ -318,6 +323,20 @@ func (t *Tor) addOnion(p Publication) (string, error) {
 	t.onions[p.ID] = &onion{serviceID: sid, pub: p}
 	t.mu.Unlock()
 	return sid + ".onion", nil
+}
+
+// addOnionCommand builds the ADD_ONION line. Tor requires Flags=V3Auth
+// whenever ClientAuthV3 keys are given ("512 No auth type specified").
+func addOnionCommand(keyArg string, p Publication) string {
+	cmd := fmt.Sprintf("ADD_ONION %s", keyArg)
+	if len(p.ClientAuth) > 0 {
+		cmd += " Flags=V3Auth"
+	}
+	cmd += fmt.Sprintf(" Port=%d,%s", onionVirtualPort, p.Target)
+	for _, k := range p.ClientAuth {
+		cmd += " ClientAuthV3=" + k
+	}
+	return cmd
 }
 
 // Unpublish removes the onion for id. Its key is kept, so publishing the
