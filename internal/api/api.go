@@ -11,6 +11,7 @@
 // Routes:
 //
 //	GET    /api/status                      node id, uptime, transports, csrf token
+//	POST   /api/transports/{name}/restart   reconnect a transport (e.g. tor after a network change)
 //	GET    /api/services                    list (with public addresses)
 //	POST   /api/services                    add {name, local_port, visibility, protocol}
 //	PUT    /api/services/{name}/visibility  {visibility}
@@ -58,6 +59,7 @@ type Backend interface {
 	Devices() []DeviceView
 	RemoveDevice(id string) error
 	NewPairing() (PairingInfo, error)
+	RestartTransport(name string) error
 	Blobs() *blob.Store
 	Events() *events.Log
 	Audit(ctx context.Context) []audit.Result
@@ -119,6 +121,7 @@ func Handler(b Backend, web fs.FS) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("POST /api/transports/{name}/restart", s.restartTransport)
 	mux.HandleFunc("GET /api/services", s.listServices)
 	mux.HandleFunc("POST /api/services", s.addService)
 	mux.HandleFunc("PUT /api/services/{name}/visibility", s.setVisibility)
@@ -191,6 +194,14 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.b.Status()
 	st.CSRF = s.csrf
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *server) restartTransport(w http.ResponseWriter, r *http.Request) {
+	if err := s.b.RestartTransport(r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *server) listServices(w http.ResponseWriter, r *http.Request) {

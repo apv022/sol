@@ -97,6 +97,7 @@ document.addEventListener("click", e => {
     "copy-text": () => copy(arg),
     "show-qr": () => showQr(arg),
     "play": () => play(arg),
+    "restart-tor": restartTor,
   })[a]?.();
 });
 
@@ -127,10 +128,22 @@ function renderHome() {
       ? "Your paired devices can reach your services from anywhere. No open ports, no accounts."
       : "Next: add a service so your devices have something to reach.";
   } else if (t.state === "starting") {
-    cls = "warn"; title = "Connecting to the Tor network…";
-    const m = /(\d+)%/.exec(t.detail || "");
-    pct = m ? Number(m[1]) : 5;
-    text = "This takes about 30 seconds the first time. " + (t.detail || "");
+    cls = "warn";
+    const d = t.detail || "";
+    const m = /bootstrapping (\d+)%/.exec(d);
+    if (m) {
+      title = "Connecting to the Tor network…"; pct = Number(m[1]);
+      text = "This takes about 30 seconds the first time.";
+    } else if (/publishing/.test(d)) {
+      title = "Almost there: publishing your address…"; pct = 95;
+      text = "Tor is telling the network how to find you. Usually under a minute.";
+    } else if (/reachable|lost contact/.test(d)) {
+      title = "Your devices can't reach you right now";
+      text = d.charAt(0).toUpperCase() + d.slice(1) + ". Sol keeps trying and reconnects by itself.";
+    } else {
+      title = "Reconnecting to Tor…"; pct = 10;
+      text = d.charAt(0).toUpperCase() + d.slice(1) + ".";
+    }
   } else {
     cls = "bad"; title = "Can't reach the Tor network";
     text = t.detail || "Tor stopped.";
@@ -141,6 +154,7 @@ function renderHome() {
   $("hero-title").textContent = title;
   $("hero-text").textContent = text;
   $("hero-progress").hidden = pct === null;
+  $("hero-reconnect").hidden = cls === "ok" || pct !== null;
   if (pct !== null) $("hero-progress-bar").className = "w" + Math.round(pct / 5) * 5;
 
   // Checklist: hide once everything is done.
@@ -172,6 +186,14 @@ function renderHome() {
   $("audit-list").innerHTML = state.audit.map(r => `
     <div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
       <b>${esc(r.service)}</b> <span class="muted">${esc(r.check)}: ${esc(r.detail)}</span></div>`).join("");
+}
+
+async function restartTor() {
+  try {
+    await api("/api/transports/tor/restart", { method: "POST" });
+    toast("Reconnecting to Tor. This takes about a minute.");
+    refresh();
+  } catch (err) { fail(err); }
 }
 
 // ---------- services ----------

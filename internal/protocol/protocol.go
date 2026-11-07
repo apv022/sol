@@ -70,6 +70,9 @@ var (
 	ErrWrongNode    = errors.New("node identity does not match the expected node id")
 	ErrBadSignature = errors.New("bad handshake signature")
 	ErrMalformed    = errors.New("malformed handshake")
+	// ErrNoData means the peer connected and closed without sending
+	// anything (reachability probes, including the node's own self-check).
+	ErrNoData = errors.New("connection closed before any data")
 )
 
 // Request is the client's handshake message.
@@ -125,7 +128,10 @@ func ReadRequest(conn net.Conn, node *identity.Identity) (*Request, error) {
 	defer conn.SetDeadline(time.Time{})
 
 	clientHello := make([]byte, len(magic))
-	if _, err := io.ReadFull(conn, clientHello); err != nil {
+	if n, err := io.ReadFull(conn, clientHello); err != nil {
+		if n == 0 && errors.Is(err, io.EOF) {
+			return nil, ErrNoData
+		}
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if string(clientHello) != magic {

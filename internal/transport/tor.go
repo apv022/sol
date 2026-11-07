@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/netutil"
 	"github.com/apv022/sol/internal/runtime"
 )
@@ -27,8 +28,9 @@ const onionVirtualPort = 80
 // `sol connect` (Dial + AuthorizeClient).
 //
 // Onion keys are stored per publication ID in <DataDir>/onions/<id>.key, so
-// addresses are stable across restarts. If tor crashes it is restarted and
-// every onion and client key is re-registered.
+// addresses are stable across restarts. If tor crashes, or the network
+// changes, or our onions stop being reachable, tor is restarted and every
+// onion and client key is re-registered (torhealth.go).
 type Tor struct {
 	DataDir  string
 	Provider runtime.Provider
@@ -43,6 +45,13 @@ type Tor struct {
 	clientKeys map[string]string // service ID -> private key (connect side)
 	stopping   bool
 	cancel     context.CancelFunc
+
+	// Health (see torhealth.go).
+	self          identity.X25519Key // lets the self-check through client auth
+	reachable     bool               // a self-check succeeded since the last launch
+	reachDetail   string             // why we are not (yet) reachable
+	restartReason string
+	lastRestart   time.Time
 }
 
 type onion struct {
@@ -52,9 +61,10 @@ type onion struct {
 
 // NewTor constructs the transport. It does not start tor.
 func NewTor(dataDir string, provider runtime.Provider) *Tor {
+	self, _ := identity.NewX25519() // a zero key only disables the self-check
 	return &Tor{
 		DataDir: dataDir, Provider: provider, state: StateStopped,
-		onions: map[string]*onion{}, clientKeys: map[string]string{},
+		onions: map[string]*onion{}, clientKeys: map[string]string{}, self: self,
 	}
 }
 
@@ -75,6 +85,8 @@ func (t *Tor) Start(ctx context.Context) error {
 		return err
 	}
 	go t.supervise(runCtx)
+	go t.watchNetwork(runCtx)
+	go t.selfCheck(runCtx)
 	return nil
 }
 
@@ -141,6 +153,7 @@ func (t *Tor) launch(ctx, runCtx context.Context) error {
 
 	t.mu.Lock()
 	t.proc, t.ctrl, t.socksAddr = proc, ctrl, socks
+	t.reachable, t.reachDetail = false, "publishing your address on Tor (usually under a minute)"
 	onions := make([]*onion, 0, len(t.onions))
 	for _, o := range t.onions {
 		onions = append(onions, o)
@@ -185,7 +198,14 @@ func (t *Tor) supervise(runCtx context.Context) {
 		if stopping {
 			return
 		}
-		t.setState(StateStarting, fmt.Sprintf("tor exited (%v), restarting", proc.Err()))
+		t.mu.Lock()
+		reason := t.restartReason
+		t.restartReason = ""
+		t.mu.Unlock()
+		if reason == "" {
+			reason = fmt.Sprintf("tor exited (%v)", proc.Err())
+		}
+		t.setState(StateStarting, reason+"; reconnecting to Tor")
 		select {
 		case <-runCtx.Done():
 			return
@@ -294,12 +314,12 @@ func (t *Tor) addOnion(p Publication) (string, error) {
 		}
 	}
 
-	lines, err := ctrl.do(addOnionCommand(keyArg, p))
+	lines, err := ctrl.do(addOnionCommand(keyArg, t.withSelf(p)))
 	if err != nil {
 		if old != nil {
 			// Don't leave the service offline: restore the previous
 			// publication (its key file exists, so the address is the same).
-			if _, rerr := ctrl.do(addOnionCommand(keyArg, old.pub)); rerr != nil {
+			if _, rerr := ctrl.do(addOnionCommand(keyArg, t.withSelf(old.pub))); rerr != nil {
 				t.mu.Lock()
 				delete(t.onions, p.ID)
 				t.mu.Unlock()
@@ -322,7 +342,21 @@ func (t *Tor) addOnion(p Publication) (string, error) {
 	t.mu.Lock()
 	t.onions[p.ID] = &onion{serviceID: sid, pub: p}
 	t.mu.Unlock()
+	if len(p.ClientAuth) > 0 && len(t.self.Private) > 0 {
+		if err := t.addClientAuth(sid, t.self.TorPrivate()); err != nil {
+			slog.Debug("tor: self client auth", "err", err)
+		}
+	}
 	return sid + ".onion", nil
+}
+
+// withSelf adds the self-check key to a publication that uses client auth.
+func (t *Tor) withSelf(p Publication) Publication {
+	if len(p.ClientAuth) == 0 || len(t.self.Public) == 0 {
+		return p
+	}
+	p.ClientAuth = append(slices.Clone(p.ClientAuth), t.self.TorPublic())
+	return p
 }
 
 // addOnionCommand builds the ADD_ONION line. Tor requires Flags=V3Auth
@@ -414,6 +448,18 @@ func (t *Tor) Status() Status {
 	s := Status{Name: t.Name(), State: t.state, Detail: t.detail, Addresses: map[string]string{}}
 	for id, o := range t.onions {
 		s.Addresses[id] = o.serviceID + ".onion"
+	}
+	// "Ready" means reachable, not just bootstrapped, once something is published.
+	if s.State == StateReady && len(t.onions) > 0 {
+		if t.reachable {
+			s.Detail = "online and reachable"
+		} else {
+			s.State = StateStarting
+			s.Detail = t.reachDetail
+			if s.Detail == "" {
+				s.Detail = "publishing your address on Tor (usually under a minute)"
+			}
+		}
 	}
 	return s
 }

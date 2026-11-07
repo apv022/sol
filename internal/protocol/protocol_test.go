@@ -175,6 +175,17 @@ func TestNonSolClientGetsNoBytes(t *testing.T) {
 	}
 }
 
+func TestEmptyConnectionIsNoData(t *testing.T) {
+	node, _ := identity.Generate()
+	c, s := net.Pipe()
+	errc := make(chan error, 1)
+	go func() { _, err := ReadRequest(s, node); errc <- err }()
+	c.Close()
+	if err := <-errc; !errors.Is(err, ErrNoData) {
+		t.Fatalf("want ErrNoData, got %v", err)
+	}
+}
+
 func TestServiceListAfterAccept(t *testing.T) {
 	node, _ := identity.Generate()
 	dev, _ := identity.Generate()

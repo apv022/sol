@@ -330,6 +330,10 @@ func (n *Node) reject(c net.Conn, why string) {
 
 func (n *Node) handleConn(c net.Conn) {
 	req, err := protocol.ReadRequest(c, n.id)
+	if errors.Is(err, protocol.ErrNoData) {
+		c.Close() // a reachability probe (e.g. Tor's self-check); not worth logging
+		return
+	}
 	if err != nil {
 		n.reject(c, "handshake failed: "+handshakeReason(err))
 		return
@@ -687,6 +691,21 @@ func (n *Node) NewPairing() (api.PairingInfo, error) {
 		return api.PairingInfo{}, errors.New("no transport has published the node yet; check the transport status on the dashboard")
 	}
 	return api.PairingInfo{Link: link.String(), Expires: tok.Expires}, nil
+}
+
+// RestartTransport implements api.Backend.
+func (n *Node) RestartTransport(name string) error {
+	t, ok := n.reg.Get(name)
+	if !ok {
+		return fmt.Errorf("transport %q: %w", name, config.ErrNotFound)
+	}
+	r, ok := t.(interface{ Restart(reason string) })
+	if !ok {
+		return fmt.Errorf("transport %q cannot be restarted", name)
+	}
+	r.Restart("reconnect requested from the panel")
+	n.log.Add(events.KindTransport, name+": reconnecting (requested from the panel)")
+	return nil
 }
 
 // Blobs implements api.Backend.

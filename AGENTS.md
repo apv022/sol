@@ -50,6 +50,8 @@ SOL_CLIENT_DIR=/tmp/sol-client go run ./cmd/sol connect '<link>'
 - Changing an onion's client-auth keys means DEL_ONION + ADD_ONION with the same key
   (`Tor.addOnion`). `node.refreshNodePublication` skips this when the key set hasn't changed, so
   pairing doesn't bounce live connections.
+- Tor "ready" means *reachable*: `Tor.Status` stays `starting` until the self-check reaches our
+  own onion (`torhealth.go`). A network change restarts tor on purpose.
 - `config.Config` must only be touched through its methods (it holds a mutex). Use `Snapshot()`
   for read-only views.
 - `web/vendor/qrcode.js` is vendored (MIT, version and checksum in `web/vendor/VENDORED.txt`).

@@ -113,6 +113,12 @@ anonymous-public). Anonymous-public services are never published on clearnet.
   polls bootstrap progress, and restarts tor with backoff if it exits, re-registering every onion
   and client key.
 - Onion keys live in `~/.sol/tor/onions/<publication id>.key`, so addresses survive restarts.
+- **Health** (`transport/torhealth.go`): tor doesn't notice network changes such as a VPN turning
+  on, and keeps saying "bootstrapped" while its onions are dead. So `watchNetwork` restarts tor
+  when local IP addresses change, and `selfCheck` dials our own onion through our own tor. Onions
+  with client auth also authorize a private "self" key for this. `Status` reports `ready` only
+  after a self-check succeeds, and repeated failures restart tor (at most every 10 minutes).
+  The node drops the probe's empty connection silently (`protocol.ErrNoData`).
 
 ## On disk
 

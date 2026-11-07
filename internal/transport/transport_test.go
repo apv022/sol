@@ -177,7 +177,10 @@ func TestTorPublishPersistsKeyAndClientAuth(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(key)) != "ED25519-V3:secretkeyblob" {
 		t.Fatalf("key not persisted: %q %v", key, err)
 	}
-	last := f.cmds[len(f.cmds)-1]
+	last := lastCmd(f, "ADD_ONION")
+	if strings.Count(last, "ClientAuthV3=") != 3 {
+		t.Fatalf("self-check key not added: %q", last)
+	}
 	if !strings.Contains(last, "Flags=V3Auth") || !strings.Contains(last, "Port=80,127.0.0.1:8081") || !strings.Contains(last, "ClientAuthV3=KEYA") || !strings.Contains(last, "ClientAuthV3=KEYB") {
 		t.Fatalf("ADD_ONION = %q", last)
 	}
@@ -195,7 +198,7 @@ func TestTorPublishPersistsKeyAndClientAuth(t *testing.T) {
 	if _, err := tor.Publish(context.Background(), Publication{ID: "node", Target: "127.0.0.1:8081", ClientAuth: []string{"REJECTME"}}); err == nil {
 		t.Fatal("expected tor to reject the bad key")
 	}
-	if last := f.cmds[len(f.cmds)-1]; !strings.HasPrefix(last, "ADD_ONION ED25519-V3:") || strings.Contains(last, "REJECTME") {
+	if last := lastCmd(f, "ADD_ONION"); !strings.HasPrefix(last, "ADD_ONION ED25519-V3:") || strings.Contains(last, "REJECTME") {
 		t.Fatalf("previous onion not restored, last command %q", last)
 	}
 	if _, ok := tor.Status().Addresses["node"]; !ok {
@@ -210,6 +213,50 @@ func TestTorPublishPersistsKeyAndClientAuth(t *testing.T) {
 	}
 	if _, err := tor.Publish(context.Background(), Publication{ID: "../evil", Target: "x"}); err == nil {
 		t.Fatal("path traversal in publication id accepted")
+	}
+}
+
+func lastCmd(f *fakeTorControl, prefix string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.cmds) - 1; i >= 0; i-- {
+		if strings.HasPrefix(f.cmds[i], prefix) {
+			return f.cmds[i]
+		}
+	}
+	return ""
+}
+
+func TestStatusMeansReachable(t *testing.T) {
+	tor := NewTor(t.TempDir(), nil)
+	tor.state = StateReady
+	if tor.Status().State != StateReady {
+		t.Fatal("bootstrapped client with no onions should be ready")
+	}
+	tor.onions["node"] = &onion{serviceID: "x"}
+	if st := tor.Status(); st.State != StateStarting || st.Detail == "" {
+		t.Fatalf("unverified onion reported as %+v", st)
+	}
+	tor.reachable = true
+	if st := tor.Status(); st.State != StateReady || st.Detail != "online and reachable" {
+		t.Fatalf("verified onion reported as %+v", st)
+	}
+}
+
+func TestNetSignatureIgnoresVirtual(t *testing.T) {
+	for _, n := range []string{"lo", "docker0", "veth12ab", "virbr0"} {
+		if !ignoredInterface(n) {
+			t.Errorf("%s should be ignored", n)
+		}
+	}
+	for _, n := range []string{"wlan0", "enp1s0", "proton0", "tun0", "wg0"} {
+		if ignoredInterface(n) {
+			t.Errorf("%s should be watched", n)
+		}
+	}
+	first := netSignature()
+	if second := netSignature(); first != second {
+		t.Fatalf("signature not stable: %q vs %q", first, second)
 	}
 }
 

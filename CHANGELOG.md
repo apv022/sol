@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
   checklist, add-service presets, plain-language access choices, a pairing wizard that detects
   the new device, drag-and-drop files with names, readable activity log, dark mode.
 - Live "connected and verified" status per device and service, and a `connect` event.
+- Self-healing Tor: restarts automatically when the network changes (VPN, Wi-Fi), and "Online"
+  now means the node's address was verified reachable by a self-check. Reconnect button in the panel.
 - Service health check: the panel warns when nothing listens on a service's port.
 - `sol pair`/`sol connect` wait for Tor with progress, retry while an onion publishes, and explain
   failures in plain English.
