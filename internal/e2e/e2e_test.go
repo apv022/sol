@@ -102,7 +102,7 @@ func TestPairConnectRevoke(t *testing.T) {
 	h := start(t)
 	link := h.link()
 
-	c, err := connect.Pair(h.ctx, t.TempDir(), link, "laptop", clearnetOnly)
+	c, err := connect.Pair(h.ctx, t.TempDir(), link, "laptop", connect.Options{Transports: clearnetOnly})
 	if err != nil {
 		t.Fatalf("pair: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestPairConnectRevoke(t *testing.T) {
 	}
 
 	// 2. A pairing link works only once.
-	if _, err := connect.Pair(h.ctx, t.TempDir(), link, "thief", clearnetOnly); err == nil {
+	if _, err := connect.Pair(h.ctx, t.TempDir(), link, "thief", connect.Options{Transports: clearnetOnly}); err == nil {
 		t.Fatal("pairing link was accepted twice")
 	}
 
@@ -182,7 +182,7 @@ func TestStrangerGetsNothing(t *testing.T) {
 
 func TestUnknownServiceAndFiles(t *testing.T) {
 	h := start(t)
-	c, err := connect.Pair(h.ctx, t.TempDir(), h.link(), "laptop", clearnetOnly)
+	c, err := connect.Pair(h.ctx, t.TempDir(), h.link(), "laptop", connect.Options{Transports: clearnetOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,13 +206,13 @@ func TestUnknownServiceAndFiles(t *testing.T) {
 func TestReloadedClientReconnects(t *testing.T) {
 	h := start(t)
 	dir := t.TempDir()
-	c, err := connect.Pair(h.ctx, dir, h.link(), "laptop", clearnetOnly)
+	c, err := connect.Pair(h.ctx, dir, h.link(), "laptop", connect.Options{Transports: clearnetOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.Close()
 
-	c2, err := connect.Load(h.ctx, dir, "", clearnetOnly)
+	c2, err := connect.Load(h.ctx, dir, "", connect.Options{Transports: clearnetOnly})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,7 +28,6 @@ import (
 	"github.com/apv022/sol/internal/connect"
 	"github.com/apv022/sol/internal/gateway"
 	"github.com/apv022/sol/internal/node"
-	"github.com/apv022/sol/internal/transport"
 )
 
 // version is set at release time with -ldflags "-X main.version=v0.1.0".
@@ -157,7 +156,7 @@ func runPair(ctx context.Context, args []string) error {
 		return errors.New("usage: sol pair <sol://pair link> [--name NAME]")
 	}
 	announcePairing(link)
-	c, err := connect.Pair(ctx, *dir, link, *name, connect.DefaultTransports)
+	c, err := connect.Pair(ctx, *dir, link, *name, clientOptions())
 	if err != nil {
 		return err
 	}
@@ -192,24 +191,17 @@ func runConnect(ctx context.Context, args []string) error {
 	var err error
 	if link != "" {
 		announcePairing(link)
-		c, err = connect.Pair(ctx, *dir, link, *name, connect.DefaultTransports)
+		c, err = connect.Pair(ctx, *dir, link, *name, clientOptions())
 	} else {
-		c, err = connect.Load(ctx, *dir, *nodeID, connect.DefaultTransports)
+		c, err = connect.Load(ctx, *dir, *nodeID, clientOptions())
 	}
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 
-	fmt.Printf("Node %s: waiting for a transport...\n", short(c.Node.NodeID))
-	last := ""
-	err = c.WaitReady(ctx, func(st transport.Status) {
-		if line := st.Name + ": " + st.Detail; line != last {
-			fmt.Println("  " + line)
-			last = line
-		}
-	})
-	if err != nil {
+	fmt.Printf("Connecting to node %s...\n", short(c.Node.NodeID))
+	if err := c.WaitReady(ctx); err != nil {
 		return err
 	}
 	if svcs, err := c.Services(ctx); err != nil {
@@ -232,6 +224,12 @@ func runConnect(ctx context.Context, args []string) error {
 			return fmt.Errorf("bad -L %q, want service=127.0.0.1:PORT", t)
 		}
 		mapping[svc] = addr
+		if host, _, err := net.SplitHostPort(addr); err == nil {
+			if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+				fmt.Printf("WARNING: %s is reachable from your network (%s). Anyone who can reach this\n"+
+					"machine can use the tunnel without pairing. Use this only on a network you trust.\n", svc, addr)
+			}
+		}
 	}
 	if len(mapping) == 0 {
 		return errors.New("the node has no services yet; add one in its panel")
@@ -287,9 +285,17 @@ func runAudit(ctx context.Context, args []string) error {
 	return nil
 }
 
+// clientOptions prints connection progress as indented lines.
+func clientOptions() connect.Options {
+	return connect.Options{
+		Transports: connect.DefaultTransports,
+		Progress:   func(msg string) { fmt.Println("  " + msg) },
+	}
+}
+
 func announcePairing(link string) {
 	if strings.Contains(link, "tor=") {
-		fmt.Println("Pairing over Tor. Starting tor and reaching the node can take a minute...")
+		fmt.Println("Pairing over Tor. Starting Tor and finding the node usually takes 30 seconds to 2 minutes...")
 	} else {
 		fmt.Println("Pairing...")
 	}

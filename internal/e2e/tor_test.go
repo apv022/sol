@@ -65,7 +65,7 @@ func TestOverRealTor(t *testing.T) {
 	// Onion descriptors take a while to propagate; retry pairing.
 	var c *connect.Client
 	for attempt := 1; ; attempt++ {
-		c, err = connect.Pair(ctx, t.TempDir(), p.Link, "tor-test", torOnly)
+		c, err = connect.Pair(ctx, t.TempDir(), p.Link, "tor-test", connect.Options{Transports: torOnly, Progress: func(m string) { t.Log(m) }})
 		if err == nil {
 			break
 		}

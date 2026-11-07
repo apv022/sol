@@ -385,6 +385,14 @@ func onionServiceID(addr string) string {
 
 func (t *Tor) Handles(addr string) bool { return IsOnion(addr) }
 
+// LogPath is where tor's own log is written (useful in error messages).
+func (t *Tor) LogPath() string {
+	if abs, err := filepath.Abs(t.DataDir); err == nil {
+		return filepath.Join(abs, "tor.log")
+	}
+	return filepath.Join(t.DataDir, "tor.log")
+}
+
 // Dial connects to an onion through tor's SOCKS port. A missing port
 // defaults to the Sol onion port.
 func (t *Tor) Dial(ctx context.Context, addr string) (net.Conn, error) {

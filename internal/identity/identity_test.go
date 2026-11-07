@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -19,6 +20,9 @@ func TestLoadOrCreatePersists(t *testing.T) {
 	}
 	if !bytes.Equal(a.Public(), b.Public()) {
 		t.Fatal("reloaded key differs")
+	}
+	if runtime.GOOS == "windows" {
+		return // no Unix permission bits
 	}
 	st, _ := os.Stat(path)
 	if st.Mode().Perm() != 0o600 {

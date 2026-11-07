@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -15,6 +16,10 @@ func TestLoadCreatesDefault(t *testing.T) {
 	}
 	if c.PanelPort != 8080 || !c.Transports.Tor {
 		t.Fatalf("unexpected defaults: %+v", c)
+	}
+	// Windows has no Unix permission bits.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	st, err := os.Stat(path)
 	if err != nil {

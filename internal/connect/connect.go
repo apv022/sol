@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,13 +79,28 @@ func DefaultTransports(dir string, rec NodeRecord) []transport.Transport {
 	return ts
 }
 
+// Options configures a Client.
+type Options struct {
+	// Transports builds the transports; nil means DefaultTransports.
+	Transports TransportFactory
+	// Progress receives human-readable status lines (Tor bootstrap, retries).
+	// nil discards them.
+	Progress func(msg string)
+}
+
+// Retry policy for reaching a node whose onion may still be publishing.
+var (
+	dialAttempts   = 6
+	dialRetryDelay = 20 * time.Second
+)
+
 // Client is a connection to one paired node.
 type Client struct {
 	Dir    string
 	Device *identity.Identity
 	Node   NodeRecord
 
-	factory TransportFactory
+	opts    Options
 	reg     *transport.Registry
 	started bool
 
@@ -143,7 +159,7 @@ func Nodes(dir string) ([]NodeRecord, error) {
 	return out, nil
 }
 
-func newClient(dir string, rec NodeRecord, factory TransportFactory) (*Client, error) {
+func newClient(dir string, rec NodeRecord, opts Options) (*Client, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -151,31 +167,35 @@ func newClient(dir string, rec NodeRecord, factory TransportFactory) (*Client, e
 	if err != nil {
 		return nil, err
 	}
-	if factory == nil {
-		factory = DefaultTransports
+	if opts.Transports == nil {
+		opts.Transports = DefaultTransports
 	}
-	return &Client{Dir: dir, Device: dev, Node: rec, factory: factory}, nil
+	return &Client{Dir: dir, Device: dev, Node: rec, opts: opts}, nil
 }
 
 // Pair redeems a pairing link, saves the node, and returns a started Client.
-func Pair(ctx context.Context, dir, link, deviceName string, factory TransportFactory) (*Client, error) {
+func Pair(ctx context.Context, dir, link, deviceName string, opts Options) (*Client, error) {
 	l, err := pairing.ParseLink(link)
 	if err != nil {
 		return nil, err
 	}
 	rec := NodeRecord{NodeID: l.NodeID, Onion: l.Onion, I2P: l.I2P, LAN: l.LAN, TorAuthPriv: l.TorAuthPriv}
-	c, err := newClient(dir, rec, factory)
+	c, err := newClient(dir, rec, opts)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.Start(ctx); err != nil {
 		return nil, err
 	}
-	conn, err := c.dialAny(ctx, protocol.Request{Op: protocol.OpPair, Secret: l.Secret, Name: deviceName})
+	if err := c.WaitReady(ctx); err != nil {
+		c.Close()
+		return nil, err
+	}
+	conn, err := c.dialRetry(ctx, protocol.Request{Op: protocol.OpPair, Secret: l.Secret, Name: deviceName})
 	if err != nil {
 		c.Close()
 		if errors.Is(err, protocol.ErrRejected) {
-			return nil, errors.New("the node refused the pairing link (expired, already used, or for another node)")
+			return nil, errors.New("the node refused the pairing link: it has expired (10 minutes), was already used, or belongs to another node. Create a new one in the panel")
 		}
 		return nil, err
 	}
@@ -197,7 +217,7 @@ func Pair(ctx context.Context, dir, link, deviceName string, factory TransportFa
 
 // Load returns a started Client for a paired node. nodeID may be "" if
 // exactly one node is paired.
-func Load(ctx context.Context, dir, nodeID string, factory TransportFactory) (*Client, error) {
+func Load(ctx context.Context, dir, nodeID string, opts Options) (*Client, error) {
 	nodes, err := Nodes(dir)
 	if err != nil {
 		return nil, err
@@ -214,7 +234,7 @@ func Load(ctx context.Context, dir, nodeID string, factory TransportFactory) (*C
 	if rec == nil {
 		return nil, errors.New("not paired with that node; run `sol pair <link>` first")
 	}
-	c, err := newClient(dir, *rec, factory)
+	c, err := newClient(dir, *rec, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +248,7 @@ func (c *Client) Start(ctx context.Context) error {
 		return nil
 	}
 	c.reg = transport.NewRegistry()
-	for _, t := range c.factory(c.Dir, c.Node) {
+	for _, t := range c.opts.Transports(c.Dir, c.Node) {
 		c.reg.Add(t)
 	}
 	if err := c.reg.StartAll(ctx); err != nil {
@@ -247,20 +267,54 @@ func (c *Client) Start(ctx context.Context) error {
 	return nil
 }
 
-// WaitReady blocks until at least one transport able to reach the node is
-// ready, printing nothing. Useful before the first dial over Tor.
-func (c *Client) WaitReady(ctx context.Context, progress func(transport.Status)) error {
+func (c *Client) say(format string, args ...any) {
+	if c.opts.Progress != nil {
+		c.opts.Progress(fmt.Sprintf(format, args...))
+	}
+}
+
+// stallHint is shown when a transport makes no progress for this long.
+const stallHint = 90 * time.Second
+
+// WaitReady blocks until at least one transport that can reach the node is
+// ready, reporting progress through Options.Progress. It fails if every such
+// transport has failed.
+func (c *Client) WaitReady(ctx context.Context) error {
+	last, lastChange, hinted := "", time.Now(), false
 	for {
+		var failed []string
+		relevant := 0
 		for _, addr := range c.Node.Addresses() {
-			if t, err := c.reg.For(addr); err == nil {
-				st := t.Status()
-				if st.State == transport.StateReady {
-					return nil
+			t, err := c.reg.For(addr)
+			if err != nil {
+				continue
+			}
+			relevant++
+			st := t.Status()
+			switch st.State {
+			case transport.StateReady:
+				if last != "" {
+					c.say("%s: ready", st.Name)
 				}
-				if progress != nil {
-					progress(st)
+				return nil
+			case transport.StateFailed:
+				failed = append(failed, st.Name+": "+st.Detail)
+			default:
+				if line := st.Name + ": " + st.Detail; line != last {
+					c.say("%s", line)
+					last, lastChange, hinted = line, time.Now(), false
 				}
 			}
+		}
+		if relevant == 0 || len(failed) == relevant {
+			if len(failed) == 0 {
+				return errors.New("no transport on this machine can reach that node (does the link have a tor= address, and is tor installed?)")
+			}
+			return fmt.Errorf("cannot reach the node: %s", strings.Join(failed, "; "))
+		}
+		if !hinted && time.Since(lastChange) > stallHint {
+			c.say("still waiting. If this never finishes: check this machine's internet connection and that its clock is correct (Tor refuses to work with a wrong clock)%s", c.torLogHint())
+			hinted = true
 		}
 		select {
 		case <-ctx.Done():
@@ -268,6 +322,57 @@ func (c *Client) WaitReady(ctx context.Context, progress func(transport.Status))
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func (c *Client) torLogHint() string {
+	if t, ok := c.reg.Get("tor"); ok {
+		if lp, ok := t.(interface{ LogPath() string }); ok {
+			return ". Tor log: " + lp.LogPath()
+		}
+	}
+	return ""
+}
+
+// dialRetry is dialAny with retries for errors that usually clear up on
+// their own, like an onion that was published a moment ago.
+func (c *Client) dialRetry(ctx context.Context, req protocol.Request) (net.Conn, error) {
+	var err error
+	for attempt := 1; attempt <= dialAttempts; attempt++ {
+		var conn net.Conn
+		conn, err = c.dialAny(ctx, req)
+		if err == nil {
+			return conn, nil
+		}
+		if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) || ctx.Err() != nil {
+			return nil, err
+		}
+		if attempt < dialAttempts {
+			c.say("can't reach the node yet (%s). Retrying in %s (attempt %d of %d)...", explain(err), dialRetryDelay, attempt, dialAttempts)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(dialRetryDelay):
+			}
+		}
+	}
+	return nil, fmt.Errorf("could not reach the node: %s.\nCheck that the node is running (`sol`) and online, that both machines' clocks are correct, and try a fresh pairing link%s", explain(err), c.torLogHint())
+}
+
+// explain turns a dial error into a short plain-English reason.
+func explain(err error) string {
+	msg := err.Error()
+	var ne net.Error
+	switch {
+	case errors.As(err, &ne) && ne.Timeout(), strings.Contains(msg, "i/o timeout"):
+		return "Tor timed out finding the node"
+	case strings.Contains(msg, "descriptor not found"), strings.Contains(msg, "host unreachable"):
+		return "the node's .onion isn't visible yet; this is normal for a minute or two after the node starts or a link is created"
+	case strings.Contains(msg, "client authorization"):
+		return "Tor rejected this device's access key; create a new pairing link"
+	case strings.Contains(msg, "connection refused"):
+		return "connection refused"
+	}
+	return msg
 }
 
 // Close stops the client's transports.
@@ -340,7 +445,7 @@ func (c *Client) Dial(ctx context.Context, service string) (net.Conn, error) {
 
 // Services asks the node for the current service list and saves it.
 func (c *Client) Services(ctx context.Context) ([]protocol.ServiceInfo, error) {
-	conn, err := c.dialAny(ctx, protocol.Request{Op: protocol.OpList})
+	conn, err := c.dialRetry(ctx, protocol.Request{Op: protocol.OpList})
 	if err != nil {
 		return nil, err
 	}
