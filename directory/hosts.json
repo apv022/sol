@@ -1,0 +1,17 @@
+{
+  "signed_by": "<directory node pubkey, base32>",
+  "signature": "<ed25519 signature over the hosts array, base64>",
+  "updated": "2026-11-07",
+  "hosts": [
+    {
+      "name": "demo-gateway",
+      "kind": "gateway",
+      "addresses": { "clearnet": "https://gw.example.com", "tor": "example.onion" },
+      "pubkey": "<base32>",
+      "description": "Hackathon demo gateway (v0.2).",
+      "tags": ["gateway", "demo"],
+      "status": "down",
+      "added": "2026-11-07"
+    }
+  ]
+}

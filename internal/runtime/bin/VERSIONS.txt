@@ -1,0 +1,2 @@
+# Versions of the binaries placed here by scripts/fetch-binaries.sh.
+# Format: <os>-<arch>/<name> <version>

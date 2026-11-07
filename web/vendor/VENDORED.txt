@@ -1,0 +1,3 @@
+qrcode.js  qrcode-generator 1.4.4 (MIT, Kazuhiko Arase)
+           https://www.npmjs.com/package/qrcode-generator
+           sha256 18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780

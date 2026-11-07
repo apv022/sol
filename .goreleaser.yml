@@ -1,0 +1,26 @@
+# Release builds for every platform. These use tor from the user's PATH.
+# Bundled (tor-included) builds are per-platform and made with `make build-bundled`
+# after scripts/fetch-binaries.sh; automating them is on the roadmap.
+version: 2
+
+builds:
+  - main: ./cmd/sol
+    binary: sol
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github-native

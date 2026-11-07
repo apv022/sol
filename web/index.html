@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sol</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Sol</h1>
+  <span id="node-id" class="mono" title="Node ID"></span>
+</header>
+<nav>
+  <button data-screen="dashboard" class="active">Dashboard</button>
+  <button data-screen="services">Services</button>
+  <button data-screen="devices">Devices</button>
+  <button data-screen="files">Files</button>
+  <button data-screen="logs">Logs</button>
+</nav>
+<main>
+  <p id="error" class="error" hidden></p>
+
+  <section id="dashboard" class="screen active">
+    <h2>Transports</h2>
+    <div id="transports" class="cards"></div>
+    <p class="muted">Version <span id="version">-</span> · up <span id="uptime">-</span></p>
+    <div id="audit-card" hidden>
+      <h2>Leak check</h2>
+      <table id="audit-table"><thead>
+        <tr><th>Result</th><th>Service</th><th>Check</th><th>Detail</th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section id="services" class="screen">
+    <h2>Services</h2>
+    <p class="muted">A service is an app on this machine (e.g. Navidrome on port 4533).
+      <b>Private</b> services are reachable only by paired devices. <b>Public</b> ones get their own
+      onion address that anyone can open in Tor Browser.</p>
+    <div class="scroll">
+      <table id="services-table"><thead>
+        <tr><th>Name</th><th>Port</th><th>Protocol</th><th>Visibility</th><th>Public address</th><th></th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+    <form id="add-service">
+      <input name="name" placeholder="name, e.g. navidrome" pattern="[a-z0-9][a-z0-9-]{0,31}" required>
+      <input name="local_port" type="number" min="1" max="65535" placeholder="port, e.g. 4533" required>
+      <select name="protocol" title="Protocol">
+        <option value="tcp">tcp (anything)</option>
+        <option value="http">http</option>
+      </select>
+      <select name="visibility" title="Visibility">
+        <option value="private">private</option>
+        <option value="public">public</option>
+        <option value="anonymous-public">anonymous-public</option>
+      </select>
+      <button>Add service</button>
+    </form>
+  </section>
+
+  <section id="devices" class="screen">
+    <h2>Devices</h2>
+    <div class="scroll">
+      <table id="devices-table"><thead>
+        <tr><th>Name</th><th>ID</th><th>Last seen</th><th></th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+    <button id="pair-btn">Pair a device</button>
+    <div id="pair-out" hidden>
+      <p>On the other device run:</p>
+      <pre id="pair-cmd" class="mono"></pre>
+      <div id="qr"></div>
+      <p class="muted">Single use. Expires <span id="pair-expires"></span>. Treat it like a password.</p>
+      <button id="copy-link" type="button" class="secondary">Copy link</button>
+    </div>
+  </section>
+
+  <section id="files" class="screen">
+    <h2>Files</h2>
+    <p class="muted">Files are stored by SHA-256, so the same file has the same address everywhere.
+      Paired devices can fetch them through the <code>_files</code> service.</p>
+    <form id="upload"><input type="file" name="file" required><button>Upload</button></form>
+    <ul id="file-list"></ul>
+    <audio id="player" controls hidden></audio>
+  </section>
+
+  <section id="logs" class="screen">
+    <h2>Logs</h2>
+    <ul id="log-list" class="log"></ul>
+  </section>
+</main>
+<script src="/vendor/qrcode.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

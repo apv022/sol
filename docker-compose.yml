@@ -1,0 +1,20 @@
+# Demo service for the hackathon: Navidrome (a music server) on 127.0.0.1:4533.
+# Sol itself does not need Docker. Tor runs as a normal child process of sol.
+#
+#   mkdir -p demo-music && cp some.flac demo-music/
+#   docker compose up -d
+#   then in the Sol panel: add service "navidrome", port 4533, private.
+#
+# (The Anonymous Public Mode egress-lock container is on the roadmap; see docs/spec.md 7.6.)
+
+services:
+  navidrome:
+    image: deluan/navidrome:latest   # pin a version tag for anything beyond a demo
+    ports:
+      - "127.0.0.1:4533:4533"       # loopback only: Sol is the only way in from outside
+    volumes:
+      - ./demo-music:/music:ro
+      - ./navidrome-data:/data
+    environment:
+      ND_LOGLEVEL: info
+    restart: unless-stopped

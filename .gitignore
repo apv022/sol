@@ -1,0 +1,16 @@
+# build output
+/bin/
+/dist/
+
+# bundled tor/i2pd binaries are fetched, never committed (see internal/runtime/bin/README.md)
+/internal/runtime/bin/*/
+
+# demo data (docker-compose.yml)
+/demo-music/
+/navidrome-data/
+
+# local design archive
+/sol-skeleton.zip
+
+*.log
+.DS_Store

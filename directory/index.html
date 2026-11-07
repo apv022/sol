@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sol Directory</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>Sol Directory</h1>
+  <p class="muted">Known gateways, relays, and opt-in services. Addresses only — not content.</p></header>
+<div class="filters">
+  <label>Kind <select id="kind"><option value="">any</option>
+    <option>gateway</option><option>relay</option><option>service</option></select></label>
+  <label>Network <select id="net"><option value="">any</option>
+    <option>clearnet</option><option>tor</option><option>i2p</option></select></label>
+</div>
+<ul id="hosts"></ul>
+<footer class="muted">
+  <a href="#" id="submit">Submit a host</a> · <a href="#" id="report">Report</a> ·
+  served over clearweb, Tor, and I2P
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
