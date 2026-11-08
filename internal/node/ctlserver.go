@@ -17,10 +17,18 @@ import (
 	"github.com/apv022/sol/internal/netutil"
 )
 
+// maxSocketPath is the longest Unix socket path every supported OS accepts
+// (sun_path is 104 bytes on macOS and the BSDs, 108 on Linux, including the
+// terminating NUL).
+const maxSocketPath = 103
+
 // listenControl opens the control socket. A stale socket file left by a
 // crashed node is replaced; a live one means another node already runs on
 // this data directory.
 func listenControl(path string) (net.Listener, error) {
+	if len(path) > maxSocketPath {
+		return nil, fmt.Errorf("the control socket path %s is %d characters, but Unix sockets allow at most %d; use a shorter data directory (--data or SOL_DATA)", path, len(path), maxSocketPath)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}

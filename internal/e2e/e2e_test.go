@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -49,6 +50,19 @@ func newNode(t *testing.T, name string, opts ...opt) *testNode {
 	return startNode(t, dir, name, opts...)
 }
 
+// shortSocket returns a control-socket path short enough for every OS.
+// t.TempDir paths on macOS (/var/folders/…/TestLongName…/001) can exceed the
+// 104-byte Unix socket limit on their own.
+func shortSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "c.sock")
+}
+
 func startNode(t *testing.T, dir, name string, opts ...opt) *testNode {
 	t.Helper()
 	o := node.Options{
@@ -56,7 +70,7 @@ func startNode(t *testing.T, dir, name string, opts ...opt) *testNode {
 		Version:        "test",
 		PanelAddr:      "127.0.0.1:0",
 		NodeAddr:       "127.0.0.1:0",
-		ControlPath:    filepath.Join(dir, "c.sock"),
+		ControlPath:    shortSocket(t),
 		Transports:     []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")},
 		DialAttempts:   1,
 		DialRetryDelay: 10 * time.Millisecond,
@@ -72,13 +86,16 @@ func startNode(t *testing.T, dir, name string, opts ...opt) *testNode {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- n.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	// exited is closed when Run returns, so both the start-up check below and
+	// the cleanup can wait on it (a value on a channel could be read once).
+	exited := make(chan struct{})
+	var runErr error
+	go func() { runErr = n.Run(ctx); close(exited) }()
+	t.Cleanup(func() { cancel(); <-exited })
 	select {
 	case <-n.Ready():
-	case err := <-done:
-		t.Fatalf("node exited: %v", err)
+	case <-exited:
+		t.Fatalf("node exited: %v", runErr)
 	}
 	return &testNode{Node: n, t: t, ctx: ctx, dir: dir}
 }

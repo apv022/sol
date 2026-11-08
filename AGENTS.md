@@ -9,7 +9,11 @@ make test        # go test -race ./...  (includes full e2e over clearnet, no Tor
 make check       # gofmt + vet + staticcheck + tests. Must pass before every commit
 make build       # bin/sol
 make test-tor    # real-Tor e2e (SOL_TEST_TOR=1), needs tor on PATH, takes minutes
+make hooks       # once per clone: every `git push` runs `make check` first
 ```
+
+CI (GitHub Actions) runs `make check` on Linux, macOS, and Windows. Locally you only cover your
+own OS: watch for OS limits such as the 104-byte Unix socket path on macOS.
 
 Run two local nodes without touching your real `~/.sol` (give each its own ports in
 `config.json`, or use `"tor": false, "clearnet": true` for a quick LAN test):

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs what CI runs before anything is pushed, so a red build never reaches
+# GitHub. Enable once per clone with `make hooks`. Skip in an emergency with
+# `git push --no-verify`.
+#
+# It can't catch OS-specific failures (CI also runs macOS and Windows), but it
+# catches everything that fails on this machine in about a minute, without the
+# wait.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-push: running make check (formatting, vet, staticcheck, tests)..."
+if ! make check >/tmp/sol-pre-push.log 2>&1; then
+	tail -40 /tmp/sol-pre-push.log
+	echo
+	echo "pre-push: make check failed; not pushing. Full log: /tmp/sol-pre-push.log"
+	exit 1
+fi
+echo "pre-push: all checks passed."
