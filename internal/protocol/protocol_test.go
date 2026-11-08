@@ -83,6 +83,16 @@ func readHello(t *testing.T, c net.Conn) (nodePub, nonce []byte) {
 	return h[4:36], h[36:]
 }
 
+// sign returns the base64 signature over req for one callee and nonce.
+func sign(t *testing.T, id *identity.Identity, pub, nonce []byte, req *Request) string {
+	t.Helper()
+	msg, err := signedMessage(pub, nonce, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b64(id.Sign(msg))
+}
+
 func sendFrame(c net.Conn, v any) {
 	data, _ := json.Marshal(v)
 	writeFrame(c, data)
@@ -97,11 +107,46 @@ func TestTamperedServiceFailsSignature(t *testing.T) {
 
 	pub, nonce := readHello(t, c)
 	req := Request{V: Version, Op: OpConnect, Service: "music", PubKey: identity.EncodePublicKey(dev.Public())}
-	req.Sig = b64(dev.Sign(signedMessage(pub, nonce, &req)))
+	req.Sig = sign(t, dev, pub, nonce, &req)
 	req.Service = "ssh" // attacker swaps the target after signing
 	sendFrame(c, req)
 	if err := <-errc; !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("want ErrBadSignature, got %v", err)
+	}
+}
+
+// The pairing card (the joiner's address and the key it hands out) is signed:
+// someone on the path can't redirect the inviter to their own onion.
+func TestTamperedCardFailsSignature(t *testing.T) {
+	node, _ := identity.Generate()
+	joiner, _ := identity.Generate()
+	c, s := net.Pipe()
+	errc := make(chan error, 1)
+	go func() { _, err := ReadRequest(s, node); errc <- err; s.Close() }()
+
+	pub, nonce := readHello(t, c)
+	req := Request{V: Version, Op: OpPair, Secret: "s3cret", PubKey: identity.EncodePublicKey(joiner.Public()),
+		Card: &Card{Name: "laptop", Addrs: map[string]string{"tor": "good.onion"}, Access: map[string]string{"tor": "key"}}}
+	req.Sig = sign(t, joiner, pub, nonce, &req)
+	req.Card.Addrs["tor"] = "attacker.onion"
+	sendFrame(c, req)
+	if err := <-errc; !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("want ErrBadSignature, got %v", err)
+	}
+}
+
+func TestPairNeedsCard(t *testing.T) {
+	node, _ := identity.Generate()
+	joiner, _ := identity.Generate()
+	c, s := net.Pipe()
+	errc := make(chan error, 1)
+	go func() { _, err := ReadRequest(s, node); errc <- err; s.Close() }()
+	pub, nonce := readHello(t, c)
+	req := Request{V: Version, Op: OpPair, Secret: "s3cret", PubKey: identity.EncodePublicKey(joiner.Public())}
+	req.Sig = sign(t, joiner, pub, nonce, &req)
+	sendFrame(c, req)
+	if err := <-errc; !errors.Is(err, ErrMalformed) {
+		t.Fatalf("want ErrMalformed, got %v", err)
 	}
 }
 
@@ -114,7 +159,7 @@ func TestReplayedSignatureFails(t *testing.T) {
 	go func() { ReadRequest(s1, node); s1.Close() }()
 	pub, nonce := readHello(t, c1)
 	req := Request{V: Version, Op: OpConnect, Service: "music", PubKey: identity.EncodePublicKey(dev.Public())}
-	req.Sig = b64(dev.Sign(signedMessage(pub, nonce, &req)))
+	req.Sig = sign(t, dev, pub, nonce, &req)
 	sendFrame(c1, req)
 	c1.Close()
 
@@ -186,21 +231,21 @@ func TestEmptyConnectionIsNoData(t *testing.T) {
 	}
 }
 
-func TestServiceListAfterAccept(t *testing.T) {
+func TestPeerInfoAfterAccept(t *testing.T) {
 	node, _ := identity.Generate()
 	dev, _ := identity.Generate()
 	c, s := net.Pipe()
 	go func() {
 		defer s.Close()
 		if _, err := ReadRequest(s, node); err == nil {
-			Accept(s, ServiceList{NodeID: node.NodeID(), Services: []ServiceInfo{{Name: "music", Protocol: "tcp"}}})
+			Accept(s, PeerInfo{NodeID: node.NodeID(), Name: "server", Services: []ServiceInfo{{Name: "music", Protocol: "tcp"}}})
 		}
 	}()
 	if err := ClientHandshake(c, dev, node.NodeID(), Request{Op: OpList}); err != nil {
 		t.Fatal(err)
 	}
-	sl, err := ReadServiceList(c)
-	if err != nil || len(sl.Services) != 1 || sl.Services[0].Name != "music" {
-		t.Fatalf("ReadServiceList = %+v, %v", sl, err)
+	pi, err := ReadPeerInfo(c)
+	if err != nil || pi.Name != "server" || len(pi.Services) != 1 || pi.Services[0].Name != "music" {
+		t.Fatalf("ReadPeerInfo = %+v, %v", pi, err)
 	}
 }

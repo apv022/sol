@@ -5,11 +5,28 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Every machine is now a node, and nodes pair as peers** ([docs/PEERS.md](docs/PEERS.md)).
+  Pairing is mutual: both sides can reach each other, each chooses what it shares with the other,
+  and either can unpair (the other side is told, and live connections close on both).
+  `sol connect` and `~/.sol-client` are gone; re-pair your machines once with `sol invite` /
+  `sol pair`. The handshake, pairing link, and config format changed in place (pre-release).
+- New peers can only send you files; services are shared per peer (panel Peers tab, or
+  `sol share`). The shared-files page is a share like any other.
+- Pairing links and peer records keep addresses and access keys per transport, so I2P, a direct
+  path, or a new protocol plug in without changing pairing or the handshake.
+
 ### Added
+- Send files between peers, both ways: `sol send <peer> <file>` or the panel's Send a file. The
+  sender checks the receiver's SHA-256; per-file (4 GiB) and total (20 GiB) limits; received files
+  are labelled with the sender and kept off your shared-files page.
+- CLI talks to the running node over a local socket: `sol invite`, `pair`, `peers`, `share`,
+  `open`, `send`, `unpair`, `name`, `status`.
+- Panel: Peers tab with invite and join, per-peer share toggles, send a file, unpair; node name.
 - Redesigned panel for non-technical users: status hero with Tor progress, getting-started
   checklist, add-service presets, plain-language access choices, a pairing wizard that detects
   the new device, drag-and-drop files with names, readable activity log, dark mode.
-- Live "connected and verified" status per device and service, and a `connect` event.
+- Live "connected and verified" status per peer and service, and a `connect` event.
 - Self-healing Tor: restarts automatically when the network changes (VPN, Wi-Fi), and "Online"
   now means the node's address was verified reachable by a self-check. Reconnect button in the panel.
 - Shared files page: paired devices open the "shared files" link from `sol connect` to browse

@@ -1,104 +1,126 @@
 # Architecture
 
 How the code is organised and how a request flows through it. For *why* Sol exists and where it
-is going, see [spec.md](spec.md). For the wire format, see [PROTOCOL.md](PROTOCOL.md).
+is going, see [spec.md](spec.md). For the peer model, see [PEERS.md](PEERS.md). For the wire
+format, see [PROTOCOL.md](PROTOCOL.md).
 
 ## The big picture
 
 ```mermaid
 flowchart LR
-    subgraph laptop[Paired device]
-        app[Browser / music app / ssh] -->|localhost:9000| connect[sol connect]
+    subgraph laptop[Laptop: a Sol node]
+        app[Browser / music app / ssh] -->|localhost:9000| open[sol open]
+        open -->|control.sock| lnode[node]
     end
-    connect -->|sol/1 handshake over Tor| onion[(node .onion)]
+    lnode -->|signed handshake over Tor| onion[(server .onion)]
     visitor[Tor Browser visitor] -->|no handshake| svconion[(public service .onion)]
-    subgraph home[Home machine, no open ports]
+    subgraph home[Home server: a Sol node, no open ports]
         onion --> tor[tor child process]
         svconion --> tor
         tor --> nodeln[node listener 127.0.0.1:8081]
         tor --> pubsvc[public service]
-        nodeln -->|paired? service exists?| pipe[byte pipe]
+        nodeln -->|a peer? service shared with it?| pipe[byte pipe]
         pipe --> svc[local service 127.0.0.1:4533]
         panel[panel 127.0.0.1:8080] -.-> nodecore[node]
     end
 ```
 
-- **One binary, two roles.** `sol` runs a node. `sol pair` and `sol connect` run the client.
+The arrow works the other way too: the server can open the laptop's shared services or send it
+files, because the laptop publishes its own onion.
+
+- **One binary, one role.** Every machine runs `sol` (a node). Nodes pair with each other as
+  peers. Other `sol` commands talk to the local node over `control.sock`.
 - **Outbound only.** Tor (and later I2P) makes outbound connections to its network, and onion
   services need no inbound port.
-- **Private services** are reached through the node's own onion plus a signed handshake.
-  **Public services** each get their own onion, so a public site can't be linked to the node.
+- **Private services** are reached through the node's own onion plus a signed handshake, and only
+  by the peers they are shared with. **Public services** each get their own onion, so a public
+  site can't be linked to the node.
 
 ## Packages
 
 | Package | Job | Key types and functions |
 |---|---|---|
-| `cmd/sol` | CLI, mode switch, user-facing output | `runNode`, `runPair`, `runConnect`, `runAudit` |
-| `internal/node` | Composition root. Owns the node listener, routing, revocation, publications | `New`, `Run`, `handleConn`, `refreshNodePublication`; implements `api.Backend` |
-| `internal/protocol` | sol/1 handshake | `ReadRequest`, `Accept`, `ClientHandshake`, `ReadServiceList` |
-| `internal/auth` | Paired-device list with change hooks | `Devices.Add/Remove/Lookup/Touch/TorAuthKeys` |
+| `cmd/sol` | CLI: runs the node, or sends one request to it over the control socket | `runNode`, `runPair`, `runOpen`, `runSend`, `tunnel` |
+| `internal/node` | Composition root. Node listener, routing, peers, pairing, dialing out, inbox, control socket, publications | `New`, `Run`, `handleConn`, `Pair`, `DialPeer`, `SendFile`, `Unpair`; implements `api.Backend` |
+| `internal/protocol` | The handshake | `ReadRequest`, `Accept`, `ClientHandshake`, `ReadPeerInfo`, `Card` |
+| `internal/peers` | Peer list with change hooks and share lists | `Peers.Add/Remove/Lookup/Find/SetShared/AccessKeys`, `Inbox`, `Files` |
 | `internal/pairing` | One-time tokens and `sol://pair` links | `Manager.NewToken/Consume/Pending`, `Link`, `ParseLink` |
-| `internal/identity` | ed25519 node/device keys, x25519 Tor client-auth keys | `LoadOrCreate`, `NodeID`, `DeviceID`, `NewX25519` |
-| `internal/config` | `~/.sol/config.json`: atomic save, validation, migration | `Load`, `AddService`, `AddDevice`, `Snapshot` |
-| `internal/transport` | `Transport` interface, `Registry`, Tor / clearnet / I2P(stub) | `Publication`, `Tor`, `Clearnet`, `ClientAuthorizer` |
+| `internal/identity` | ed25519 node keys, x25519 Tor client-auth keys | `LoadOrCreate`, `NodeID`, `DeviceID`, `NewX25519` |
+| `internal/config` | `~/.sol/config.json`: atomic save, validation, migration | `Load`, `AddService`, `AddPeer`, `UpdatePeer`, `Snapshot` |
+| `internal/transport` | `Transport` interface, `Registry`, Tor / clearnet / I2P(stub), per-peer access | `Publication`, `Access`, `AccessIssuer`, `ClientAuthorizer`, `Tor`, `Clearnet` |
 | `internal/runtime` | Find and run external programs (tor) | `Provider`, `Select`, `Native`, `Bundled`, `Docker`(stub) |
-| `internal/connect` | Client: pair, remember nodes, tunnels | `Pair`, `Load`, `Client.Dial`, `Client.Listen` |
-| `internal/api` | Panel JSON API, loopback + CSRF guards | `Handler`, `Backend` |
-| `internal/blob` | Content-addressed files with range serving | `Store.Put/Open/List/Handler` |
+| `internal/control` | Control-socket wire format and client | `Request`, `Call`, `Dial`, `Path` |
+| `internal/api` | Panel JSON API, loopback + CSRF guards | `Handler`, `Backend`, `PeerView` |
+| `internal/blob` | Content-addressed files with range serving and sender labels | `Store.Put/PutLimited/List/Browser/Received` |
 | `internal/proxy` | HTTP reverse proxy for public `http` services, header stripping | `NewServiceProxy` |
 | `internal/audit` | Leak checks for anonymous-public services | `Check`, `Checks`, `Run` |
 | `internal/events` | Ring-buffer log for the panel | `Log.Add/Recent` |
 | `internal/netutil` | Byte pipe, free ports, LAN IP | `Pipe`, `FreePorts`, `LANIP` |
 | `internal/gateway` | v0.2 HTTPS front door (stub, design in package doc) | `Run` |
 | `web` | Panel HTML/CSS/JS, embedded with `go:embed` | `FS` |
-| `internal/e2e` | Node + client in one process (clearnet), plus an opt-in real-Tor test | |
+| `internal/e2e` | Several nodes in one process (clearnet), plus an opt-in real-Tor test | |
 
 **Dependency rules:** only `node` and `cmd/sol` wire packages together. `api` reaches the node
 only through the `api.Backend` interface (it uses other packages for their types). The leaf
-packages `config`, `identity`, `events`, and `netutil` import no other Sol package, and
-`protocol` imports only `identity`. Sol has **no third-party Go dependencies**, and new ones need
-a good reason.
+packages `config`, `identity`, `events`, `control`, and `netutil` import no other Sol package;
+`blob` builds on `config`, `peers` on `config` and `identity`, and `protocol` imports only
+`identity`. Sol has **no third-party Go dependencies**, and new ones need a good reason.
 
 ## Request paths
 
-### Private service (`sol connect` → Navidrome)
+### Opening a peer's service (`sol open server` → Navidrome)
 
-1. `connect.Client.Listen` accepts a local connection on `127.0.0.1:9000`.
-2. `Client.Dial` picks an address (last one that worked, then ready transports first) and dials it:
-   `transport.Tor.Dial` → SOCKS5 → `<node>.onion:80`.
-3. Tor on the node forwards to the node listener `127.0.0.1:8081` (`ADD_ONION Port=80,127.0.0.1:8081`).
-4. `node.handleConn` → `protocol.ReadRequest` verifies the signature.
-5. `handleConnect` checks `devices.Lookup(key)` and the service, dials `127.0.0.1:4533`, sends OK,
-   registers the connection under the device ID, and calls `netutil.Pipe`.
+1. `sol open` asks the node to refresh the peer (`OpPeers` with `refresh`), which sends `list` to
+   the peer and saves what it shares. It then listens on `127.0.0.1:9000…` per shared service.
+2. For each local connection, `sol open` opens `control.sock` and sends `OpDial`.
+3. The node's `DialPeer` → `dial` picks an address (last one that worked, then ready transports,
+   then Tor before I2P before clearnet), dials it (`transport.Tor.Dial` → SOCKS5 →
+   `<peer>.onion:80`), and runs the handshake, checking the callee is the expected node.
+4. On the peer, Tor forwards to the node listener `127.0.0.1:8081`, and `node.handleConn` →
+   `protocol.ReadRequest` verifies the signature.
+5. `handleConnect` checks the key is a peer and the service is in its `Shares`, dials
+   `127.0.0.1:4533`, sends OK, registers the stream, and calls `netutil.Pipe`.
+
+Both nodes track the stream (`connInfo{peer, service, outbound}`), so either side's panel shows it
+and removing the peer on either side closes it.
 
 ### Pairing
 
-1. Panel `POST /api/devices/pair` → `Node.NewPairing` → `pairing.NewToken(withTor)` creates a secret
-   and an x25519 key. `refreshNodePublication` re-publishes the node onion with that key authorized.
-2. The panel shows the `sol://pair` link and a QR code.
-3. `sol pair <link>` → `connect.Pair` installs the Tor client key, dials, and sends an `OpPair`
-   handshake with the secret.
-4. `node.handlePair` → `pairing.Consume` (burns the token) → `devices.Add` with the token's Tor
-   public key → replies with the service list. The key set is unchanged (it moved from "pending"
-   to "device"), so the onion is not republished.
+1. A: `Node.Invite` → `issueAccess` (one `transport.Access` per access-capable transport) →
+   `pairing.NewToken(access)`. `refreshNodePublication` republishes A's onion with the token's
+   key authorized. The `sol://pair` link carries A's addresses and the secret halves.
+2. B: `Node.Pair(link)` installs A's access (`ClientAuthorizer`), issues its own access for A,
+   and sends `OpPair` with the secret and a signed card `{name, addrs, access}`.
+3. A: `handlePair` burns the token, saves B (`AccessIn` from the token, `Addrs`/`AccessOut` from
+   the card), installs B's access, and replies with `PeerInfo`. It then asks B what it shares
+   (`learnShares`), retrying while B saves the pairing.
+4. B saves A. Saving fires `OnChange`, so B republishes its onion with A's key authorized.
+
+### Sending a file (`sol send server notes.pdf`)
+
+`sol send` streams the file into `control.sock` (`OpSend`). The node's `SendFile` dials the peer's
+`_inbox`, `PUT`s the file over HTTP while hashing it, and checks the peer's answer matches. On the
+peer, `inboxHandler` (one HTTP server per verified stream, so it knows the sender) enforces the
+per-file and total limits and stores it with `blob.PutLimited`, labelled with the sender.
 
 ### Live status in the panel
 
-`node.handleConnect` records every open stream as `connInfo{device, service, since}`.
-`Node.Devices()` groups them into `api.DeviceView.Connections`, so the panel can show a device as
-"connected and verified". Every listed stream passed the sol/1 handshake signed by that device's
-paired key. The first stream of a device to a service also logs a `connect` event.
-`Node.Services()` probes each service's local port, so the panel can warn when the app isn't
-running. Uploaded files keep a display name in `blobs/.names.json`. Content is still addressed
-only by hash. The built-in `_files` service is `blob.Store.Browser()`: a file-list page at `/`
-(html/template, strict CSP) and `/blob/<hash>[/<name>][?download]`. Blobs are served with
-`Content-Security-Policy: sandbox`, so an uploaded HTML file can't run scripts.
+`Node.Peers()` groups tracked streams into `api.PeerView.Connections` (inbound and outbound), so
+the panel can show a peer as "connected and verified". Every listed stream passed the handshake
+with that peer's key. `Node.Services()` probes each service's local port, so the panel can warn
+when the app isn't running. Files keep a name and sender in `blobs/.names.json`. The built-in
+`_files` service is `blob.Store.Browser()`, which lists and serves only the owner's own files. Blobs
+are served with `Content-Security-Policy: sandbox`, so an HTML file can't run scripts.
 
-### Revocation
+### Removal
 
-Panel `DELETE /api/devices/{id}` → `Devices.Remove` → its hooks fire:
-- `OnRemove`: the node closes every live connection of that device.
-- `OnChange`: `refreshNodePublication` republishes the onion without the device's Tor key.
+Panel `DELETE /api/peers/{id}` or `sol unpair` → `Node.Unpair` tells the peer (`unpair` op, best
+effort), then `Peers.Remove` → its hooks fire:
+- `OnRemove`: the node closes every live stream with that peer, both directions, and forgets the
+  peer's access key in its own tor.
+- `OnChange`: `refreshNodePublication` republishes the onion without the peer's key.
+
+A peer receiving `unpair` runs the same removal.
 
 ### Public service
 
@@ -114,7 +136,8 @@ anonymous-public). Anonymous-public services are never published on clearnet.
   `__OwningControllerProcess`. It authenticates, sends `TAKEOWNERSHIP` (so tor dies with Sol),
   polls bootstrap progress, and restarts tor with backoff if it exits, re-registering every onion
   and client key.
-- Onion keys live in `~/.sol/tor/onions/<publication id>.key`, so addresses survive restarts.
+- Onion keys live in `~/.sol/tor/onions/<publication id>.key`, so addresses survive restarts. Tor's
+  own state (`tor/data`) is kept too, so later starts bootstrap in seconds.
 - **Health** (`transport/torhealth.go`): tor doesn't notice network changes such as a VPN turning
   on, and keeps saying "bootstrapped" while its onions are dead. So `watchNetwork` restarts tor
   when local IP addresses change, and `selfCheck` dials our own onion through our own tor. Onions
@@ -125,24 +148,23 @@ anonymous-public). Anonymous-public services are never published on clearnet.
 ## On disk
 
 ```
-~/.sol/                     node
+~/.sol/
 ├── node.key                ed25519 seed (0600). Back this up: it is the node's identity
-├── config.json             services, devices, ports, transports (0600, atomic writes)
-├── blobs/<sha256>         (+ .names.json: display names for uploads)
+├── config.json             name, services, peers (incl. access keys), ports, transports (0600, atomic)
+├── control.sock            local CLI socket (0600; only while the node runs)
+├── blobs/<sha256>          (+ .names.json: display name and sender per file)
 ├── bin/                    extracted bundled binaries
 └── tor/                    torrc, tor.log, data/, onions/<id>.key
-
-~/.sol-client/              client
-├── device.key
-├── nodes.json              paired nodes: addresses, Tor client key, services
-└── tor/
 ```
 
 ## Invariants (do not break these)
 
 1. The panel binds loopback only and checks the Host header and CSRF token. It is never published.
+   The control socket is a `0600` Unix socket in the `0700` data directory, never on the network.
 2. Rejections on the node listener send **no bytes**. Use `node.reject`, never an error page.
-3. Nothing logs secrets, pairing tokens, keys, or request bodies.
+3. Nothing logs secrets, pairing tokens, keys, or request bodies. Peer access keys never leave the
+   node: `api.PeerView` and `control.PeerView` have no credential fields.
 4. Key and config files are `0600`, data directories `0700`. Config writes are atomic.
 5. Anonymous-public services are never published on clearnet.
-6. Every new transport, provider, or audit check plugs into its interface. See [EXTENDING.md](EXTENDING.md).
+6. A peer reaches only what is in its `Shares`; new peers get `_inbox` only.
+7. Every new transport, provider, or audit check plugs into its interface. See [EXTENDING.md](EXTENDING.md).

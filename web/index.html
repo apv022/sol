@@ -15,7 +15,7 @@
 <nav class="tabs" aria-label="Sections">
   <button data-screen="home" class="active">Home</button>
   <button data-screen="services">Services</button>
-  <button data-screen="devices">Devices</button>
+  <button data-screen="peers">Peers</button>
   <button data-screen="files">Files</button>
   <button data-screen="activity">Activity</button>
 </nav>
@@ -36,11 +36,11 @@
         <li id="step-service"><span class="check"></span><div><b>Add a service</b>
           <p class="muted">Tell Sol about an app on this computer, like a music or photo server.</p></div>
           <button data-action="add-service" class="small">Add service</button></li>
-        <li id="step-device"><span class="check"></span><div><b>Pair a device</b>
-          <p class="muted">Give another computer permission to reach your services.</p></div>
-          <button data-action="pair" class="small">Pair device</button></li>
-        <li id="step-connect"><span class="check"></span><div><b>Connect from that device</b>
-          <p class="muted">Run <code>sol connect</code> on it and open the address it prints.</p></div></li>
+        <li id="step-device"><span class="check"></span><div><b>Pair another machine</b>
+          <p class="muted">Both machines run Sol. Once paired they can reach each other and send files.</p></div>
+          <button data-action="pair" class="small">Pair a machine</button></li>
+        <li id="step-connect"><span class="check"></span><div><b>Share something with it</b>
+          <p class="muted">On the Peers tab, tick the services that machine may open.</p></div></li>
       </ol>
     </div>
 
@@ -52,6 +52,7 @@
     <details class="card advanced">
       <summary>Advanced details</summary>
       <dl class="kv">
+        <dt>Name</dt><dd><span id="node-name">-</span> <button class="ghost small" data-action="rename">Rename</button></dd>
         <dt>Node ID</dt><dd class="mono" id="node-id">-</dd>
         <dt>Version</dt><dd id="version">-</dd>
         <dt>Running for</dt><dd id="uptime">-</dd>
@@ -72,29 +73,34 @@
   <section id="services" class="screen">
     <div class="section-head">
       <div><h2>Services</h2>
-        <p class="muted">Apps on this computer that your devices can reach.</p></div>
+        <p class="muted">Apps on this computer. Choose which peers may open each one on the Peers tab.</p></div>
       <button data-action="add-service">+ Add service</button>
     </div>
     <div id="service-list" class="grid"></div>
   </section>
 
-  <!-- DEVICES -->
-  <section id="devices" class="screen">
+  <!-- PEERS -->
+  <section id="peers" class="screen">
     <div class="section-head">
-      <div><h2>Devices</h2>
-        <p class="muted">Computers allowed to reach your private services. Remove one and its access ends instantly.</p></div>
-      <button data-action="pair">+ Pair a device</button>
+      <div><h2>Peers</h2>
+        <p class="muted">Other machines running Sol that you've paired with. Each side chooses what it shares,
+          and either can send the other files. Unpair one and its access ends instantly.</p></div>
+      <div class="actions">
+        <button class="ghost" data-action="join">Join with a link</button>
+        <button data-action="pair">+ Invite a machine</button>
+      </div>
     </div>
-    <div id="device-list" class="grid"></div>
+    <input type="file" id="send-input" multiple hidden>
+    <div id="peer-list" class="grid"></div>
   </section>
 
   <!-- FILES -->
   <section id="files" class="screen">
     <div class="section-head">
       <div><h2>Files</h2>
-        <p class="muted">Everything here is shared with your paired devices. On a device, <code>sol connect</code>
-          prints a <b>shared files</b> link: open it in a browser to see this list and download.
-          Each file has a SHA-256 fingerprint so it can be checked after download.</p></div>
+        <p class="muted">Files you add here go on your <b>shared files</b> page, which peers can open if you
+          share it with them (Peers tab). Files peers send you also appear here, marked with who sent them;
+          only you can see those. Every file has a SHA-256 fingerprint so it can be checked.</p></div>
     </div>
     <label id="dropzone" class="dropzone">
       <input type="file" id="file-input" multiple hidden>
@@ -108,7 +114,7 @@
   <!-- ACTIVITY -->
   <section id="activity" class="screen">
     <h2>Activity</h2>
-    <p class="muted">Pairings, connections, and blocked attempts. Newest first.</p>
+    <p class="muted">Pairings, connections, files, and blocked attempts. Newest first.</p>
     <ul id="event-list" class="events"></ul>
   </section>
 </main>
@@ -158,10 +164,10 @@
 <!-- PAIR DIALOG -->
 <dialog id="dlg-pair">
   <div class="pair">
-    <h2>Pair a device</h2>
+    <h2>Invite another machine</h2>
     <div id="pair-steps">
       <div class="step"><span class="num">1</span><div>
-        <b>On the other computer, install Tor and Sol</b>
+        <b>On the other machine, install Tor and Sol, and start it with <code>sol</code></b>
         <div class="os-tabs">
           <button data-os="arch" class="active">Arch</button><button data-os="debian">Ubuntu / Debian</button>
           <button data-os="mac">macOS</button>
@@ -169,23 +175,40 @@
         <div class="copyrow"><pre id="install-cmd"></pre><button data-copy="install-cmd" class="ghost small">Copy</button></div>
       </div></div>
       <div class="step"><span class="num">2</span><div>
-        <b>Run this command there</b>
+        <b>Run this there</b> (or paste the link into its panel: Peers → Join with a link)
         <div class="copyrow"><pre id="pair-cmd">Creating a link…</pre><button data-copy="pair-cmd" class="ghost small">Copy</button></div>
         <p class="muted small">Works once and expires in <span id="pair-countdown">10:00</span>. Treat it like a password.</p>
         <details><summary>Show as QR code</summary>
           <div id="qr"></div>
-          <p class="muted small">For the <code>sol</code> app on another computer. Phones can't use it yet:
-            to reach a service from a phone, make it "Anyone with Tor Browser" and open its address in Tor Browser.</p>
+          <p class="muted small">Phones can't run Sol yet: to reach a service from a phone, make it
+            "Anyone with Tor Browser" and open its address in Tor Browser.</p>
         </details>
       </div></div>
       <div class="step"><span class="num">3</span><div>
-        <b id="pair-wait-title">Waiting for your device…</b>
+        <b id="pair-wait-title">Waiting for the other machine…</b>
         <p id="pair-wait-text" class="muted">Keep this open. The first connection over Tor usually takes 30 seconds to 2 minutes.</p>
       </div></div>
     </div>
     <p id="pair-error" class="error" hidden></p>
     <div class="actions"><button id="pair-close" class="ghost">Close</button></div>
   </div>
+</dialog>
+
+<!-- JOIN DIALOG -->
+<dialog id="dlg-join">
+  <form id="join-form" method="dialog">
+    <h2>Join another machine</h2>
+    <p class="muted">On the other machine, open its panel and choose <b>Invite a machine</b> (or run
+      <code>sol invite</code>), then paste the <code>sol://pair…</code> link here.</p>
+    <label>Pairing link
+      <textarea name="link" rows="3" required placeholder="sol://pair?node=…"></textarea></label>
+    <p id="join-status" class="muted" hidden></p>
+    <p id="join-error" class="error" hidden></p>
+    <div class="actions">
+      <button value="cancel" formnovalidate class="ghost">Cancel</button>
+      <button id="join-submit" value="ok">Pair</button>
+    </div>
+  </form>
 </dialog>
 
 <!-- QR DIALOG (public addresses) -->

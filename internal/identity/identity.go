@@ -1,10 +1,10 @@
 // Package identity holds Sol's key material:
 //
-//   - ed25519 keys identify nodes and devices and sign handshakes.
+//   - ed25519 keys identify nodes and sign handshakes.
 //   - x25519 keys are used for Tor v3 onion client authorization.
 //
 // A node's ID is the lowercase, unpadded base32 encoding of its ed25519 public
-// key. A device's ID is a short fingerprint derived from its public key.
+// key. DeviceID is a short fingerprint of a key, used to name peers in the UI.
 // Private keys are stored as the 32-byte ed25519 seed in a 0600 file.
 //
 // Only the standard library is used (crypto/ed25519, crypto/ecdh).

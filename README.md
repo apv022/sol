@@ -1,6 +1,6 @@
 # Sol
 
-**Self-host anything, reach it from anywhere, over Tor.**
+**Connect your own machines over Tor: open each other's apps, send each other files.**
 No port forwarding, no VPN, no accounts, no domain, no cloud.
 
 [![ci](https://github.com/apv022/sol/actions/workflows/ci.yml/badge.svg)](https://github.com/apv022/sol/actions/workflows/ci.yml)
@@ -8,17 +8,17 @@ No port forwarding, no VPN, no accounts, no domain, no cloud.
 ![Go dependencies: 0](https://img.shields.io/badge/go%20dependencies-0-brightgreen)
 
 ```
-home machine (behind CGNAT, no open ports)          your laptop, anywhere
-┌──────────────────────────────────────┐            ┌──────────────────────────┐
-│ Navidrome :4533 ─┐                   │    Tor     │ sol connect              │
-│ Jellyfin  :8096 ─┼─ sol ─ tor ───────┼────────────┼─ localhost:9000 → music  │
-│ sshd      :22   ─┘   (outbound only) │            │ localhost:9001 → movies  │
-└──────────────────────────────────────┘            └──────────────────────────┘
+home server (behind CGNAT, no open ports)           your laptop, anywhere
+┌──────────────────────────────────────┐            ┌───────────────────────────┐
+│ Navidrome :4533 ─┐                   │    Tor     │ sol open home             │
+│ Jellyfin  :8096 ─┼─ sol ─ tor ───────┼────────────┼─ localhost:9000 → music   │
+│ sshd      :22   ─┘   (outbound only) │  ◄──────►  │ sol send home notes.pdf   │
+└──────────────────────────────────────┘  both ways └───────────────────────────┘
 ```
 
-Sol is one Go binary. Point it at apps running on your machine, pair your devices with a one-time
-link or QR code, and every paired device can reach them through Tor. Nobody else can even find
-them.
+Sol is one Go binary that runs on each of your machines. Pair two of them once with a one-time
+link, and they become **peers**: each can open the apps the other shares with it, and either can
+send the other files, through Tor, from anywhere. Nobody else can even find them.
 
 <!-- demo GIF: record with `vhs docs/demo.tape` and replace this comment -->
 
@@ -33,8 +33,9 @@ configs, or handing your traffic to a tunnel company. Sol skips all of it:
   Wi-Fi, and on mobile hotspots.
 - **Private by default.** A service is invisible to anyone you haven't paired: Tor client
   authorization hides the address, and the handshake drops strangers without a single byte of reply.
-- **Per-device access.** One link per device. Revoke a lost phone and its connections close
-  instantly.
+- **You choose what each peer sees.** A new peer can only send you files. Tick the apps it may
+  open. Unpair a lost laptop and its connections close instantly, on both sides.
+- **Files both ways.** `sol send laptop notes.pdf` from any machine, checked by SHA-256 on arrival.
 - **Any TCP service.** HTTP, WebSockets, media streaming with seeking, SSH, game servers, databases.
 - **Public too, if you want.** Flip a service to `public` and it gets its own `.onion` that anyone
   can open in Tor Browser. It can't be linked to your private node.
@@ -43,72 +44,83 @@ configs, or handing your traffic to a tunnel company. Sol skips all of it:
 
 ## Quick start
 
-You need `tor` installed on both machines (`sudo apt install tor`, `brew install tor`, …) and Go
+You need `tor` installed on each machine (`sudo apt install tor`, `brew install tor`, …) and Go
 1.24+ to build.
 
 ```sh
 go install github.com/apv022/sol/cmd/sol@latest
+sol                       # on every machine: starts the node; panel at http://127.0.0.1:8080
 ```
 
-**On the machine with your services:**
+**Pair two machines** (once). On the home server, `sol invite` (or the panel's **Peers → Invite a
+machine**) prints a link. On the laptop:
 
 ```sh
-sol                       # starts the node; panel at http://127.0.0.1:8080
+sol pair 'sol://pair?node=…'          # or paste it in the panel: Peers → Join with a link
 ```
 
-In the panel, **Services → Add**: name `navidrome`, port `4533`, private. Then **Devices → Pair a
-device** gives you a link and a QR code.
-
-**On your laptop:**
+**Share an app.** On the server, add it in the panel (**Services → Add**: `navidrome`, port
+`4533`), then tick it for the laptop on the **Peers** tab, or run `sol share laptop navidrome`.
+On the laptop:
 
 ```sh
-sol connect 'sol://pair?v=1&node=…'    # first time: pairs, then opens tunnels
+sol open home
 #   navidrome -> http://127.0.0.1:9000
 ```
 
-Open `http://127.0.0.1:9000`. Next time, just run `sol connect`.
+**Send files**, either way: `sol send home notes.pdf` (or **Send a file…** on the Peers tab).
+They show up in the other machine's Files tab, marked with who sent them.
 
 The panel walks you through it: a getting-started checklist, presets for common apps (Navidrome,
 Jellyfin, Immich, Home Assistant, SSH…), a warning if the app isn't running, and a live view of
-which devices are connected to what, each one cryptographically verified.
+which peers are connected to what, each one cryptographically verified.
 
 > Tor is slow to start the first time (around 30 s to bootstrap, plus up to a minute for a new
-> onion to become reachable). After that, connections are quick.
+> onion to become reachable). Your onion address and Tor's state are kept between runs, so later
+> starts take seconds to bootstrap and 10-60 s to become reachable again.
 
-Try it without Tor on one machine: set `"clearnet": true` in `~/.sol/config.json`. That's for LAN
-and testing only, since clearnet traffic is not encrypted.
+Try it without Tor on one LAN: set `"tor": false, "clearnet": true` in `~/.sol/config.json`.
+That's for LAN and testing only, since clearnet traffic is not encrypted.
 
 ## How it works
 
-1. The node runs its own `tor` child process and publishes one **private onion** for itself,
+1. Every node runs its own `tor` child process and publishes one **private onion** for itself,
    locked with Tor v3 client authorization.
-2. Pairing gives a device two keys: an **ed25519** device key (generated on the device) and an
-   **x25519** Tor client-auth key (in the link). The link is single use and expires in 10 minutes.
-3. Every connection begins with a **signed challenge-response handshake**: the node sends a fresh
-   nonce, the device signs it along with the service name, and the node checks the key is paired.
-   Then the connection becomes a plain byte pipe to `127.0.0.1:<port>`.
-4. **Revoking** a device closes its live connections and republishes the onion without its key.
+2. **Pairing is mutual.** Each node has an **ed25519** identity. The link carries the inviter's
+   address and an **x25519** Tor key made just for the joiner; the joiner answers with its own
+   address and a key it made for the inviter, signed. The link is single use and expires in 10
+   minutes.
+3. Every connection, either way, begins with a **signed challenge-response handshake**: the callee
+   sends a fresh nonce, the caller signs it with the service name, and the callee checks the key is
+   a peer and the service is shared with it. Then it's a plain byte pipe to `127.0.0.1:<port>`.
+4. **Unpairing** closes live connections on both sides and republishes the onion without the key.
 
-Details: [docs/PROTOCOL.md](docs/PROTOCOL.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) ·
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 
 ## Screenshots
 
-| Panel home | Devices | Services (dark) |
-|---|---|---|
-| <img src="docs/media/panel-home.png" alt="Sol panel home: online over Tor"> | <img src="docs/media/panel-devices.png" alt="Sol devices"> | <img src="docs/media/panel-services-dark.png" alt="Sol services, dark theme"> |
+| Panel home | Services (dark) |
+|---|---|
+| <img src="docs/media/panel-home.png" alt="Sol panel home: online over Tor"> | <img src="docs/media/panel-services-dark.png" alt="Sol services, dark theme"> |
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `sol` | Run a node (panel on `127.0.0.1:8080`, data in `~/.sol`) |
-| `sol pair <link> [--name N]` | Pair this device with a node |
-| `sol connect [link] [-L svc=127.0.0.1:PORT]` | Open local tunnels (default: every service on 9000, 9001, …) |
+| `sol` | Run the node (panel on `127.0.0.1:8080`, data in `~/.sol`). Everything below talks to it |
+| `sol invite` | Print a one-time pairing link for another machine |
+| `sol pair <link>` | Pair with the machine that made the link |
+| `sol peers [-r]` | List peers and what each side shares (`-r` asks them now) |
+| `sol share <peer> <service> [--off]` | Let a peer open a service (`_files` = your shared files page) |
+| `sol open <peer> [-L svc=127.0.0.1:PORT]` | Local tunnels to what a peer shares (default 9000, 9001, …) |
+| `sol send <peer> <file>…` | Send files to a peer |
+| `sol unpair <peer>` | Remove a peer here and tell it to remove you |
+| `sol name [NEW]`, `sol status` | Show or change this machine's name; show its id and addresses |
 | `sol audit` | Leak checks for anonymous-public services |
-| `sol version` | Print the version |
 
-Environment variables: `SOL_DATA` (node dir), `SOL_CLIENT_DIR` (client dir), `SOL_DEBUG=1`.
+`<peer>` is a name or the start of an id. Environment variables: `SOL_DATA` (data dir),
+`SOL_DEBUG=1`.
 
 ## Status
 
@@ -117,11 +129,12 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Feature | Status |
 |---|---|
 | Tor onion services with client authorization | ✅ |
-| Signed handshake, per-device pairing and instant revocation | ✅ |
-| Any TCP service, tunnels with `sol connect` | ✅ |
-| Web panel: guided setup, pairing wizard, live "connected and verified" status per device | ✅ |
+| Mutual peer pairing, per-peer sharing, instant unpairing on both sides | ✅ |
+| Any TCP service, tunnels with `sol open` | ✅ |
+| Send files between peers, both ways, SHA-256 verified, with size limits | ✅ |
+| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status | ✅ |
 | Public services on their own onion | ✅ |
-| Shared files: browsable page for paired devices, streaming, SHA-256 verified | ✅ |
+| Shared files page for peers, streaming, SHA-256 fingerprints | ✅ |
 | LAN / clearnet transport (testing) | ✅ |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |
@@ -139,7 +152,7 @@ The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
 | Third party sees your traffic | No (Tor, end to end) | No (WireGuard) | Yes (TLS terminates at the provider) | No |
 | Works behind CGNAT | Yes | Yes | Yes | Yes |
 | Hides your IP from clients | Yes | No | From clients, not the provider | Yes |
-| Per-device access and revocation | Yes, built in | Yes | Via provider ACLs | Manual key files |
+| Per-machine access and revocation | Yes, built in | Yes | Via provider ACLs | Manual key files |
 | Speed | Tor speed (fine for media, not for 4K) | Fast | Fast | Tor speed |
 | Setup | One binary, a link | App + login | Account + domain | torrc, keys, restarts |
 
@@ -148,7 +161,7 @@ Pick Sol when you want privacy and independence more than raw speed.
 ## Development
 
 ```sh
-make test      # unit tests + full node/client e2e over clearnet (no Tor needed)
+make test      # unit tests + full two-node e2e over clearnet (no Tor needed)
 make check     # gofmt, vet, staticcheck, tests (what CI runs)
 make test-tor  # e2e over the real Tor network (needs tor; takes a few minutes)
 ```

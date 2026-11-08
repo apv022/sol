@@ -218,3 +218,13 @@ audio { width: 100%; margin-bottom: 12px; }
 .progress .w90 { width: 90%; }
 .progress .w95 { width: 95%; }
 .progress .w100 { width: 100%; }
+
+/* Peers: what each side shares */
+.device h4 { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.shares { display: grid; gap: 6px; margin-bottom: 12px; }
+.share { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; margin: 0; font-weight: 400; }
+.share input { width: auto; margin-top: 3px; }
+.share:has(input:checked) b { color: var(--accent); }
+textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
+  padding: 8px 10px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.section-head .actions { display: flex; gap: 8px; flex-wrap: wrap; }

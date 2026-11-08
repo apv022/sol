@@ -13,9 +13,10 @@ import (
 // Event kinds.
 const (
 	KindReject    = "reject"    // a connection failed the handshake
-	KindPair      = "pair"      // a device paired
-	KindRevoke    = "revoke"    // a device was removed
-	KindConnect   = "connect"   // a device opened a verified connection to a service
+	KindPair      = "pair"      // a peer paired
+	KindRevoke    = "revoke"    // a peer was removed
+	KindConnect   = "connect"   // a peer opened a verified connection to a service
+	KindFile      = "file"      // a file was sent or received
 	KindTransport = "transport" // a transport changed state
 	KindService   = "service"   // a service was added/removed/changed
 	KindAudit     = "audit"

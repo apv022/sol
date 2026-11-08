@@ -3,9 +3,12 @@ package blob
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -104,4 +107,81 @@ func TestBrowserListsAndEscapes(t *testing.T) {
 	if resp.Header.Get("Content-Security-Policy") != "sandbox" {
 		t.Fatal("uploaded HTML not sandboxed")
 	}
+}
+
+func TestPutLimitedAndReceived(t *testing.T) {
+	s, _ := New(t.TempDir())
+	own, _ := s.PutNamed(strings.NewReader("my own file"), "own.txt")
+
+	if _, err := s.PutLimited(strings.NewReader("0123456789"), "big.bin", "peer1", 9); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversize: want ErrTooLarge, got %v", err)
+	}
+	// An oversize upload must leave nothing behind, not even a prefix.
+	if list, _ := s.List(); len(list) != 1 {
+		t.Fatalf("oversize upload left files: %+v", list)
+	}
+
+	got, err := s.PutLimited(strings.NewReader("from a peer"), "../../etc/passwd\x07", "peer1", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.Received(); n != int64(len("from a peer")) {
+		t.Fatalf("Received = %d", n)
+	}
+	for _, e := range mustList(t, s) {
+		if e.Hash == got && (e.From != "peer1" || e.Name != "passwd") {
+			t.Fatalf("received entry: %+v", e)
+		}
+	}
+
+	// A peer re-sending the owner's file doesn't turn it into a received one.
+	if _, err := s.PutLimited(strings.NewReader("my own file"), "x", "peer1", 100); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range mustList(t, s) {
+		if e.Hash == own && (e.From != "" || e.Name != "own.txt") {
+			t.Fatalf("owner file changed: %+v", e)
+		}
+	}
+
+	// The shared-files page neither lists nor serves files peers sent.
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+	page := httpGet(t, srv.URL+"/")
+	if !strings.Contains(page, "own.txt") || strings.Contains(page, "passwd") {
+		t.Fatalf("page: %s", page)
+	}
+	if resp, _ := http.Get(srv.URL + "/blob/" + got); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("received file served on _files: %d", resp.StatusCode)
+	}
+}
+
+func TestOldNamesFileStillReads(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	h, _ := s.Put(strings.NewReader("x"))
+	os.WriteFile(filepath.Join(dir, namesFile), []byte(`{"`+h+`":"song.flac"}`), 0o600)
+	if list := mustList(t, s); len(list) != 1 || list[0].Name != "song.flac" || list[0].From != "" {
+		t.Fatalf("list = %+v", list)
+	}
+}
+
+func mustList(t *testing.T, s *Store) []Entry {
+	t.Helper()
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
+}
+
+func httpGet(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
 }

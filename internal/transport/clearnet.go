@@ -12,7 +12,7 @@ import (
 
 // Clearnet is a plain-TCP transport for LAN use and tests. It provides no
 // encryption and no anonymity: traffic is visible to anyone on the path.
-// The sol/1 handshake still authenticates every device.
+// The handshake still authenticates every peer.
 //
 // Publishing "node" listens on ListenAddr; every other publication listens
 // on a random port on the same host.

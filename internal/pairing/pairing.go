@@ -1,13 +1,15 @@
 // Package pairing issues one-time pairing secrets and encodes pairing links.
 //
-// Flow (spec.md 7.3):
-//  1. The panel asks for a token. The Manager creates a 32-byte secret that
-//     expires after DefaultTTL and, when Tor is in use, an x25519 keypair for
-//     Tor client authorization.
-//  2. The panel shows a Link (as text and QR). It carries the node ID, its
-//     addresses, the secret, and the Tor client-auth private key.
-//  3. The device connects and sends a protocol.OpPair handshake with the
-//     secret. The node calls Consume, which validates and burns the token.
+// Flow (docs/PEERS.md):
+//  1. The inviter asks for a token. The Manager creates a 32-byte secret that
+//     expires after DefaultTTL, together with one access credential per
+//     transport that can restrict who reaches the node (Tor client auth).
+//  2. The inviter shows a Link (as text and QR). It carries the inviter's node
+//     ID, name, addresses, the secret, and the joiner's half of each
+//     credential.
+//  3. The joiner connects and sends a protocol.OpPair handshake with the
+//     secret and its own card. The inviter calls Consume, which validates and
+//     burns the token.
 //
 // Secrets are looked up by their SHA-256 hash, so lookups do not leak timing
 // information about the secret.
@@ -19,12 +21,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/apv022/sol/internal/identity"
+	"github.com/apv022/sol/internal/transport"
 )
 
 // DefaultTTL is how long a pairing secret stays valid.
@@ -40,8 +45,10 @@ var ErrInvalidToken = errors.New("invalid or expired pairing token")
 type Token struct {
 	Secret  string // base64url, 32 random bytes
 	Expires time.Time
-	// TorAuth is the Tor client-auth keypair for the device, or nil.
-	TorAuth *identity.X25519Key
+	// Access holds one credential per transport for the joiner. The node
+	// authorizes Access[t].Authorize while the token is pending and keeps it
+	// as the peer's AccessIn once it is redeemed.
+	Access map[string]transport.Access
 }
 
 // Manager holds pending tokens. Safe for concurrent use.
@@ -63,7 +70,7 @@ func NewManager(ttl time.Duration) *Manager {
 }
 
 // OnChange registers fn to run when the set of pending tokens changes.
-// The node uses it to add or remove pending Tor client-auth keys.
+// The node uses it to add or remove pending access keys.
 func (m *Manager) OnChange(fn func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -72,16 +79,15 @@ func (m *Manager) OnChange(fn func()) {
 
 func (m *Manager) fire() {
 	m.mu.Lock()
-	hooks := append([]func(){}, m.onChange...)
+	hooks := slices.Clone(m.onChange)
 	m.mu.Unlock()
 	for _, fn := range hooks {
 		fn()
 	}
 }
 
-// NewToken creates a single-use token. If withTorAuth is true it also
-// generates a Tor client-auth keypair for the device.
-func (m *Manager) NewToken(withTorAuth bool) (*Token, error) {
+// NewToken creates a single-use token carrying access (which may be empty).
+func (m *Manager) NewToken(access map[string]transport.Access) (*Token, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
@@ -89,13 +95,7 @@ func (m *Manager) NewToken(withTorAuth bool) (*Token, error) {
 	t := &Token{
 		Secret:  base64.RawURLEncoding.EncodeToString(raw),
 		Expires: m.now().Add(m.ttl),
-	}
-	if withTorAuth {
-		k, err := identity.NewX25519()
-		if err != nil {
-			return nil, err
-		}
-		t.TorAuth = &k
+		Access:  maps.Clone(access),
 	}
 	m.mu.Lock()
 	m.purgeLocked()
@@ -128,7 +128,9 @@ func (m *Manager) Pending() []Token {
 	m.purgeLocked()
 	out := make([]Token, 0, len(m.tokens))
 	for _, t := range m.tokens {
-		out = append(out, *t)
+		cp := *t
+		cp.Access = maps.Clone(t.Access)
+		out = append(out, cp)
 	}
 	return out
 }
@@ -142,30 +144,43 @@ func (m *Manager) purgeLocked() {
 	}
 }
 
-// Link is everything a device needs to pair with a node.
+// Link is everything another node needs to pair with the inviter.
+//
+//	sol://pair?node=<id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port>&auth.tor=<key>
+//
+// Every parameter that isn't one of the fixed ones names a transport: a bare
+// "<transport>=" is an address and "auth.<transport>=" a credential, so a new
+// transport needs no change here.
 type Link struct {
-	NodeID      string // required
-	Onion       string // "<56 chars>.onion" or ""
-	I2P         string // "<52 chars>.b32.i2p" or "" (roadmap)
-	LAN         string // clearnet "host:port" or ""
-	Secret      string // required
-	TorAuthPriv string // base64 x25519 private key or ""
+	NodeID string            // required
+	Name   string            // the inviter's node name (display only)
+	Secret string            // required
+	Addrs  map[string]string // transport -> address; at least one
+	Access map[string]string // transport -> credential for the joiner (Access.Secret)
 }
 
-// String encodes the link as sol://pair?v=1&node=...&s=...
+const authPrefix = "auth."
+
+// fixed are the link parameters that are not transport names.
+var fixed = []string{"v", "node", "name", "s"}
+
+// String encodes the link.
 func (l Link) String() string {
 	q := url.Values{}
-	q.Set("v", "1")
 	q.Set("node", l.NodeID)
-	set := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
+	if l.Name != "" {
+		q.Set("name", l.Name)
+	}
+	for t, a := range l.Addrs {
+		if a != "" {
+			q.Set(t, a)
 		}
 	}
-	set("tor", l.Onion)
-	set("i2p", l.I2P)
-	set("lan", l.LAN)
-	set("auth", l.TorAuthPriv)
+	for t, k := range l.Access {
+		if k != "" {
+			q.Set(authPrefix+t, k)
+		}
+	}
 	q.Set("s", l.Secret)
 	return LinkScheme + "://pair?" + q.Encode()
 }
@@ -180,16 +195,22 @@ func ParseLink(s string) (Link, error) {
 		return Link{}, errors.New("not a sol://pair link")
 	}
 	q := u.Query()
-	if v := q.Get("v"); v != "" && v != "1" {
-		return Link{}, fmt.Errorf("unsupported pairing link version %q", v)
-	}
 	l := Link{
-		NodeID:      q.Get("node"),
-		Onion:       q.Get("tor"),
-		I2P:         q.Get("i2p"),
-		LAN:         q.Get("lan"),
-		Secret:      q.Get("s"),
-		TorAuthPriv: q.Get("auth"),
+		NodeID: q.Get("node"),
+		Name:   q.Get("name"),
+		Secret: q.Get("s"),
+		Addrs:  map[string]string{},
+		Access: map[string]string{},
+	}
+	for k, vs := range q {
+		if len(vs) == 0 || vs[0] == "" || slices.Contains(fixed, k) {
+			continue
+		}
+		if t, ok := strings.CutPrefix(k, authPrefix); ok {
+			l.Access[t] = vs[0]
+		} else {
+			l.Addrs[k] = vs[0]
+		}
 	}
 	if _, err := identity.ParseNodeID(l.NodeID); err != nil {
 		return Link{}, err
@@ -197,7 +218,7 @@ func ParseLink(s string) (Link, error) {
 	if l.Secret == "" {
 		return Link{}, errors.New("pairing link has no secret")
 	}
-	if l.Onion == "" && l.I2P == "" && l.LAN == "" {
+	if len(l.Addrs) == 0 {
 		return Link{}, errors.New("pairing link has no address")
 	}
 	return l, nil

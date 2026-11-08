@@ -18,7 +18,7 @@ disclosing it publicly. We will credit you unless you'd rather we didn't.
 ## Scope
 
 In scope: the handshake and pairing (`internal/protocol`, `internal/pairing`), access control and
-revocation (`internal/node`, `internal/auth`), the panel (`internal/api`, `web/`), Tor
+removal (`internal/node`, `internal/peers`), the panel (`internal/api`, `web/`), Tor
 integration (`internal/transport`), and anything that leaks a user's IP address or keys.
 
 Out of scope: vulnerabilities in Tor itself (report those to the Tor Project), and attacks that

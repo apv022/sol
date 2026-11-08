@@ -9,7 +9,7 @@
 "use strict";
 
 let csrf = "";
-let state = { status: null, services: [], devices: [], files: [], events: [], audit: [] };
+let state = { status: null, services: [], peers: [], files: [], events: [], audit: [] };
 
 // ---------- helpers ----------
 
@@ -66,7 +66,7 @@ async function copy(text) {
   catch { toast("Couldn't copy. Select the text and copy it manually.", "bad"); }
 }
 const visibilityLabel = {
-  "private": "Only my devices",
+  "private": "Only peers I choose",
   "public": "Anyone with Tor Browser",
   "anonymous-public": "Anonymous public (experimental)",
 };
@@ -92,8 +92,12 @@ document.addEventListener("click", e => {
   ({
     "add-service": openServiceDialog,
     "pair": openPairDialog,
+    "join": openJoinDialog,
+    "rename": rename,
     "remove-service": () => removeService(arg),
-    "remove-device": () => removeDevice(arg),
+    "unpair": () => unpair(arg),
+    "send-file": () => pickFilesFor(arg),
+    "refresh-peer": () => refreshPeer(arg),
     "copy-text": () => copy(arg),
     "show-qr": () => showQr(arg),
     "play": () => play(arg),
@@ -112,6 +116,7 @@ function renderHome() {
   const s = state.status;
   if (!s) return;
   $("node-id").textContent = s.node_id;
+  $("node-name").textContent = s.name;
   $("version").textContent = s.version || "dev";
   $("uptime").textContent = s.uptime;
 
@@ -125,8 +130,8 @@ function renderHome() {
     cls = "ok";
     title = t.name === "tor" ? "You're online over Tor" : "You're online (" + t.name + ")";
     text = state.services.length
-      ? "Your paired devices can reach your services from anywhere. No open ports, no accounts."
-      : "Next: add a service so your devices have something to reach.";
+      ? "Your peers can reach what you share with them, from anywhere. No open ports, no accounts."
+      : "Next: add a service, or pair another machine to send files.";
   } else if (t.state === "starting") {
     cls = "warn";
     const d = t.detail || "";
@@ -138,7 +143,7 @@ function renderHome() {
       title = "Almost there: publishing your address…"; pct = 95;
       text = "Tor is telling the network how to find you. Usually under a minute.";
     } else if (/reachable|lost contact/.test(d)) {
-      title = "Your devices can't reach you right now";
+      title = "Your peers can't reach you right now";
       text = d.charAt(0).toUpperCase() + d.slice(1) + ". Sol keeps trying and reconnects by itself.";
     } else {
       title = "Reconnecting to Tor…"; pct = 10;
@@ -159,23 +164,24 @@ function renderHome() {
 
   // Checklist: hide once everything is done.
   const hasSvc = state.services.length > 0;
-  const hasDev = state.devices.length > 0;
-  const connected = state.devices.some(d => d.online) ||
-    state.events.some(e => e.kind === "connect");
+  const hasDev = state.peers.length > 0;
+  const connected = state.peers.some(p => p.shares.some(s => s !== "_inbox"));
   $("step-service").classList.toggle("done", hasSvc);
   $("step-device").classList.toggle("done", hasDev);
   $("step-connect").classList.toggle("done", connected);
   $("checklist").hidden = hasSvc && hasDev && connected;
 
   // Live connections.
-  const live = state.devices.filter(d => d.online);
-  $("live-list").innerHTML = live.length ? live.map(d => d.connections.map(c => `
+  const live = state.peers.filter(p => p.online);
+  $("live-list").innerHTML = live.length ? live.map(p => p.connections.map(c => `
     <div class="live">
-      <span class="lock" title="Verified with this device's key">🔒</span>
-      <div><b>${esc(d.name)}</b> → <b>${esc(c.service)}</b>
+      <span class="lock" title="Verified with this peer's key">🔒</span>
+      <div>${c.outbound
+          ? `You → <b>${esc(p.name)}</b>'s <b>${esc(svcLabel(c.service))}</b>`
+          : `<b>${esc(p.name)}</b> → your <b>${esc(svcLabel(c.service))}</b>`}
         <div class="muted small">Verified · ${c.streams} open connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}</div></div>
     </div>`).join("")).join("")
-    : `<p class="muted">No devices are connected right now.</p>`;
+    : `<p class="muted">No peers are connected right now.</p>`;
 
   $("transports").innerHTML = (s.transports || []).map(t => `
     <div class="row"><span class="dot ${esc(t.state)}"></span><b>${esc(t.name)}</b>
@@ -276,7 +282,7 @@ $("service-form").addEventListener("submit", async e => {
 });
 
 async function removeService(name) {
-  if (!confirm(`Remove "${name}"? Devices using it are disconnected. The app itself is not touched.`)) return;
+  if (!confirm(`Remove "${name}"? Peers using it are disconnected. The app itself is not touched.`)) return;
   try { await api("/api/services/" + encodeURIComponent(name), { method: "DELETE" }); toast(`Removed ${name}`); refresh(); }
   catch (err) { fail(err); }
 }
@@ -287,44 +293,126 @@ function showQr(text) {
   $("dlg-qr").showModal();
 }
 
-// ---------- devices ----------
+// ---------- peers ----------
 
-function renderDevices() {
-  const list = state.devices;
-  $("device-list").innerHTML = list.length ? list.map(d => `
-    <div class="card device ${d.online ? "online" : ""}">
-      <div class="card-head"><h3><span class="dot ${d.online ? "ready" : "stopped"}"></span>${esc(d.name)}</h3>
-        <button class="ghost small danger-text" data-action="remove-device" data-arg="${esc(d.id)}">Remove</button></div>
-      ${d.online
-        ? `<p class="okline">🔒 Connected and verified</p>
-           ${d.connections.map(c => `<p class="small">→ <b>${esc(c.service)}</b>
-             <span class="muted">· ${c.streams} connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}</span></p>`).join("")}`
-        : `<p class="muted">Not connected · last seen ${esc(ago(d.last_seen))}</p>`}
-      <details class="small"><summary>How is this device verified?</summary>
-        <p class="muted">Each connection starts with a fresh random challenge from this node, which the device
-          must sign with its private key. Only the key paired here (fingerprint <code>${esc(d.key_fingerprint)}</code>)
-          is accepted, and old signatures can't be replayed.
-          ${d.tor_auth ? "It also holds a Tor access key, so without it the node's address can't even be found." : ""}</p>
-        <p class="muted">Paired ${esc(new Date(d.added).toLocaleString())}.</p>
-      </details>
-    </div>`).join("")
-  : `<div class="empty card"><p><b>No devices paired yet.</b></p>
-      <p class="muted">Pair a laptop or desktop to reach your services from anywhere.</p>
-      <button data-action="pair">Pair a device</button></div>`;
+const builtinShares = [
+  ["_inbox", "Can send you files", "Files it sends land in your Files tab."],
+  ["_files", "Shared files", "Your shared-files page (files you added on the Files tab)."],
+];
+const svcLabel = name => ({ "_inbox": "inbox", "_files": "shared files" })[name] || name;
+const peerName = id => (state.peers.find(p => p.id === id) || {}).name || id;
+
+function shareBox(p, name, label, hint) {
+  const on = p.shares.includes(name);
+  return `<label class="share"><input type="checkbox" data-share="${esc(p.id)}" data-svc="${esc(name)}" ${on ? "checked" : ""}>
+    <span><b>${esc(label)}</b>${hint ? `<span class="muted small"> ${esc(hint)}</span>` : ""}</span></label>`;
 }
 
-async function removeDevice(id) {
-  const d = state.devices.find(x => x.id === id);
-  if (!confirm(`Remove "${d ? d.name : id}"? Its access ends immediately, including open connections.`)) return;
-  try { await api("/api/devices/" + encodeURIComponent(id), { method: "DELETE" }); toast("Device removed"); refresh(); }
+function renderPeers() {
+  const list = state.peers;
+  $("peer-list").innerHTML = list.length ? list.map(p => {
+    const theirs = p.services.filter(s => s.name !== "_inbox");
+    return `<div class="card device ${p.online ? "online" : ""}">
+      <div class="card-head"><h3><span class="dot ${p.online ? "ready" : "stopped"}"></span>${esc(p.name)}</h3>
+        <button class="ghost small danger-text" data-action="unpair" data-arg="${esc(p.id)}">Unpair</button></div>
+      ${p.online
+        ? `<p class="okline">🔒 Connected and verified</p>
+           ${p.connections.map(c => `<p class="small">${c.outbound ? "You →" : "→ your"} <b>${esc(svcLabel(c.service))}</b>
+             <span class="muted">· ${c.streams} connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}</span></p>`).join("")}`
+        : `<p class="muted">Not connected · last seen ${esc(ago(p.last_seen))}</p>`}
+
+      <h4>It shares with you</h4>
+      ${theirs.length
+        ? `<p>${theirs.map(s => `<span class="tag">${esc(svcLabel(s.name))}</span>`).join(" ")}</p>
+           <p class="muted small">Open them on this computer with:</p>
+           <div class="copyrow"><code>sol open ${esc(shellArg(p.name))}</code>
+             <button class="ghost small" data-action="copy-text" data-arg="sol open ${esc(shellArg(p.name))}">Copy</button></div>`
+        : `<p class="muted small">Nothing yet (it can still receive files from you).</p>`}
+      <button class="ghost small" data-action="refresh-peer" data-arg="${esc(p.id)}">Check again</button>
+
+      <h4>You share with it</h4>
+      <div class="shares">
+        ${builtinShares.map(([n, l, h]) => shareBox(p, n, l, h)).join("")}
+        ${state.services.map(s => shareBox(p, s.name, s.name, "port " + s.local_port)).join("")}
+      </div>
+
+      <button class="small" data-action="send-file" data-arg="${esc(p.id)}">Send a file…</button>
+
+      <details class="small"><summary>How is this peer verified?</summary>
+        <p class="muted">Every connection, in either direction, starts with a fresh random challenge that the
+          other side must sign with its private key. Only the key paired here (fingerprint
+          <code>${esc(p.id)}</code>) is accepted, and old signatures can't be replayed.
+          ${p.locked.includes("tor") ? "It also holds a Tor access key made just for it, so without that key this computer's address can't even be found." : ""}</p>
+        <p class="muted">Paired ${esc(new Date(p.added).toLocaleString())}.</p>
+      </details>
+    </div>`;
+  }).join("")
+  : `<div class="empty card"><p><b>No peers yet.</b></p>
+      <p class="muted">Pair another computer that runs Sol. Then you can share apps with it and send files both ways.</p>
+      <button data-action="pair">Invite a machine</button> <button class="ghost" data-action="join">Join with a link</button></div>`;
+}
+
+// Quote a name for the shell when it isn't a plain word.
+const shellArg = s => /^[\w.-]+$/.test(s) ? s : "'" + String(s).replace(/'/g, "'\\''") + "'";
+
+document.addEventListener("change", e => {
+  const box = e.target.closest("[data-share]");
+  if (!box) return;
+  const id = box.dataset.share, svc = box.dataset.svc;
+  api(`/api/peers/${encodeURIComponent(id)}/shares/${encodeURIComponent(svc)}`, json("PUT", { shared: box.checked }))
+    .then(() => { toast(`${peerName(id)} ${box.checked ? "can now" : "can no longer"} open ${svcLabel(svc)}`); refresh(); })
+    .catch(err => { box.checked = !box.checked; fail(err); });
+});
+
+async function unpair(id) {
+  const name = peerName(id);
+  if (!confirm(`Unpair from "${name}"? Both of you lose access to each other immediately, including open connections.`)) return;
+  toast(`Unpairing from ${name}…`);
+  try {
+    const r = await api("/api/peers/" + encodeURIComponent(id), { method: "DELETE" });
+    toast(r.notified ? `Unpaired. ${name} removed you too.` : `Removed ${name}. It couldn't be reached, but it can no longer reach you.`);
+    refresh();
+  } catch (err) { fail(err); }
+}
+
+async function refreshPeer(id) {
+  toast(`Asking ${peerName(id)} what it shares…`);
+  try { await api(`/api/peers/${encodeURIComponent(id)}/refresh`, { method: "POST" }); refresh(); }
   catch (err) { fail(err); }
 }
 
-// Pairing wizard.
+let sendTo = "";
+function pickFilesFor(id) {
+  sendTo = id;
+  $("send-input").value = "";
+  $("send-input").click();
+}
+$("send-input").addEventListener("change", async e => {
+  const id = sendTo, name = peerName(id);
+  for (const file of e.target.files) {
+    toast(`Sending ${file.name} to ${name}…`);
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    try {
+      await api(`/api/peers/${encodeURIComponent(id)}/send`, { method: "POST", body: fd });
+      toast(`${file.name} delivered to ${name} and verified`);
+    } catch (err) { fail(err); }
+  }
+  refresh();
+});
+
+async function rename() {
+  const name = prompt("Name for this computer, as your peers see it:", state.status ? state.status.name : "");
+  if (!name) return;
+  try { await api("/api/name", json("PUT", { name })); toast(`This computer is now "${name}"`); refresh(); }
+  catch (err) { fail(err); }
+}
+
+// Pairing wizard (invite).
 const installCmds = {
-  arch: "sudo pacman -S --needed tor go\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"",
-  debian: "sudo apt update && sudo apt install -y tor golang\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"",
-  mac: "brew install tor go\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"",
+  arch: "sudo pacman -S --needed tor go\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"\nsol",
+  debian: "sudo apt update && sudo apt install -y tor golang\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"\nsol",
+  mac: "brew install tor go\ngo install github.com/apv022/sol/cmd/sol@latest\nexport PATH=\"$HOME/go/bin:$PATH\"\nsol",
 };
 let pairTimer = null;
 
@@ -339,15 +427,15 @@ async function openPairDialog() {
   $("pair-error").hidden = true;
   $("pair-cmd").textContent = "Creating a link…";
   $("qr").innerHTML = "";
-  $("pair-wait-title").textContent = "Waiting for your device…";
+  $("pair-wait-title").textContent = "Waiting for the other machine…";
   $("pair-wait-text").textContent = "Keep this open. The first connection over Tor usually takes 30 seconds to 2 minutes.";
   $("dlg-pair").classList.remove("success");
   $("dlg-pair").showModal();
 
-  const known = new Set(state.devices.map(d => d.id));
+  const known = new Set(state.peers.map(p => p.id));
   try {
-    const r = await api("/api/devices/pair", { method: "POST" });
-    $("pair-cmd").textContent = `sol connect '${r.link}'`;
+    const r = await api("/api/peers/invite", { method: "POST" });
+    $("pair-cmd").textContent = `sol pair '${r.link}'`;
     $("qr").innerHTML = qrSvg(r.link);
     const expires = new Date(r.expires);
     clearInterval(pairTimer);
@@ -356,19 +444,19 @@ async function openPairDialog() {
       const left = Math.max(0, Math.round((expires - Date.now()) / 1000));
       $("pair-countdown").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
       try {
-        const devs = await api("/api/devices");
-        const fresh = devs.find(d => !known.has(d.id));
+        const peers = await api("/api/peers");
+        const fresh = peers.find(p => !known.has(p.id));
         if (fresh) {
           clearInterval(pairTimer);
           $("dlg-pair").classList.add("success");
           $("pair-wait-title").textContent = `✓ Paired with ${fresh.name}`;
-          $("pair-wait-text").textContent = "On that computer, open the address sol connect printed (usually http://127.0.0.1:9000).";
+          $("pair-wait-text").textContent = "You can now send each other files. Tick what you share with it on the Peers tab.";
           toast(`${fresh.name} is paired`);
           refresh();
         } else if (left === 0) {
           clearInterval(pairTimer);
           $("pair-wait-title").textContent = "This link expired";
-          $("pair-wait-text").textContent = "Close this window and pair again to get a new link.";
+          $("pair-wait-text").textContent = "Close this window and invite again to get a new link.";
         }
       } catch { /* keep polling */ }
     }, 2000);
@@ -379,6 +467,37 @@ async function openPairDialog() {
 }
 $("pair-close").addEventListener("click", () => { clearInterval(pairTimer); $("dlg-pair").close(); });
 
+// Join (the other machine made the link).
+function openJoinDialog() {
+  $("join-form").reset();
+  $("join-error").hidden = true;
+  $("join-status").hidden = true;
+  $("join-submit").disabled = false;
+  $("dlg-join").showModal();
+}
+$("join-form").addEventListener("submit", async e => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const link = e.target.link.value.trim();
+  $("join-error").hidden = true;
+  $("join-status").textContent = link.includes("tor=")
+    ? "Finding the other machine over Tor. This usually takes 30 seconds to 2 minutes…"
+    : "Pairing…";
+  $("join-status").hidden = false;
+  $("join-submit").disabled = true;
+  try {
+    const p = await api("/api/peers/pair", json("POST", { link }));
+    $("dlg-join").close();
+    toast(`Paired with ${p.name}`);
+    show("peers");
+  } catch (err) {
+    $("join-status").hidden = true;
+    $("join-error").textContent = err.message;
+    $("join-error").hidden = false;
+    $("join-submit").disabled = false;
+  }
+});
+
 // ---------- files ----------
 
 const playable = /\.(mp3|flac|ogg|opus|wav|m4a|aac|mp4|webm)$/i;
@@ -387,6 +506,7 @@ function renderFiles() {
   $("file-list").innerHTML = state.files.length ? state.files.map(f => `
     <div class="file row">
       <div class="grow"><b>${esc(f.name || "(unnamed file)")}</b>
+        ${f.from ? `<span class="tag">from ${esc(peerName(f.from))}</span>` : ""}
         <div class="muted small">${esc(size(f.size))} · ${esc(ago(f.modified))} · <code title="${esc(f.hash)}">${esc(f.hash.slice(0, 12))}…</code></div></div>
       ${playable.test(f.name || "") ? `<button class="ghost small" data-action="play" data-arg="${esc(f.hash)}">Play</button>` : ""}
       <a class="button ghost small" href="/blob/${esc(f.hash)}" download="${esc(f.name || f.hash)}">Download</a>
@@ -422,7 +542,7 @@ dz.addEventListener("drop", e => upload(e.dataTransfer.files));
 // ---------- activity ----------
 
 const eventStyle = {
-  pair: ["✓", "ok", "Paired"], connect: ["🔒", "ok", "Connected"], revoke: ["✕", "warn", "Removed"],
+  pair: ["✓", "ok", "Paired"], connect: ["🔒", "ok", "Connected"], revoke: ["✕", "warn", "Removed"], file: ["📄", "ok", "File"],
   reject: ["⛔", "bad", "Blocked"], service: ["●", "", "Service"], transport: ["⇄", "", "Network"], audit: ["!", "warn", "Audit"],
 };
 function renderEvents() {
@@ -442,11 +562,11 @@ async function refresh() {
   try {
     const s = await api("/api/status");
     csrf = s.csrf || csrf;
-    const [services, devices, events, files, audit] = await Promise.all([
-      api("/api/services"), api("/api/devices"), api("/api/events"), api("/api/files"), api("/api/audit"),
+    const [services, peers, events, files, audit] = await Promise.all([
+      api("/api/services"), api("/api/peers"), api("/api/events"), api("/api/files"), api("/api/audit"),
     ]);
-    state = { status: s, services, devices, events, files, audit };
-    renderHome(); renderServices(); renderDevices(); renderFiles(); renderEvents();
+    state = { status: s, services, peers, events, files, audit };
+    renderHome(); renderServices(); renderPeers(); renderFiles(); renderEvents();
   } catch (err) {
     $("status-pill").className = "pill bad";
     $("status-pill-text").textContent = "Panel can't reach Sol";
@@ -456,5 +576,5 @@ async function refresh() {
 }
 
 // Don't re-render a <select> the user is about to change.
-setInterval(() => { if (!document.querySelector("select:focus, dialog[open] form")) refresh(); }, 3000);
+setInterval(() => { if (!document.querySelector("select:focus, input:focus, dialog[open]")) refresh(); }, 3000);
 show(location.hash.slice(1) || "home");

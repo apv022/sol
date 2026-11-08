@@ -4,6 +4,11 @@
 // hash on every transport, so a downloader can verify what they received
 // (spec.md 6.4). Files are served with http.ServeContent, which supports
 // range requests, so audio and video can stream and seek.
+//
+// Each blob may carry metadata (a display name, and which peer sent it) in
+// <dir>/.names.json. Content is always addressed by hash; metadata is only a
+// label. Files a peer sent are kept apart from the owner's own: they are not
+// listed on the shared-files page until the owner shares them.
 package blob
 
 import (
@@ -24,29 +29,43 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/apv022/sol/internal/config"
 )
 
 var hashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// ErrNotFound is returned for unknown hashes.
-var ErrNotFound = errors.New("blob not found")
+// Errors.
+var (
+	// ErrNotFound is returned for unknown hashes.
+	ErrNotFound = errors.New("blob not found")
+	// ErrTooLarge is returned by PutLimited when the content exceeds the limit.
+	ErrTooLarge = errors.New("file is larger than allowed")
+)
 
 // Store is a directory of blobs. Safe for concurrent use: writes go to a
 // temp file and are renamed into place, so readers never see partial data.
 type Store struct {
 	Dir string
 
-	mu sync.Mutex // guards the names file
+	mu sync.Mutex // guards the metadata file
 }
 
-// namesFile maps hash -> original filename. Names are display labels only;
-// content is always addressed by hash.
+// namesFile maps hash -> meta. Older builds stored hash -> name (a plain
+// string); readMeta accepts both.
 const namesFile = ".names.json"
+
+// meta is the metadata stored for one blob.
+type meta struct {
+	Name string `json:"name,omitempty"`
+	From string `json:"from,omitempty"` // peer id that sent it; "" means the owner added it
+}
 
 // Entry describes one stored blob.
 type Entry struct {
 	Hash     string    `json:"hash"`
 	Name     string    `json:"name,omitempty"`
+	From     string    `json:"from,omitempty"` // peer id that sent it; "" for the owner's own files
 	Size     int64     `json:"size"`
 	Modified time.Time `json:"modified"`
 }
@@ -63,19 +82,30 @@ func New(dir string) (*Store, error) {
 func ValidHash(h string) bool { return hashRE.MatchString(h) }
 
 // Put streams r into the store and returns its hash.
-func (s *Store) Put(r io.Reader) (string, error) {
+func (s *Store) Put(r io.Reader) (string, error) { return s.put(r, -1) }
+
+// put stores r, refusing (before anything reaches the store) content longer
+// than max bytes when max >= 0.
+func (s *Store) put(r io.Reader, max int64) (string, error) {
 	tmp, err := os.CreateTemp(s.Dir, ".upload-*")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
+	if max >= 0 {
+		r = io.LimitReader(r, max+1)
+	}
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), r); err != nil {
+	n, err := io.Copy(io.MultiWriter(tmp, h), r)
+	if err != nil {
 		tmp.Close()
 		return "", fmt.Errorf("storing blob: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return "", err
+	}
+	if max >= 0 && n > max {
+		return "", ErrTooLarge
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
 	if err := os.Rename(tmp.Name(), filepath.Join(s.Dir, sum)); err != nil {
@@ -87,27 +117,82 @@ func (s *Store) Put(r io.Reader) (string, error) {
 // PutNamed is Put plus a display name (e.g. the uploaded filename).
 func (s *Store) PutNamed(r io.Reader, name string) (string, error) {
 	hash, err := s.Put(r)
-	if err != nil || name == "" {
-		return hash, err
+	if err != nil {
+		return "", err
 	}
+	return hash, s.setMeta(hash, meta{Name: CleanName(name)})
+}
+
+// PutLimited stores at most max bytes from r, labelled with name and the
+// peer it came from. If r holds more than max bytes nothing is kept and
+// ErrTooLarge is returned.
+func (s *Store) PutLimited(r io.Reader, name, from string, max int64) (string, error) {
+	hash, err := s.put(r, max)
+	if err != nil {
+		return "", err
+	}
+	return hash, s.setMeta(hash, meta{Name: CleanName(name), From: from})
+}
+
+// CleanName reduces a user-supplied filename to a safe display label: no
+// directories, no control characters, at most 200 bytes.
+func CleanName(name string) string {
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	if name == "." || name == "/" {
+		return ""
+	}
 	if len(name) > 200 {
 		name = name[:200]
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	names := s.readNames()
-	names[hash] = name
-	data, _ := json.Marshal(names)
-	return hash, os.WriteFile(filepath.Join(s.Dir, namesFile), data, 0o600)
+	return name
 }
 
-func (s *Store) readNames() map[string]string {
-	names := map[string]string{}
-	if data, err := os.ReadFile(filepath.Join(s.Dir, namesFile)); err == nil {
-		json.Unmarshal(data, &names)
+func (s *Store) setMeta(hash string, m meta) error {
+	if m.Name == "" && m.From == "" {
+		return nil
 	}
-	return names
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all := s.readMeta()
+	if old, ok := all[hash]; ok && old.From == "" && m.From != "" {
+		// The owner already has this exact file. A peer sending the same
+		// bytes doesn't make it "received", hide it from _files, or rename it.
+		return nil
+	}
+	all[hash] = m
+	data, _ := json.Marshal(all)
+	return config.WriteFileAtomic(filepath.Join(s.Dir, namesFile), data, 0o600)
+}
+
+// readMeta must be called with s.mu held.
+func (s *Store) readMeta() map[string]meta {
+	out := map[string]meta{}
+	data, err := os.ReadFile(filepath.Join(s.Dir, namesFile))
+	if err != nil {
+		return out
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return out
+	}
+	for h, v := range raw {
+		var m meta
+		if json.Unmarshal(v, &m) != nil {
+			var name string // older builds: hash -> name
+			if json.Unmarshal(v, &name) != nil {
+				continue
+			}
+			m.Name = name
+		}
+		out[h] = m
+	}
+	return out
 }
 
 // Open returns the blob with the given hash.
@@ -138,7 +223,7 @@ func (s *Store) List() ([]Entry, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	names := s.readNames()
+	all := s.readMeta()
 	s.mu.Unlock()
 	var out []Entry
 	for _, de := range des {
@@ -149,10 +234,23 @@ func (s *Store) List() ([]Entry, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Entry{Hash: de.Name(), Name: names[de.Name()], Size: info.Size(), Modified: info.ModTime().UTC()})
+		m := all[de.Name()]
+		out = append(out, Entry{Hash: de.Name(), Name: m.Name, From: m.From, Size: info.Size(), Modified: info.ModTime().UTC()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
 	return out, nil
+}
+
+// Received returns the total size of the files peers have sent.
+func (s *Store) Received() (int64, error) {
+	list, err := s.List()
+	var n int64
+	for _, e := range list {
+		if e.From != "" {
+			n += e.Size
+		}
+	}
+	return n, err
 }
 
 // Handler serves GET <prefix><hash>[/<filename>] with range support. The
@@ -195,10 +293,22 @@ func (s *Store) Handler(prefix string) http.Handler {
 }
 
 // Browser serves a file-list page at "/" and the files under "/blob/".
-// It is what paired devices see when they open the _files service.
+// It is what peers see when they open the _files service. Only the owner's
+// own files are listed or served: files other peers sent stay private.
 func (s *Store) Browser() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /blob/", s.Handler("/blob/"))
+	own := s.Handler("/blob/")
+	mux.Handle("GET /blob/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hash, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/blob/"), "/")
+		s.mu.Lock()
+		received := s.readMeta()[hash].From != ""
+		s.mu.Unlock()
+		if received {
+			http.NotFound(w, r)
+			return
+		}
+		own.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		entries, err := s.List()
 		if err != nil {
@@ -207,6 +317,9 @@ func (s *Store) Browser() http.Handler {
 		}
 		rows := make([]listRow, 0, len(entries))
 		for _, e := range entries {
+			if e.From != "" {
+				continue
+			}
 			name := e.Name
 			if name == "" {
 				name = e.Hash[:12] + "…"
@@ -265,7 +378,7 @@ a.btn.primary{background:var(--accent);border-color:transparent;color:#1c1d21}
 <div class="brand"><span class="sun"></span>Sol</div>
 <h1>Shared files</h1>
 <p class="muted"><span class="lock">🔒 Verified connection</span> Shared from your Sol node over Tor. Only
-paired devices can open this page. The fingerprint (SHA-256) under each file lets you check
+your peers can open this page. The fingerprint (SHA-256) under each file lets you check
 that what you downloaded is exactly what was shared.</p>
 {{range .}}<div class="file">
   <div class="name">{{.Name}}<div class="muted">{{.Size}} · {{.When}}</div><code title="SHA-256">{{.Hash}}</code></div>

@@ -13,7 +13,10 @@
 // own ID, so public services never share an address with the node.
 //
 // To add a transport, implement Transport, register it in node.buildTransports,
-// and add a config toggle. Nothing else needs to change.
+// and add a config toggle. If it can restrict who reaches a publication, also
+// implement AccessIssuer and ClientAuthorizer. Nothing else needs to change:
+// peers' addresses and credentials are maps keyed by transport name
+// (docs/PEERS.md).
 package transport
 
 import (
@@ -56,9 +59,10 @@ type Publication struct {
 	ID string
 	// Target is the local host:port that inbound connections are forwarded to.
 	Target string
-	// ClientAuth lists Tor v3 client-auth public keys (base32 x25519). If
-	// non-empty, only holders of a matching private key can even find the
-	// service. Transports without such a feature ignore it.
+	// ClientAuth lists the Access.Authorize values this transport issued
+	// (for Tor: client-auth public keys, base32 x25519). If non-empty, only
+	// holders of a matching Access.Secret can even find the publication.
+	// Transports without such a feature ignore it.
 	ClientAuth []string
 }
 
@@ -82,10 +86,28 @@ type Transport interface {
 	Stop() error
 }
 
-// ClientAuthorizer is implemented by transports whose client side needs a
-// key before it can reach an access-restricted service (Tor client auth).
+// Access is one per-peer credential for a transport that can restrict who
+// reaches a publication. The issuer keeps Authorize and lists it in
+// Publication.ClientAuth; the peer gets Secret and installs it with
+// ClientAuthorizer. For Tor these are an x25519 client-auth keypair.
+type Access struct {
+	Authorize string // kept by the issuer (Tor: x25519 public key, base32)
+	Secret    string // handed to the peer (Tor: x25519 private key, base64)
+}
+
+// AccessIssuer is implemented by transports that can lock a publication to
+// specific peers (Tor client authorization; I2P encrypted leasesets later).
+type AccessIssuer interface {
+	NewAccess() (Access, error)
+}
+
+// ClientAuthorizer is implemented by transports whose dialing side must
+// install a credential before it can reach an access-restricted address.
 type ClientAuthorizer interface {
-	AuthorizeClient(addr, privateKey string) error
+	AuthorizeClient(addr, secret string) error
+	// DeauthorizeClient forgets the credential for addr. Unknown addresses
+	// are not an error.
+	DeauthorizeClient(addr string) error
 }
 
 // Registry holds the enabled transports. Safe for concurrent use.
@@ -186,6 +208,15 @@ func (r *Registry) For(addr string) (Transport, error) {
 		}
 	}
 	return nil, fmt.Errorf("no enabled transport can reach %q", addr)
+}
+
+// Usable reports whether t is a real transport that has not failed (an
+// Unavailable placeholder or a failed transport is not).
+func Usable(t Transport) bool {
+	if _, ok := t.(*Unavailable); ok {
+		return false
+	}
+	return t.Status().State != StateFailed
 }
 
 // StopAll stops every transport and joins the errors.

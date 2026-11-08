@@ -24,8 +24,8 @@ import (
 const onionVirtualPort = 80
 
 // Tor runs a private tor process and manages onion services through its
-// control port. The same type is used by the node (Publish) and by
-// `sol connect` (Dial + AuthorizeClient).
+// control port. A node uses it both ways: Publish for its own onion, and
+// Dial + AuthorizeClient to reach its peers' onions.
 //
 // Onion keys are stored per publication ID in <DataDir>/onions/<id>.key, so
 // addresses are stable across restarts. If tor crashes, or the network
@@ -388,14 +388,39 @@ func (t *Tor) Unpublish(id string) error {
 	return err
 }
 
-// AuthorizeClient gives this tor the client-auth private key for an onion
-// (connect side). addr may include ".onion" and a port.
+// NewAccess implements AccessIssuer: a fresh x25519 client-auth keypair.
+// The public half goes on our onion, the private half to the peer.
+func (t *Tor) NewAccess() (Access, error) {
+	k, err := identity.NewX25519()
+	if err != nil {
+		return Access{}, err
+	}
+	return Access{Authorize: k.TorPublic(), Secret: k.TorPrivate()}, nil
+}
+
+// AuthorizeClient implements ClientAuthorizer: it gives this tor the
+// client-auth private key for a peer's onion. addr may include ".onion" and
+// a port. The key is remembered and re-added whenever tor restarts.
 func (t *Tor) AuthorizeClient(addr, privateKey string) error {
 	sid := onionServiceID(addr)
 	t.mu.Lock()
 	t.clientKeys[sid] = privateKey
 	t.mu.Unlock()
 	return t.addClientAuth(sid, privateKey)
+}
+
+// DeauthorizeClient forgets the client-auth key for addr (after unpairing).
+func (t *Tor) DeauthorizeClient(addr string) error {
+	sid := onionServiceID(addr)
+	t.mu.Lock()
+	delete(t.clientKeys, sid)
+	ctrl := t.ctrl
+	t.mu.Unlock()
+	if ctrl == nil {
+		return nil
+	}
+	_, err := ctrl.do("ONION_CLIENT_AUTH_REMOVE " + sid)
+	return err
 }
 
 func (t *Tor) addClientAuth(sid, privateKey string) error {

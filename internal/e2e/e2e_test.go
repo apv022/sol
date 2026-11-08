@@ -1,57 +1,73 @@
-// Package e2e runs a real node and a real client in one process over the
-// clearnet transport, covering the demo's definition of done (spec.md 10.3)
-// without needing Tor. If this passes, the handshake, pairing, routing,
-// revocation, and panel guards all work together.
+// Package e2e runs real nodes in one process over the clearnet transport,
+// without needing Tor. Two nodes pair as peers (docs/PEERS.md) and exercise
+// everything between them: sharing, tunnels, sending files both ways,
+// unpairing from either side, and the guards that keep strangers out. If
+// this passes, the handshake, pairing, routing, removal, and panel guards all
+// work together.
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
-	"github.com/apv022/sol/internal/connect"
+	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/node"
 	"github.com/apv022/sol/internal/pairing"
+	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/protocol"
 	"github.com/apv022/sol/internal/transport"
 )
 
-func clearnetOnly(string, connect.NodeRecord) []transport.Transport {
-	return []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")}
+type testNode struct {
+	*node.Node
+	t   *testing.T
+	ctx context.Context
+	dir string
 }
 
-type harness struct {
-	t      *testing.T
-	ctx    context.Context
-	node   *node.Node
-	appURL string
-}
+type opt func(*node.Options)
 
-func start(t *testing.T) *harness {
+// newNode starts a node called name with only the clearnet transport.
+func newNode(t *testing.T, name string, opts ...opt) *testNode {
 	t.Helper()
-	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "hello from %s", r.URL.Path)
-	}))
-	t.Cleanup(app.Close)
+	dir := t.TempDir()
+	return startNode(t, dir, name, opts...)
+}
 
-	n, err := node.New(node.Options{
-		DataDir:    t.TempDir(),
-		Version:    "test",
-		PanelAddr:  "127.0.0.1:0",
-		NodeAddr:   "127.0.0.1:0",
-		Transports: []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")},
-	})
+func startNode(t *testing.T, dir, name string, opts ...opt) *testNode {
+	t.Helper()
+	o := node.Options{
+		DataDir:        dir,
+		Version:        "test",
+		PanelAddr:      "127.0.0.1:0",
+		NodeAddr:       "127.0.0.1:0",
+		ControlPath:    filepath.Join(dir, "c.sock"),
+		Transports:     []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")},
+		DialAttempts:   1,
+		DialRetryDelay: 10 * time.Millisecond,
+	}
+	for _, f := range opts {
+		f(&o)
+	}
+	n, err := node.New(o)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.SetName(name); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -63,29 +79,62 @@ func start(t *testing.T) *harness {
 	case err := <-done:
 		t.Fatalf("node exited: %v", err)
 	}
+	return &testNode{Node: n, t: t, ctx: ctx, dir: dir}
+}
 
-	port := app.Listener.Addr().(*net.TCPAddr).Port
-	if err := n.AddService(config.Service{Name: "web", LocalPort: port, Visibility: config.VisibilityPrivate}); err != nil {
+// pair makes a and b peers (b joins a's link) and returns each one's record
+// of the other.
+func pair(t *testing.T, a, b *testNode) (bOnA, aOnB config.Peer) {
+	t.Helper()
+	inv, err := a.Invite()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, ctx: ctx, node: n, appURL: app.URL}
-}
-
-func (h *harness) link() string {
-	h.t.Helper()
-	p, err := h.node.NewPairing()
+	aOnB, err = b.Pair(b.ctx, inv.Link)
 	if err != nil {
-		h.t.Fatal(err)
+		t.Fatalf("pair: %v", err)
 	}
-	return p.Link
+	bOnA = findPeer(t, a, b.Name())
+	return bOnA, aOnB
 }
 
-// tunnel starts a local listener for service and returns its http base URL.
-func tunnel(t *testing.T, ctx context.Context, c *connect.Client, service string) string {
+func findPeer(t *testing.T, n *testNode, name string) config.Peer {
 	t.Helper()
-	addrc := make(chan string, 1)
-	go c.Listen(ctx, "127.0.0.1:0", service, func(a string) { addrc <- a })
-	return "http://" + <-addrc
+	for _, p := range n.Peers() {
+		if p.Name == name {
+			return config.Peer{ID: p.ID, Name: p.Name}
+		}
+	}
+	t.Fatalf("%s has no peer called %q", n.Name(), name)
+	return config.Peer{}
+}
+
+// webApp starts a local HTTP app and registers it on n as service name.
+func webApp(t *testing.T, n *testNode, name, reply string) {
+	t.Helper()
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s %s", reply, r.URL.Path)
+	}))
+	t.Cleanup(app.Close)
+	port := app.Listener.Addr().(*net.TCPAddr).Port
+	if err := n.AddService(config.Service{Name: name, LocalPort: port, Visibility: config.VisibilityPrivate, Protocol: config.ProtocolHTTP}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// httpOver sends one GET over an already-open stream.
+func httpOver(conn net.Conn, path string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		DialContext:       func(context.Context, string, string) (net.Conn, error) { return conn, nil },
+		DisableKeepAlives: true,
+	}}
+	resp, err := client.Get("http://peer" + path)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	return string(b), err
 }
 
 func get(url string) (string, error) {
@@ -99,85 +148,230 @@ func get(url string) (string, error) {
 	return string(b), err
 }
 
-func TestPairConnectRevoke(t *testing.T) {
-	h := start(t)
-	link := h.link()
-
-	c, err := connect.Pair(h.ctx, t.TempDir(), link, "laptop", connect.Options{Transports: clearnetOnly})
-	if err != nil {
-		t.Fatalf("pair: %v", err)
-	}
-	defer c.Close()
-	if len(c.Node.Services) != 2 { // web + _files
-		t.Fatalf("services after pairing: %+v", c.Node.Services)
-	}
-
-	// 1. A paired device reaches the private service through the tunnel.
-	base := tunnel(t, h.ctx, c, "web")
-	body, err := get(base + "/song.flac")
-	if err != nil || body != "hello from /song.flac" {
-		t.Fatalf("tunnel GET = %q, %v", body, err)
-	}
-
-	// 2. A pairing link works only once.
-	if _, err := connect.Pair(h.ctx, t.TempDir(), link, "thief", connect.Options{Transports: clearnetOnly}); err == nil {
-		t.Fatal("pairing link was accepted twice")
-	}
-
-	// 3. A live connection is cut the moment the device is revoked.
-	live, err := c.Dial(h.ctx, "web")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The panel shows the device online, with a verified connection to "web".
-	var devs []api.DeviceView
-	for range 50 {
-		devs = h.node.Devices()
-		if len(devs) == 1 && devs[0].Online {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if len(devs) != 1 || !devs[0].Online || len(devs[0].Connections) != 1 || devs[0].Connections[0].Service != "web" {
-		t.Fatalf("live connection not reported: %+v", devs)
-	}
-	if err := h.node.RemoveDevice(devs[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	live.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := live.Read(make([]byte, 1)); err == nil || errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-		t.Fatalf("live connection survived revocation: %v", err)
-	}
-
-	if devs := h.node.Devices(); len(devs) != 0 {
-		t.Fatalf("revoked device still listed: %+v", devs)
-	}
-
-	// 4. New connections after revocation get nothing.
-	if _, err := get(base + "/"); err == nil {
-		t.Fatal("revoked device still reached the service")
-	}
-	if _, err := c.Dial(h.ctx, "web"); !errors.Is(err, protocol.ErrRejected) {
-		t.Fatalf("revoked dial: want ErrRejected, got %v", err)
-	}
-}
-
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for range 100 {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestPairShareOpenUnpair(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	webApp(t, a, "web", "alpha says")
+	bOnA, aOnB := pair(t, a, b)
+
+	// 1. Pairing is mutual and names travel both ways.
+	if aOnB.Name != "alpha" || bOnA.Name != "beta" {
+		t.Fatalf("names: b sees %q, a sees %q", aOnB.Name, bOnA.Name)
+	}
+	// A new peer gets the inbox and nothing else.
+	if len(aOnB.Services) != 1 || aOnB.Services[0].Name != peers.Inbox {
+		t.Fatalf("a shares with b by default: %+v", aOnB.Services)
+	}
+	// The inviter learns what the joiner shares on its own, shortly after.
+	waitFor(t, "a to learn b's shares", func() bool {
+		ps := a.Peers()
+		return len(ps) == 1 && len(ps[0].Services) == 1 && ps[0].Services[0].Name == peers.Inbox
+	})
+
+	// 2. A service that isn't shared is refused.
+	if _, err := b.DialPeer(b.ctx, aOnB.ID, "web"); err == nil {
+		t.Fatal("unshared service was reachable")
+	}
+
+	// 3. Share it; b sees it after a refresh and reaches it.
+	if _, err := a.SetShare(bOnA.ID, "web", true); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := b.RefreshPeer(b.ctx, aOnB.ID); err != nil || len(p.Services) != 2 {
+		t.Fatalf("refresh: %+v, %v", p.Services, err)
+	}
+	conn, err := b.DialPeer(b.ctx, aOnB.ID, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := httpOver(conn, "/song.flac"); err != nil || body != "alpha says /song.flac" {
+		t.Fatalf("GET over peer = %q, %v", body, err)
+	}
+
+	// 4. Either side can open things on the other: a reaches b's inbox.
+	if c, err := a.DialPeer(a.ctx, bOnA.ID, peers.Inbox); err != nil {
+		t.Fatalf("a -> b inbox: %v", err)
+	} else {
+		c.Close()
+	}
+
+	// 5. The panel shows the live, verified connection on both sides.
+	live, err := b.DialPeer(b.ctx, aOnB.ID, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a to show b online", func() bool {
+		for _, p := range a.Peers() {
+			if p.ID == bOnA.ID && p.Online && len(p.Connections) > 0 && p.Connections[0].Service == "web" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// 6. a unpairs: b is told and removes a too, and the live stream dies.
+	_, notified, err := a.Unpair(a.ctx, bOnA.ID)
+	if err != nil || !notified {
+		t.Fatalf("unpair: notified=%v err=%v", notified, err)
+	}
+	live.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := live.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Fatalf("live connection survived unpairing: %v", err)
+	}
+	waitFor(t, "b to drop a", func() bool { return len(b.Peers()) == 0 })
+	if len(a.Peers()) != 0 {
+		t.Fatalf("a still lists b: %+v", a.Peers())
+	}
+}
+
+func TestUnpairFromTheOtherSide(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	bOnA, aOnB := pair(t, a, b)
+	if _, notified, err := b.Unpair(b.ctx, aOnB.ID); err != nil || !notified {
+		t.Fatalf("unpair: %v %v", notified, err)
+	}
+	waitFor(t, "a to drop b", func() bool { return len(a.Peers()) == 0 })
+	// Even if a still had a record, b no longer accepts it.
+	if _, err := a.DialPeer(a.ctx, bOnA.ID, peers.Inbox); err == nil {
+		t.Fatal("a still reached b after unpairing")
+	}
+}
+
+func TestUnsharingClosesConnections(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	webApp(t, a, "web", "hi")
+	bOnA, aOnB := pair(t, a, b)
+	a.SetShare(bOnA.ID, "web", true)
+	live, err := b.DialPeer(b.ctx, aOnB.ID, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "connection", func() bool { return a.Peers()[0].Online })
+	if _, err := a.SetShare(bOnA.ID, "web", false); err != nil {
+		t.Fatal(err)
+	}
+	live.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := live.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Fatalf("connection survived unsharing: %v", err)
+	}
+	if _, err := b.DialPeer(b.ctx, aOnB.ID, "web"); err == nil {
+		t.Fatal("unshared service still reachable")
+	}
+}
+
+func TestLinkRules(t *testing.T) {
+	a, b, c := newNode(t, "alpha"), newNode(t, "beta"), newNode(t, "gamma")
+	inv, err := a.Invite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Pair(a.ctx, inv.Link); err == nil {
+		t.Fatal("a node paired with its own link")
+	}
+	if _, err := b.Pair(b.ctx, inv.Link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Pair(c.ctx, inv.Link); err == nil {
+		t.Fatal("a pairing link worked twice")
+	}
+	if len(a.Peers()) != 1 {
+		t.Fatalf("a's peers: %+v", a.Peers())
+	}
+}
+
+func TestSendFilesBothWays(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	bOnA, aOnB := pair(t, a, b)
+
+	send := func(from *testNode, to config.Peer, name, content string) string {
+		t.Helper()
+		hash, size, err := from.SendFile(from.ctx, to.ID, name, strings.NewReader(content))
+		if err != nil {
+			t.Fatalf("%s -> %s: %v", from.Name(), to.Name, err)
+		}
+		sum := sha256.Sum256([]byte(content))
+		if hash != hex.EncodeToString(sum[:]) || size != int64(len(content)) {
+			t.Fatalf("hash/size = %s/%d", hash, size)
+		}
+		return hash
+	}
+	h1 := send(b, aOnB, "notes.txt", "from beta to alpha")
+	h2 := send(a, bOnA, "kit.tar.gz", "from alpha to beta")
+
+	// The receiver has the file, labelled with its name and sender.
+	checkReceived := func(n *testNode, hash, name, fromID string) {
+		t.Helper()
+		list, _ := n.Blobs().List()
+		for _, e := range list {
+			if e.Hash == hash {
+				if e.Name != name || e.From != fromID {
+					t.Fatalf("%s stored %+v", n.Name(), e)
+				}
+				return
+			}
+		}
+		t.Fatalf("%s didn't store %s", n.Name(), name)
+	}
+	checkReceived(a, h1, "notes.txt", bOnA.ID)
+	checkReceived(b, h2, "kit.tar.gz", aOnB.ID)
+
+	// Received files are private: not on a's shared-files page for b.
+	a.SetShare(bOnA.ID, peers.Files, true)
+	conn, err := b.DialPeer(b.ctx, aOnB.ID, peers.Files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page, err := httpOver(conn, "/"); err != nil || strings.Contains(page, "notes.txt") {
+		t.Fatalf("received file listed on _files: %v %q", err, page)
+	}
+}
+
+func TestInboxLimits(t *testing.T) {
+	a := newNode(t, "alpha", func(o *node.Options) { o.InboxMaxFile = 10; o.InboxMaxTotal = 15 })
+	b := newNode(t, "beta")
+	_, aOnB := pair(t, a, b)
+	if _, _, err := b.SendFile(b.ctx, aOnB.ID, "big.bin", strings.NewReader("0123456789x")); err == nil {
+		t.Fatal("file over the per-file limit was accepted")
+	}
+	if _, _, err := b.SendFile(b.ctx, aOnB.ID, "one.bin", strings.NewReader("0123456789")); err != nil {
+		t.Fatalf("file at the limit: %v", err)
+	}
+	if _, _, err := b.SendFile(b.ctx, aOnB.ID, "two.bin", strings.NewReader("abcdefgh")); err == nil {
+		t.Fatal("file over the total limit was accepted")
+	}
+	if list, _ := a.Blobs().List(); len(list) != 1 {
+		t.Fatalf("a stored %d files, want 1", len(list))
+	}
+}
+
 func TestStrangerGetsNothing(t *testing.T) {
-	h := start(t)
-	l, err := pairing.ParseLink(h.link())
+	a := newNode(t, "alpha")
+	webApp(t, a, "web", "secret")
+	inv, _ := a.Invite()
+	l, err := pairing.ParseLink(inv.Link)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stranger, _ := identity.Generate()
+	addr := l.Addrs["clearnet"]
 
-	// Raw TCP to the node address: the node speaks first with its hello,
-	// but an unpaired key is closed without any reply.
-	conn, err := net.Dial("tcp", l.LAN)
+	// Raw TCP to the node: a key that isn't a peer is closed without a reply.
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,69 +380,144 @@ func TestStrangerGetsNothing(t *testing.T) {
 	if !errors.Is(err, protocol.ErrRejected) {
 		t.Fatalf("stranger: want ErrRejected, got %v", err)
 	}
-
-	// Plain HTTP to the node address gets no HTTP response at all.
-	if body, err := get("http://" + l.LAN + "/"); err == nil {
+	// Plain HTTP to the node gets no HTTP response at all.
+	if body, err := get("http://" + addr + "/"); err == nil {
 		t.Fatalf("plain HTTP got a response: %q", body)
 	}
 }
 
-func TestUnknownServiceAndFiles(t *testing.T) {
-	h := start(t)
-	c, err := connect.Pair(h.ctx, t.TempDir(), h.link(), "laptop", connect.Options{Transports: clearnetOnly})
+// Two nodes on one data directory would fight over its keys; the second is
+// refused while the first runs.
+func TestOneNodePerDataDir(t *testing.T) {
+	first := newNode(t, "beta")
+	second, err := node.New(node.Options{DataDir: first.dir, PanelAddr: "off", NodeAddr: "127.0.0.1:0",
+		ControlPath: first.ControlPath(), Transports: []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-
-	if _, err := c.Dial(h.ctx, "ssh"); !errors.Is(err, protocol.ErrRejected) {
-		t.Fatalf("unknown service: want ErrRejected, got %v", err)
-	}
-
-	hash, err := h.node.Blobs().Put(strings.NewReader("same bytes everywhere"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := tunnel(t, h.ctx, c, node.FilesService)
-	body, err := get(base + "/blob/" + hash)
-	if err != nil || body != "same bytes everywhere" {
-		t.Fatalf("files GET = %q, %v", body, err)
+	if err := second.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second node on the same data dir: %v", err)
 	}
 }
 
-func TestReloadedClientReconnects(t *testing.T) {
-	h := start(t)
-	dir := t.TempDir()
-	c, err := connect.Pair(h.ctx, dir, h.link(), "laptop", connect.Options{Transports: clearnetOnly})
+func TestReloadedPeerReconnects(t *testing.T) {
+	a := newNode(t, "alpha")
+	webApp(t, a, "web", "still here")
+	bDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	b1, err := node.New(node.Options{DataDir: bDir, PanelAddr: "off", NodeAddr: "127.0.0.1:0", ControlPath: "off",
+		Transports: []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")}, DialAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Close()
+	done := make(chan error, 1)
+	go func() { done <- b1.Run(ctx) }()
+	<-b1.Ready()
+	inv, _ := a.Invite()
+	aOnB, err := b1.Pair(ctx, inv.Link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetShare(findPeer(t, a, b1.Name()).ID, "web", true)
+	cancel()
+	<-done
 
-	c2, err := connect.Load(h.ctx, dir, "", connect.Options{Transports: clearnetOnly})
+	b2 := startNode(t, bDir, "beta")
+	conn, err := b2.DialPeer(b2.ctx, aOnB.ID, "web")
+	if err != nil {
+		t.Fatalf("after restart: %v", err)
+	}
+	if body, err := httpOver(conn, "/"); err != nil || body != "still here /" {
+		t.Fatalf("after restart GET = %q, %v", body, err)
+	}
+}
+
+// The CLI path: everything through the control socket, as `sol` commands do.
+func TestControlSocket(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	webApp(t, a, "web", "via socket")
+	ctx := context.Background()
+
+	var inv control.Invite
+	if err := control.Call(ctx, a.ControlPath(), control.Request{Op: control.OpInvite}, &inv); err != nil {
+		t.Fatal(err)
+	}
+	var aOnB control.PeerView
+	if err := control.Call(ctx, b.ControlPath(), control.Request{Op: control.OpPair, Link: inv.Link}, &aOnB); err != nil {
+		t.Fatal(err)
+	}
+	var bOnA control.PeerView
+	if err := control.Call(ctx, a.ControlPath(), control.Request{Op: control.OpShare, Peer: "beta", Service: "web", Shared: true}, &bOnA); err != nil {
+		t.Fatal(err)
+	}
+
+	// sol peers -r alpha
+	var list []control.PeerView
+	if err := control.Call(ctx, b.ControlPath(), control.Request{Op: control.OpPeers, Peer: "alpha", Refresh: true}, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || len(list[0].Services) != 2 {
+		t.Fatalf("peers: %+v", list)
+	}
+
+	// sol open: a dial stream through the socket.
+	c, err := control.Dial(ctx, b.ControlPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c2.Close()
-	svcs, err := c2.Services(h.ctx)
-	if err != nil || len(svcs) != 2 {
-		t.Fatalf("Services = %+v, %v", svcs, err)
+	c.Send(control.Request{Op: control.OpDial, Peer: "alpha", Service: "web"})
+	if err := c.Recv(nil); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(c.Conn, "GET /x HTTP/1.0\r\nHost: peer\r\n\r\n")
+	resp, _ := io.ReadAll(c)
+	c.Close()
+	if !bytes.HasSuffix(resp, []byte("via socket /x")) {
+		t.Fatalf("dial through socket: %q", resp)
+	}
+
+	// sol send
+	s, err := control.Dial(ctx, b.ControlPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Send(control.Request{Op: control.OpSend, Peer: "alpha", Name: "hello.txt"})
+	if err := s.Recv(nil); err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(s.Conn, "sent over the socket")
+	s.CloseWrite()
+	var sent control.Sent
+	if err := s.Recv(&sent); err != nil || sent.Size != int64(len("sent over the socket")) {
+		t.Fatalf("send: %+v %v", sent, err)
+	}
+	s.Close()
+
+	// sol unpair
+	var u control.Unpaired
+	if err := control.Call(ctx, b.ControlPath(), control.Request{Op: control.OpUnpair, Peer: "alpha"}, &u); err != nil || !u.Notified {
+		t.Fatalf("unpair: %+v %v", u, err)
+	}
+
+	// Nothing answers once the node is gone.
+	if err := control.Call(ctx, filepath.Join(t.TempDir(), "none.sock"), control.Request{Op: control.OpStatus}, nil); !errors.Is(err, control.ErrNotRunning) {
+		t.Fatalf("no node: %v", err)
 	}
 }
 
 func TestPublicServiceNeedsNoPairing(t *testing.T) {
-	h := start(t)
+	a := newNode(t, "alpha")
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Server", "nginx/1.2.3")
 		io.WriteString(w, "public page")
 	}))
 	defer app.Close()
 	port := app.Listener.Addr().(*net.TCPAddr).Port
-	if err := h.node.AddService(config.Service{Name: "blog", LocalPort: port, Visibility: config.VisibilityPublic, Protocol: config.ProtocolHTTP}); err != nil {
+	if err := a.AddService(config.Service{Name: "blog", LocalPort: port, Visibility: config.VisibilityPublic, Protocol: config.ProtocolHTTP}); err != nil {
 		t.Fatal(err)
 	}
 	var addr string
-	for _, s := range h.node.Services() {
+	for _, s := range a.Services() {
 		if s.Name == "blog" {
 			addr = s.Addresses["clearnet"]
 		}
@@ -260,9 +529,7 @@ func TestPublicServiceNeedsNoPairing(t *testing.T) {
 	if err != nil || body != "public page" {
 		t.Fatalf("public GET = %q, %v", body, err)
 	}
-
-	// Removing the service takes it offline.
-	if err := h.node.RemoveService("blog"); err != nil {
+	if err := a.RemoveService("blog"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := get("http://" + addr + "/"); err == nil {
@@ -271,11 +538,11 @@ func TestPublicServiceNeedsNoPairing(t *testing.T) {
 }
 
 func TestAnonymousServiceNeverOnClearnet(t *testing.T) {
-	h := start(t)
-	if err := h.node.AddService(config.Service{Name: "hidden", LocalPort: 9, Visibility: config.VisibilityAnonymousPublic}); err != nil {
+	a := newNode(t, "alpha")
+	if err := a.AddService(config.Service{Name: "hidden", LocalPort: 9, Visibility: config.VisibilityAnonymousPublic}); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range h.node.Services() {
+	for _, s := range a.Services() {
 		if s.Name == "hidden" && s.Addresses["clearnet"] != "" {
 			t.Fatal("anonymous-public service was published on clearnet")
 		}
@@ -283,8 +550,8 @@ func TestAnonymousServiceNeverOnClearnet(t *testing.T) {
 }
 
 func TestPanelGuards(t *testing.T) {
-	h := start(t)
-	base := "http://" + h.node.PanelAddr()
+	a := newNode(t, "alpha")
+	base := "http://" + a.PanelAddr()
 	do := func(method, path, host, csrf string) int {
 		req, _ := http.NewRequest(method, base+path, strings.NewReader(`{}`))
 		if host != "" {
@@ -309,10 +576,10 @@ func TestPanelGuards(t *testing.T) {
 	if code := do("GET", "/api/status", "evil.example:8080", ""); code != 403 {
 		t.Fatalf("DNS-rebinding host allowed: %d", code)
 	}
-	if code := do("POST", "/api/devices/pair", "", ""); code != 403 {
+	if code := do("POST", "/api/peers/invite", "", ""); code != 403 {
 		t.Fatalf("POST without CSRF allowed: %d", code)
 	}
-	if code := do("POST", "/api/devices/pair", "", "wrong"); code != 403 {
+	if code := do("POST", "/api/peers/invite", "", "wrong"); code != 403 {
 		t.Fatalf("POST with wrong CSRF allowed: %d", code)
 	}
 }

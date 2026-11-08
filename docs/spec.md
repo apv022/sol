@@ -6,6 +6,7 @@
 >
 > | Spec section | Superseded by | Change |
 > |---|---|---|
+> | Devices, pairing, `sol connect`, panel device API | [PEERS.md](PEERS.md) | Every machine runs a node; nodes pair mutually as peers, share per peer, and send each other files. `sol connect` became `sol open`; the client directory is gone |
 > | 6.2 Transport interface | [ARCHITECTURE.md](ARCHITECTURE.md) | `Publish` takes a `Publication` (ID, target, client-auth keys) so each public service gets its own onion; added `Unpublish` and `Handles` |
 > | 6.3 Wire protocol | [PROTOCOL.md](PROTOCOL.md) | Per-request HTTP signing replaced by one signed challenge-response handshake per TCP connection. Works for any TCP service, needs no clock sync or replay cache |
 > | 6.5 Service proxy | [ARCHITECTURE.md](ARCHITECTURE.md) | Private services are a raw TCP pipe; the HTTP reverse proxy is used only for public `http` services |

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -98,20 +99,77 @@ func TestServiceMutators(t *testing.T) {
 	}
 }
 
-func TestDeviceMutators(t *testing.T) {
+func TestPeerMutators(t *testing.T) {
 	c := Default() // in-memory: Save is a no-op
-	d := Device{ID: "abc", Name: "phone", PubKey: "k", Kind: DeviceKindDevice}
-	if err := c.AddDevice(d); err != nil {
+	p := Peer{ID: "abc", NodeID: "n", Name: "laptop", PubKey: "k",
+		Addrs: map[string]string{"tor": "x.onion"}, Shares: []string{"_inbox"}}
+	if err := c.AddPeer(p); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AddDevice(d); !errors.Is(err, ErrDuplicate) {
+	if err := c.AddPeer(p); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("want ErrDuplicate, got %v", err)
 	}
-	got, err := c.DeleteDevice("abc")
-	if err != nil || got.Name != "phone" {
-		t.Fatalf("DeleteDevice = %+v, %v", got, err)
+
+	// Readers get copies: changing one must not change the stored peer.
+	got, _ := c.Peer("abc")
+	got.Addrs["tor"] = "evil.onion"
+	got.Shares[0] = "music"
+	if again, _ := c.Peer("abc"); again.Addrs["tor"] != "x.onion" || again.Shares[0] != "_inbox" {
+		t.Fatalf("Peer returned shared state: %+v", again)
 	}
-	if _, ok := c.Device("abc"); ok {
-		t.Fatal("device still present")
+
+	// UpdatePeer keeps the change only if fn succeeds.
+	if _, err := c.UpdatePeer("abc", func(p *Peer) error { p.Shares = append(p.Shares, "web"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpdatePeer("abc", func(p *Peer) error { p.Name = ""; return nil }); err == nil {
+		t.Fatal("UpdatePeer accepted an empty name")
+	}
+	if p, _ := c.Peer("abc"); p.Name != "laptop" || !p.Shared("web") {
+		t.Fatalf("after updates: %+v", p)
+	}
+
+	removed, err := c.DeletePeer("abc")
+	if err != nil || removed.Name != "laptop" {
+		t.Fatalf("DeletePeer = %+v, %v", removed, err)
+	}
+	if _, ok := c.Peer("abc"); ok {
+		t.Fatal("peer still present")
+	}
+}
+
+func TestRemoveServiceUnshares(t *testing.T) {
+	c := Default()
+	if err := c.AddService(Service{Name: "web", LocalPort: 80, Visibility: VisibilityPrivate}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddPeer(Peer{ID: "abc", NodeID: "n", Name: "laptop", PubKey: "k", Shares: []string{"_inbox", "web"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveService("web"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := c.Peer("abc"); p.Shared("web") || !p.Shared("_inbox") {
+		t.Fatalf("shares after removing web: %v", p.Shares)
+	}
+}
+
+func TestMigrateDropsDevices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	old := `{"version":1,"panel_port":8080,"node_port":8081,"transports":{"tor":true},
+		"services":[],"devices":[{"id":"abc","name":"phone","pubkey":"k","kind":"device"}]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Version != CurrentVersion || len(c.PeerList()) != 0 || c.NodeName() == "" {
+		t.Fatalf("migrated: version %d, peers %v, name %q", c.Version, c.PeerList(), c.NodeName())
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "devices") {
+		t.Fatal("old devices were written back")
 	}
 }

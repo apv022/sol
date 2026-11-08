@@ -1,10 +1,10 @@
 // Package config loads, validates, and atomically saves the node's
 // configuration file (~/.sol/config.json).
 //
-// The Config value is the single source of truth for services and paired
-// devices. All access goes through methods that hold an internal mutex, and
-// every read accessor returns a copy so callers can never mutate shared state
-// by accident.
+// The Config value is the single source of truth for the node's name,
+// services, and peers. All access goes through methods that hold an internal
+// mutex, and every read accessor returns a copy so callers can never mutate
+// shared state by accident.
 //
 // Invariants:
 //   - The file is written atomically (temp file, fsync, rename) with mode 0600.
@@ -12,28 +12,33 @@
 //   - Fields added in later versions get defaults via applyDefaults, and the
 //     Version field plus migrate() handle breaking changes.
 //
-// See docs/spec.md section 6.6.
+// See docs/spec.md section 6.6 and docs/PEERS.md.
 package config
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // CurrentVersion is the config schema version written by this build.
 // Bump it and extend migrate() when the on-disk format changes incompatibly.
-const CurrentVersion = 1
+//
+// Version 2 replaced one-way "devices" with mutual "peers" (docs/PEERS.md).
+const CurrentVersion = 2
 
 // Visibility modes for a service (spec.md section 4).
 const (
-	VisibilityPrivate         = "private"          // paired devices only, via the node onion + handshake
+	VisibilityPrivate         = "private"          // peers it is shared with, via the node onion + handshake
 	VisibilityPublic          = "public"           // anyone, own onion, no auth
 	VisibilityAnonymousPublic = "anonymous-public" // anyone, own onion, leak protections enforced (roadmap)
 )
@@ -42,12 +47,6 @@ const (
 const (
 	ProtocolTCP  = "tcp"  // raw byte pipe (default; works for HTTP too)
 	ProtocolHTTP = "http" // HTTP-aware proxy, enables header stripping for public services
-)
-
-// Device kinds.
-const (
-	DeviceKindDevice         = "device"
-	DeviceKindGatewaySession = "gateway-session" // v0.2: one per browser behind a gateway
 )
 
 // Known runtime providers, in the default try order.
@@ -70,16 +69,54 @@ type Service struct {
 	Transports []string `json:"transports,omitempty"` // empty means every enabled transport
 }
 
-// Device is one paired client allowed to reach private services.
-type Device struct {
-	ID         string    `json:"id"`                     // identity.DeviceID(pubkey)
-	Name       string    `json:"name"`                   // human label chosen at pairing time
-	PubKey     string    `json:"pubkey"`                 // base64 ed25519 public key
-	TorAuthPub string    `json:"tor_auth_pub,omitempty"` // base32 x25519 key for Tor client auth
-	Kind       string    `json:"kind"`                   // DeviceKind* constant
-	Added      time.Time `json:"added"`
-	LastSeen   time.Time `json:"last_seen"`
+// RemoteService is one service a peer shares with us.
+type RemoteService struct {
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
 }
+
+// Peer is another Sol node we are paired with (docs/PEERS.md). Pairing is
+// mutual: each side can reach the other, and each decides what it shares.
+//
+// Everything transport-specific is a map keyed by transport name ("tor",
+// "clearnet", later "i2p"), so a new transport adds keys, not fields.
+type Peer struct {
+	ID     string `json:"id"`      // identity.DeviceID(pubkey): short fingerprint for the UI and API
+	NodeID string `json:"node_id"` // identity.NodeID(pubkey)
+	Name   string `json:"name"`    // the peer's own node name
+	PubKey string `json:"pubkey"`  // base64 ed25519 public key
+
+	// Addrs is how to reach the peer, per transport. Empty for a peer that
+	// publishes nothing (it can still dial us).
+	Addrs map[string]string `json:"addrs,omitempty"`
+	// AccessIn is the credential we issued to the peer, per transport (for
+	// Tor: the x25519 public key we authorize on our onion).
+	AccessIn map[string]string `json:"access_in,omitempty"`
+	// AccessOut is the credential the peer issued to us, per transport (for
+	// Tor: the x25519 private key we install in our tor). It is a secret.
+	AccessOut map[string]string `json:"access_out,omitempty"`
+
+	// Shares lists the services we let this peer open (built-ins included).
+	Shares []string `json:"shares"`
+	// Services is what the peer shares with us, as of the last list.
+	Services []RemoteService `json:"services"`
+
+	Added    time.Time `json:"added"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// Clone returns a deep copy, so callers can't mutate shared maps or slices.
+func (p Peer) Clone() Peer {
+	p.Addrs = maps.Clone(p.Addrs)
+	p.AccessIn = maps.Clone(p.AccessIn)
+	p.AccessOut = maps.Clone(p.AccessOut)
+	p.Shares = slices.Clone(p.Shares)
+	p.Services = slices.Clone(p.Services)
+	return p
+}
+
+// Shared reports whether service is in p.Shares.
+func (p Peer) Shared(service string) bool { return slices.Contains(p.Shares, service) }
 
 // TransportsConfig toggles each transport.
 type TransportsConfig struct {
@@ -103,22 +140,24 @@ type RuntimeConfig struct {
 // Config that other goroutines may be using.
 type Config struct {
 	Version    int              `json:"version"`
+	Name       string           `json:"name"`       // this node's name, shown to peers
 	PanelPort  int              `json:"panel_port"` // control panel, always bound to 127.0.0.1
 	NodePort   int              `json:"node_port"`  // node listener that transports forward to (127.0.0.1)
 	Transports TransportsConfig `json:"transports"`
 	Runtime    RuntimeConfig    `json:"runtime"`
 	Services   []Service        `json:"services"`
-	Devices    []Device         `json:"devices"`
+	Peers      []Peer           `json:"peers"`
 
 	mu   sync.Mutex
 	path string // empty for in-memory configs (tests); Save is then a no-op
 }
 
-// Default returns a first-run configuration with no services or devices.
+// Default returns a first-run configuration with no services or peers.
 // Tor is the only transport enabled by default.
 func Default() *Config {
 	return &Config{
 		Version:   CurrentVersion,
+		Name:      defaultName(),
 		PanelPort: 8080,
 		NodePort:  8081,
 		Transports: TransportsConfig{
@@ -130,8 +169,28 @@ func Default() *Config {
 			ContainerRuntime: "docker",
 		},
 		Services: []Service{},
-		Devices:  []Device{},
+		Peers:    []Peer{},
 	}
+}
+
+// defaultName is the machine's hostname if that is a valid name.
+func defaultName() string {
+	h, _ := os.Hostname()
+	if ValidateName(h) != nil {
+		return "sol"
+	}
+	return h
+}
+
+// ValidateName checks a human node name: 1-64 printable characters.
+func ValidateName(name string) error {
+	if name == "" || len(name) > 64 {
+		return errors.New("name must be 1-64 characters")
+	}
+	if strings.IndexFunc(name, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return errors.New("name contains unprintable characters")
+	}
+	return nil
 }
 
 // Load reads the config at path. If the file does not exist it creates the
@@ -157,33 +216,46 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	c.path = path
-	if err := c.migrate(); err != nil {
+	migrated, err := c.migrate()
+	if err != nil {
 		return nil, err
 	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", path, err)
 	}
+	if migrated {
+		if err := c.Save(); err != nil {
+			return nil, err
+		}
+	}
 	return c, nil
 }
 
-// migrate upgrades older on-disk formats in place. Version 0 means a file
-// written by the pre-release skeleton, which is compatible with version 1.
-func (c *Config) migrate() error {
+// migrate upgrades older on-disk formats in place and reports whether it
+// changed anything.
+func (c *Config) migrate() (bool, error) {
 	switch {
 	case c.Version > CurrentVersion:
-		return fmt.Errorf("config version %d is newer than this build supports (%d); upgrade sol", c.Version, CurrentVersion)
+		return false, fmt.Errorf("config version %d is newer than this build supports (%d); upgrade sol", c.Version, CurrentVersion)
 	case c.Version < CurrentVersion:
 		// Add per-version upgrade steps here, oldest first.
+		// 0/1 -> 2: one-way "devices" have no address to reach them at, so
+		// they can't become peers. The field is no longer read; it is dropped
+		// on the next save, and machines re-pair (docs/PEERS.md).
 		c.Version = CurrentVersion
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // applyDefaults fills zero-valued fields with defaults so that config files
 // from older builds keep working when new fields are added.
 func (c *Config) applyDefaults() {
 	d := Default()
+	if c.Name == "" {
+		c.Name = d.Name
+	}
 	if c.PanelPort == 0 {
 		c.PanelPort = d.PanelPort
 	}
@@ -202,17 +274,20 @@ func (c *Config) applyDefaults() {
 	if c.Services == nil {
 		c.Services = []Service{}
 	}
-	if c.Devices == nil {
-		c.Devices = []Device{}
+	if c.Peers == nil {
+		c.Peers = []Peer{}
 	}
 	for i := range c.Services {
 		if c.Services[i].Protocol == "" {
 			c.Services[i].Protocol = ProtocolTCP
 		}
 	}
-	for i := range c.Devices {
-		if c.Devices[i].Kind == "" {
-			c.Devices[i].Kind = DeviceKindDevice
+	for i := range c.Peers {
+		if c.Peers[i].Shares == nil {
+			c.Peers[i].Shares = []string{}
+		}
+		if c.Peers[i].Services == nil {
+			c.Peers[i].Services = []RemoteService{}
 		}
 	}
 }
@@ -273,6 +348,9 @@ func (c *Config) Validate() error {
 
 func (c *Config) validateLocked() error {
 	var errs []error
+	if err := ValidateName(c.Name); err != nil {
+		errs = append(errs, fmt.Errorf("node %w", err))
+	}
 	for _, p := range []int{c.PanelPort, c.NodePort} {
 		if p < 0 || p > 65535 {
 			errs = append(errs, fmt.Errorf("port %d out of range", p))
@@ -292,14 +370,17 @@ func (c *Config) validateLocked() error {
 		names[s.Name] = true
 	}
 	ids := map[string]bool{}
-	for _, d := range c.Devices {
-		if d.ID == "" || d.PubKey == "" {
-			errs = append(errs, fmt.Errorf("device %q: missing id or pubkey", d.Name))
+	for _, p := range c.Peers {
+		if p.ID == "" || p.PubKey == "" || p.NodeID == "" {
+			errs = append(errs, fmt.Errorf("peer %q: missing id, node_id or pubkey", p.Name))
 		}
-		if ids[d.ID] {
-			errs = append(errs, fmt.Errorf("device %q: %w", d.ID, ErrDuplicate))
+		if err := ValidateName(p.Name); err != nil {
+			errs = append(errs, fmt.Errorf("peer %q: %w", p.ID, err))
 		}
-		ids[d.ID] = true
+		if ids[p.ID] {
+			errs = append(errs, fmt.Errorf("peer %q: %w", p.ID, ErrDuplicate))
+		}
+		ids[p.ID] = true
 	}
 	for _, p := range c.Runtime.ProviderOrder {
 		if !slices.Contains(knownProviders, p) {
@@ -334,9 +415,13 @@ func validateService(s Service) error {
 func (c *Config) mutate(fn func() error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	name := c.Name
 	services := slices.Clone(c.Services)
-	devices := slices.Clone(c.Devices)
-	rollback := func() { c.Services, c.Devices = services, devices }
+	peers := make([]Peer, len(c.Peers))
+	for i, p := range c.Peers {
+		peers[i] = p.Clone()
+	}
+	rollback := func() { c.Name, c.Services, c.Peers = name, services, peers }
 	if err := fn(); err != nil {
 		rollback()
 		return err
@@ -350,6 +435,18 @@ func (c *Config) mutate(fn func() error) error {
 		return err
 	}
 	return nil
+}
+
+// NodeName returns this node's name.
+func (c *Config) NodeName() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Name
+}
+
+// SetName changes this node's name and saves.
+func (c *Config) SetName(name string) error {
+	return c.mutate(func() error { c.Name = name; return nil })
 }
 
 // AddService appends a service (defaulting Protocol to tcp) and saves.
@@ -366,7 +463,8 @@ func (c *Config) AddService(s Service) error {
 	})
 }
 
-// RemoveService deletes the named service and saves.
+// RemoveService deletes the named service, drops it from every peer's
+// shares, and saves.
 func (c *Config) RemoveService(name string) error {
 	return c.mutate(func() error {
 		i := slices.IndexFunc(c.Services, func(x Service) bool { return x.Name == name })
@@ -374,6 +472,9 @@ func (c *Config) RemoveService(name string) error {
 			return fmt.Errorf("service %q: %w", name, ErrNotFound)
 		}
 		c.Services = slices.Delete(c.Services, i, i+1)
+		for j := range c.Peers {
+			c.Peers[j].Shares = slices.DeleteFunc(c.Peers[j].Shares, func(s string) bool { return s == name })
+		}
 		return nil
 	})
 }
@@ -412,59 +513,83 @@ func (c *Config) Service(name string) (Service, bool) {
 	return Service{}, false
 }
 
-// AddDevice stores a new device record and saves.
-func (c *Config) AddDevice(d Device) error {
+// AddPeer stores a new peer record and saves.
+func (c *Config) AddPeer(p Peer) error {
 	return c.mutate(func() error {
-		if slices.ContainsFunc(c.Devices, func(x Device) bool { return x.ID == d.ID }) {
-			return fmt.Errorf("device %q: %w", d.ID, ErrDuplicate)
+		if slices.ContainsFunc(c.Peers, func(x Peer) bool { return x.ID == p.ID }) {
+			return fmt.Errorf("peer %q: %w", p.ID, ErrDuplicate)
 		}
-		c.Devices = append(c.Devices, d)
+		c.Peers = append(c.Peers, p.Clone())
 		return nil
 	})
 }
 
-// DeleteDevice removes a device by ID, saves, and returns the removed record.
-func (c *Config) DeleteDevice(id string) (Device, error) {
-	var removed Device
+// DeletePeer removes a peer by ID, saves, and returns the removed record.
+func (c *Config) DeletePeer(id string) (Peer, error) {
+	var removed Peer
 	err := c.mutate(func() error {
-		i := slices.IndexFunc(c.Devices, func(x Device) bool { return x.ID == id })
+		i := slices.IndexFunc(c.Peers, func(x Peer) bool { return x.ID == id })
 		if i < 0 {
-			return fmt.Errorf("device %q: %w", id, ErrNotFound)
+			return fmt.Errorf("peer %q: %w", id, ErrNotFound)
 		}
-		removed = c.Devices[i]
-		c.Devices = slices.Delete(c.Devices, i, i+1)
+		removed = c.Peers[i].Clone()
+		c.Peers = slices.Delete(c.Peers, i, i+1)
 		return nil
 	})
 	return removed, err
 }
 
-// Device returns one device by ID.
-func (c *Config) Device(id string) (Device, bool) {
+// UpdatePeer applies fn to a copy of the stored peer and saves the result.
+// The change is kept only if fn, validation, and saving all succeed.
+func (c *Config) UpdatePeer(id string, fn func(*Peer) error) (Peer, error) {
+	var out Peer
+	err := c.mutate(func() error {
+		i := slices.IndexFunc(c.Peers, func(x Peer) bool { return x.ID == id })
+		if i < 0 {
+			return fmt.Errorf("peer %q: %w", id, ErrNotFound)
+		}
+		p := c.Peers[i].Clone()
+		if err := fn(&p); err != nil {
+			return err
+		}
+		c.Peers[i] = p
+		out = p.Clone()
+		return nil
+	})
+	return out, err
+}
+
+// Peer returns one peer by ID.
+func (c *Config) Peer(id string) (Peer, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, d := range c.Devices {
-		if d.ID == id {
-			return d, true
+	for _, p := range c.Peers {
+		if p.ID == id {
+			return p.Clone(), true
 		}
 	}
-	return Device{}, false
+	return Peer{}, false
 }
 
-// DeviceList returns a copy of all devices.
-func (c *Config) DeviceList() []Device {
+// PeerList returns a copy of all peers.
+func (c *Config) PeerList() []Peer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return slices.Clone(c.Devices)
+	out := make([]Peer, len(c.Peers))
+	for i, p := range c.Peers {
+		out[i] = p.Clone()
+	}
+	return out
 }
 
-// SetDeviceLastSeen updates LastSeen in memory. If persist is true the config
+// SetPeerLastSeen updates LastSeen in memory. If persist is true the config
 // is also saved. Unknown IDs are ignored.
-func (c *Config) SetDeviceLastSeen(id string, t time.Time, persist bool) error {
+func (c *Config) SetPeerLastSeen(id string, t time.Time, persist bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i := range c.Devices {
-		if c.Devices[i].ID == id {
-			c.Devices[i].LastSeen = t
+	for i := range c.Peers {
+		if c.Peers[i].ID == id {
+			c.Peers[i].LastSeen = t
 			if persist {
 				return c.saveLocked()
 			}
@@ -481,12 +606,16 @@ func (c *Config) Snapshot() *Config {
 	defer c.mu.Unlock()
 	cp := &Config{
 		Version:    c.Version,
+		Name:       c.Name,
 		PanelPort:  c.PanelPort,
 		NodePort:   c.NodePort,
 		Transports: c.Transports,
 		Runtime:    RuntimeConfig{ProviderOrder: slices.Clone(c.Runtime.ProviderOrder), ContainerRuntime: c.Runtime.ContainerRuntime},
 		Services:   slices.Clone(c.Services),
-		Devices:    slices.Clone(c.Devices),
+		Peers:      make([]Peer, 0, len(c.Peers)),
+	}
+	for _, p := range c.Peers {
+		cp.Peers = append(cp.Peers, p.Clone())
 	}
 	return cp
 }
