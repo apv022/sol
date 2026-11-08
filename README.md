@@ -59,9 +59,14 @@ machine**) prints a link. On the laptop:
 sol pair 'sol://pair?node=…'          # or paste it in the panel: Peers → Join with a link
 ```
 
-**Share an app.** On the server, add it in the panel (**Services → Add**: `navidrome`, port
-`4533`), then tick it for the laptop on the **Peers** tab, or run `sol share laptop navidrome`.
-On the laptop:
+**Share an app.** On the server:
+
+```sh
+sol service add navidrome 4533 --http --share laptop
+```
+
+(or in the panel: **Services → Add**, then tick it for the laptop on the **Peers** tab). On the
+laptop:
 
 ```sh
 sol open home
@@ -112,6 +117,9 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 | `sol invite` | Print a one-time pairing link for another machine |
 | `sol pair <link>` | Pair with the machine that made the link |
 | `sol peers [-r]` | List peers and what each side shares (`-r` asks them now) |
+| `sol services` | List this machine's services and who may open each |
+| `sol service add <name> <port> [--http] [--public] [--share PEER]` | Add an app running on `127.0.0.1:<port>` (private unless `--public`) |
+| `sol service remove\|public\|private <name>` | Remove a service, or change who can open it |
 | `sol share <peer> <service> [--off]` | Let a peer open a service (`_files` = your shared files page) |
 | `sol open <peer> [-L svc=127.0.0.1:PORT]` | Local tunnels to what a peer shares (default 9000, 9001, …) |
 | `sol send <peer> <file>…` | Send files to a peer |

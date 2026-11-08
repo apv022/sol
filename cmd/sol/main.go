@@ -8,6 +8,9 @@
 //	sol open <peer> [-L svc=addr]    local tunnels to a peer's services
 //	sol send <peer> <file>...        send files to a peer's inbox
 //	sol unpair <peer>                remove a peer (and tell it)
+//	sol services                     list this node's services
+//	sol service add <name> <port>    add a service (--http, --public, --share PEER)
+//	sol service remove <name>        remove a service
 //	sol name [NEW]                   show or change this node's name
 //	sol audit, sol version
 //
@@ -55,6 +58,15 @@ Pair two machines (once):
   sol invite                  on machine A: prints a link (works once, for 10 minutes)
   sol pair '<link>'           on machine B: pairs B with A. Both are now peers.
 
+Your services (apps on this machine):
+  sol services                list them, with who may open each
+  sol service add <name> <port> [--http] [--public | --anonymous] [--share PEER ...]
+                              add an app running on 127.0.0.1:<port>. Private by default:
+                              only peers you share it with can open it. --share does that now.
+  sol service remove <name>   remove it (the app itself isn't touched)
+  sol service public <name>   give it its own .onion anyone can open in Tor Browser
+  sol service private <name>  back to peers you share it with only
+
 Use your peers:
   sol peers [-r]              list peers; -r asks each one what it shares now
   sol share <peer> <service>  let a peer open one of your services (--off to stop).
@@ -88,6 +100,7 @@ func main() {
 		"run": runNode, "node": runNode,
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
 		"open": runOpen, "send": runSend, "unpair": runUnpair, "name": runName,
+		"services": runServices, "service": runService,
 		"status": runStatus, "audit": runAudit,
 		"gateway": func(ctx context.Context, _ []string) error { return gateway.Run(ctx) },
 	}
@@ -505,6 +518,127 @@ func runUnpair(ctx context.Context, args []string) error {
 		fmt.Printf("Removed %s. It couldn't be reached to tell it, but it can no longer reach you.\n", u.Name)
 	}
 	return nil
+}
+
+func runServices(ctx context.Context, args []string) error {
+	data, _ := flags("services", args, nil)
+	var list []control.LocalService
+	if err := control.Call(ctx, sock(data), control.Request{Op: control.OpServices}, &list); err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		fmt.Println("No services yet. Add one with `sol service add <name> <port>`.")
+		return nil
+	}
+	for _, s := range list {
+		printService(s)
+	}
+	return nil
+}
+
+func printService(s control.LocalService) {
+	state := "running"
+	if !s.Running {
+		state = "NOT RUNNING: nothing listens on that port"
+	}
+	fmt.Printf("%s  (127.0.0.1:%d, %s, %s)\n", s.Name, s.Port, s.Protocol, state)
+	switch s.Visibility {
+	case config.VisibilityPrivate:
+		who := "nobody yet"
+		if len(s.SharedWith) > 0 {
+			who = strings.Join(s.SharedWith, ", ")
+		}
+		fmt.Printf("  peers who can open it: %s\n", who)
+	default:
+		fmt.Printf("  %s: anyone with the address can open it\n", s.Visibility)
+		for _, t := range sortedKeys(s.Addrs) {
+			addr := s.Addrs[t]
+			if t == "tor" {
+				addr = "http://" + addr
+			}
+			fmt.Printf("  %-8s %s\n", t+":", addr)
+		}
+		if len(s.SharedWith) > 0 {
+			fmt.Printf("  also shared with peers: %s\n", strings.Join(s.SharedWith, ", "))
+		}
+	}
+}
+
+// shareFlags collects repeated --share PEER flags.
+type shareFlags []string
+
+func (s *shareFlags) String() string     { return strings.Join(*s, ",") }
+func (s *shareFlags) Set(v string) error { *s = append(*s, v); return nil }
+
+func runService(ctx context.Context, args []string) error {
+	const usageService = "usage: sol service add <name> <port> [--http] [--public | --anonymous] [--share PEER]\n" +
+		"       sol service remove|public|private <name>"
+	var http, public, anon bool
+	var share shareFlags
+	data, pos := flags("service", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&http, "http", false, "it's a web app (lets Sol strip server headers when public)")
+		fs.BoolVar(&public, "public", false, "give it its own .onion anyone can open")
+		fs.BoolVar(&anon, "anonymous", false, "public, with extra leak protection (experimental)")
+		fs.Var(&share, "share", "share it with this peer right away (repeatable)")
+	})
+	if len(pos) < 2 {
+		return errors.New(usageService)
+	}
+	path := sock(data)
+	switch pos[0] {
+	case "add":
+		if len(pos) != 3 {
+			return errors.New(usageService)
+		}
+		port, err := strconv.Atoi(pos[2])
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("%q isn't a port number (1-65535)", pos[2])
+		}
+		req := control.Request{Op: control.OpServiceAdd, Service: pos[1], Port: port,
+			Visibility: config.VisibilityPrivate, Protocol: config.ProtocolTCP}
+		if http {
+			req.Protocol = config.ProtocolHTTP
+		}
+		if public {
+			req.Visibility = config.VisibilityPublic
+		}
+		if anon {
+			req.Visibility = config.VisibilityAnonymousPublic
+		}
+		var s control.LocalService
+		if err := control.Call(ctx, path, req, &s); err != nil {
+			return err
+		}
+		for _, peer := range share {
+			var p control.PeerView
+			if err := control.Call(ctx, path, control.Request{Op: control.OpShare, Peer: peer, Service: s.Name, Shared: true}, &p); err != nil {
+				return fmt.Errorf("added %s, but sharing it with %s failed: %w", s.Name, peer, err)
+			}
+			s.SharedWith = append(s.SharedWith, p.Name)
+		}
+		fmt.Printf("Added %s.\n", s.Name)
+		printService(s)
+		if s.Visibility == config.VisibilityPrivate && len(s.SharedWith) == 0 {
+			fmt.Printf("Let a peer open it with `sol share <peer> %s`.\n", s.Name)
+		}
+		return nil
+	case "remove", "rm":
+		if err := control.Call(ctx, path, control.Request{Op: control.OpServiceRemove, Service: pos[1]}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Removed %s. Peers using it were disconnected; the app itself wasn't touched.\n", pos[1])
+		return nil
+	case "public", "private", "anonymous":
+		vis := map[string]string{"public": config.VisibilityPublic, "private": config.VisibilityPrivate,
+			"anonymous": config.VisibilityAnonymousPublic}[pos[0]]
+		var s control.LocalService
+		if err := control.Call(ctx, path, control.Request{Op: control.OpServiceVis, Service: pos[1], Visibility: vis}, &s); err != nil {
+			return err
+		}
+		printService(s)
+		return nil
+	}
+	return errors.New(usageService)
 }
 
 func runAudit(ctx context.Context, args []string) error {

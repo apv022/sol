@@ -21,7 +21,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
   sender checks the receiver's SHA-256; per-file (4 GiB) and total (20 GiB) limits; received files
   are labelled with the sender and kept off your shared-files page.
 - CLI talks to the running node over a local socket: `sol invite`, `pair`, `peers`, `share`,
-  `open`, `send`, `unpair`, `name`, `status`.
+  `open`, `send`, `unpair`, `name`, `status`, and `sol services` / `sol service add|remove|public|private`
+  (with `--share PEER` to add and share in one step), so a node can be managed without the panel.
 - Panel: Peers tab with invite and join, per-peer share toggles, send a file, unpair; node name.
 - Redesigned panel for non-technical users: status hero with Tor progress, getting-started
   checklist, add-service presets, plain-language access choices, a pairing wizard that detects

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -581,5 +582,53 @@ func TestPanelGuards(t *testing.T) {
 	}
 	if code := do("POST", "/api/peers/invite", "", "wrong"); code != 403 {
 		t.Fatalf("POST with wrong CSRF allowed: %d", code)
+	}
+}
+
+// `sol service add/remove/public` and `sol services`, through the control socket.
+func TestServicesOverControlSocket(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	pair(t, a, b)
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "music") }))
+	defer app.Close()
+	port := app.Listener.Addr().(*net.TCPAddr).Port
+	ctx := context.Background()
+	call := func(req control.Request, out any) error { return control.Call(ctx, a.ControlPath(), req, out) }
+
+	var s control.LocalService
+	if err := call(control.Request{Op: control.OpServiceAdd, Service: "music", Port: port, Protocol: config.ProtocolHTTP}, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Visibility != config.VisibilityPrivate || !s.Running || len(s.SharedWith) != 0 {
+		t.Fatalf("added: %+v", s)
+	}
+	if err := call(control.Request{Op: control.OpServiceAdd, Service: "music", Port: port}, nil); err == nil {
+		t.Fatal("duplicate service accepted")
+	}
+	if err := call(control.Request{Op: control.OpServiceAdd, Service: "Bad Name", Port: port}, nil); err == nil {
+		t.Fatal("invalid name accepted")
+	}
+
+	// Sharing shows up in the list.
+	call(control.Request{Op: control.OpShare, Peer: "beta", Service: "music", Shared: true}, nil)
+	var list []control.LocalService
+	if err := call(control.Request{Op: control.OpServices}, &list); err != nil || len(list) != 1 || len(list[0].SharedWith) != 1 || list[0].SharedWith[0] != "beta" {
+		t.Fatalf("services: %+v %v", list, err)
+	}
+
+	// Public: it gets its own address.
+	if err := call(control.Request{Op: control.OpServiceVis, Service: "music", Visibility: config.VisibilityPublic}, &s); err != nil || s.Addrs["clearnet"] == "" {
+		t.Fatalf("public: %+v %v", s, err)
+	}
+
+	// Remove: gone, and unshared from the peer.
+	if err := call(control.Request{Op: control.OpServiceRemove, Service: "music"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(control.Request{Op: control.OpServices}, &list); err != nil || len(list) != 0 {
+		t.Fatalf("after remove: %+v %v", list, err)
+	}
+	if p := a.Peers()[0]; slices.Contains(p.Shares, "music") {
+		t.Fatalf("removed service still shared: %v", p.Shares)
 	}
 }

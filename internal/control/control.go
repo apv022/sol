@@ -40,6 +40,11 @@ const (
 	OpUnpair = "unpair" // Peer -> Unpaired
 	OpDial   = "dial"   // Peer, Service; then a raw pipe
 	OpSend   = "send"   // Peer, Name; then the file bytes; then Sent
+
+	OpServices      = "services"       // -> []LocalService
+	OpServiceAdd    = "service-add"    // Service, Port, Visibility, Protocol -> LocalService
+	OpServiceRemove = "service-remove" // Service
+	OpServiceVis    = "service-vis"    // Service, Visibility -> LocalService
 )
 
 // Request is one command.
@@ -51,6 +56,22 @@ type Request struct {
 	Link    string `json:"link,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Refresh bool   `json:"refresh,omitempty"` // peers: ask the peer(s) for their current list first
+
+	// Service fields (service-add, service-vis).
+	Port       int    `json:"port,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+}
+
+// LocalService is one of this node's services, as the CLI sees it.
+type LocalService struct {
+	Name       string            `json:"name"`
+	Port       int               `json:"port"`
+	Visibility string            `json:"visibility"`
+	Protocol   string            `json:"protocol"`
+	Running    bool              `json:"running"`         // something listens on the port
+	Addrs      map[string]string `json:"addrs,omitempty"` // public services: their own addresses
+	SharedWith []string          `json:"shared_with"`     // names of peers that may open it
 }
 
 // Response is the answer. Data's type depends on the op.

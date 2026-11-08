@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/netutil"
@@ -149,9 +150,47 @@ func (n *Node) handleControl(c net.Conn) {
 		}
 		hash, size, err := n.SendFile(ctx, p.ID, req.Name, br)
 		reply(control.Sent{Hash: hash, Size: size}, err)
+	case control.OpServices:
+		out := []control.LocalService{}
+		for _, s := range n.Services() {
+			out = append(out, n.controlService(s))
+		}
+		reply(out, nil)
+	case control.OpServiceAdd:
+		vis := req.Visibility
+		if vis == "" {
+			vis = config.VisibilityPrivate
+		}
+		err := n.AddService(config.Service{Name: req.Service, LocalPort: req.Port, Visibility: vis, Protocol: req.Protocol})
+		reply(n.controlServiceNamed(req.Service), err)
+	case control.OpServiceRemove:
+		reply(nil, n.RemoveService(req.Service))
+	case control.OpServiceVis:
+		err := n.SetServiceVisibility(req.Service, req.Visibility)
+		reply(n.controlServiceNamed(req.Service), err)
 	default:
 		reply(nil, fmt.Errorf("unknown op %q", req.Op))
 	}
+}
+
+func (n *Node) controlServiceNamed(name string) control.LocalService {
+	for _, s := range n.Services() {
+		if s.Name == name {
+			return n.controlService(s)
+		}
+	}
+	return control.LocalService{Name: name}
+}
+
+func (n *Node) controlService(s api.ServiceView) control.LocalService {
+	v := control.LocalService{Name: s.Name, Port: s.LocalPort, Visibility: s.Visibility, Protocol: s.Protocol,
+		Running: s.Running, Addrs: s.Addresses, SharedWith: []string{}}
+	for _, p := range n.peers.List() {
+		if p.Shared(s.Name) {
+			v.SharedWith = append(v.SharedWith, p.Name)
+		}
+	}
+	return v
 }
 
 func (n *Node) controlStatus() control.Status {
