@@ -8,7 +8,7 @@
       "kind": "gateway",
       "addresses": { "clearnet": "https://gw.example.com", "tor": "example.onion" },
       "pubkey": "<base32>",
-      "description": "Hackathon demo gateway (v0.2).",
+      "description": "Example gateway entry (v0.2).",
       "tags": ["gateway", "demo"],
       "status": "down",
       "added": "2026-11-07"

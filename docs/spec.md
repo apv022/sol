@@ -10,7 +10,7 @@
 > | 6.3 Wire protocol | [PROTOCOL.md](PROTOCOL.md) | Per-request HTTP signing replaced by one signed challenge-response handshake per TCP connection. Works for any TCP service, needs no clock sync or replay cache |
 > | 6.5 Service proxy | [ARCHITECTURE.md](ARCHITECTURE.md) | Private services are a raw TCP pipe; the HTTP reverse proxy is used only for public `http` services |
 > | 6.2.1 Runtime providers | [ARCHITECTURE.md](ARCHITECTURE.md) | `native` (tor on PATH) is the default; `bundled` needs `-tags bundled` |
-> | 15 Repo layout | [ARCHITECTURE.md](ARCHITECTURE.md) | Current layout |
+> | 13 Repo layout | [ARCHITECTURE.md](ARCHITECTURE.md) | Current layout |
 
 **One line:** Sol is a single-binary node that lets anyone self-host private services reachable from anywhere over Tor, I2P, or clearnet, with no port forwarding, no VPN, and no accounts.
 
@@ -29,7 +29,7 @@ Self-hosting means fighting ports, CGNAT, DNS, certificates, and VPN setup. Sol 
 ## 3. Non-goals (all versions)
 
 - A new anonymity or routing network.
-- Hiding the user from a malicious gateway they chose to trust (the strict mode in Section 13 reduces this).
+- Hiding the user from a malicious gateway they chose to trust (the strict mode in Section 11 reduces this).
 - Replacing Tor Browser or I2P for general browsing.
 
 ## 4. Use cases and solutions
@@ -123,7 +123,7 @@ Tor and i2pd are C/C++ programs, so Sol cannot link them as Go libraries. "Bundl
 
 All three expose the same thing to the rest of Sol: a SOCKS port, a control or tunnel config, and a start/stop lifecycle. Switching providers is a config change, not a code change.
 
-**Hackathon: bundled binaries from the start.** The demo runs on one known machine, so the MVP bundles Tor and i2pd for that platform only and runs them as child processes. No Docker is needed for Tor or i2pd. The native and Docker providers sit behind the same interface and are added only if time allows or the bundled binary fails on the day. Multi-platform bundles come in v0.2.
+**Bundled binaries.** The first bundled build covers one platform and runs Tor and i2pd as child processes, so no Docker is needed for them. The native and Docker providers sit behind the same interface. Multi-platform bundles come in v0.2.
 
 **Bundling plan:**
 - Source Tor from the Tor Expert Bundle and i2pd from its official releases. Verify checksums and signatures at build time. (MVP: download the binaries for the dev machine by hand and check their checksums once.)
@@ -215,7 +215,7 @@ Not built in the MVP. Kept here so the design is settled when gateways are added
 | Network observer | Tor/I2P encryption plus end-to-end signing. |
 | Malicious relay or exit | No exit nodes used (hidden services). Content integrity checked by hash. |
 | Origin IP leak (anonymous-public) | Egress lock, separate gateway, `sol audit` (Section 7.6) |
-| Malicious gateway | Not defended in the hackathon build. Use your own gateway. Strict mode (Section 13) mitigates. |
+| Malicious gateway | Not defended yet. Use your own gateway. Strict mode (Section 11) mitigates. |
 | Compromised service app | Out of scope. Services run as ordinary local processes. WASM sandbox in v1.0 covers hosted apps. |
 
 ### 7.6 Anonymous Public Mode
@@ -252,7 +252,7 @@ Normal browser ──> Gateway ──Tor/I2P┘
 
 **`sol audit` command:** checks each rule and prints pass/fail. The panel shows the same result as a "Leak check" card. Proof for demos: `curl ifconfig.me` from inside the service container returns a Tor exit IP, never the home IP.
 
-**Limits (state these in the docs):** Sol does not defend against a global adversary correlating traffic at both ends. Gateway operators carry legal and takedown exposure. Public anonymous hosting attracts abuse, so the content-policy tooling in Section 13 matters most here.
+**Limits (state these in the docs):** Sol does not defend against a global adversary correlating traffic at both ends. Gateway operators carry legal and takedown exposure. Public anonymous hosting attracts abuse, so the content-policy tooling in Section 11 matters most here.
 
 ## 8. Control panel
 
@@ -324,82 +324,9 @@ Static HTML/CSS/JS plus `hosts.json`, no backend required. A small `checker` scr
 
 Listing criteria are published. Entries that serve illegal content are removed on report. The directory lists addresses, it does not host or mirror the content behind them.
 
-## 10. Hackathon scope (MVP)
+## 10. Roadmap
 
-### 10.1 Decisions (locked)
-
-| Decision | Choice |
-|---|---|
-| Language | Go, standard library only (plus an ed25519/x25519 helper from `golang.org/x/crypto`) |
-| Dev environment | Native on own hardware, no VM. |
-| Tor and i2pd | **Bundled binaries** for the demo machine only (Section 6.2.1), run as child processes by Sol |
-| Primary transport | **Tor** |
-| Second transport | **I2P**, started an hour before the demo so tunnels are built |
-| Client access | **`sol connect`** on a second laptop (opens `localhost:9000`). Gateway is deferred to v0.2, so no plain-browser or phone access in the MVP. |
-| Demo service | Navidrome in Docker (Docker is needed only for this and the egress-lock demo) |
-| UI | Plain HTML/CSS/JS served from the binary |
-
-### 10.2 Build order and time budget
-
-| # | Task | Priority | Est. |
-|---|---|---|---|
-| 1 | Keygen, config load/save | Must | 1 h |
-| 2 | Signed-request verification middleware | Must | 1.5 h |
-| 3 | Service reverse proxy | Must | 1 h |
-| 4 | Runtime provider (extract, configure, start bundled `tor`) and Tor transport (hidden service) | Must | 3 h |
-| 5 | Pairing flow and device list | Must | 2 h |
-| 6 | Control panel (status, services, devices, QR) | Must | 3 h |
-| 7 | `sol connect` local tunnel (signs requests, dials Tor) | Must | 2.5 h |
-| 8 | Blob store with range streaming | Should | 1.5 h |
-| 9 | I2P transport (bundled `i2pd`, server tunnel) | Should | 2.5 h |
-| 10 | Tor client authorization | Should | 1.5 h |
-| 11 | Known-hosts directory page (static, seeded with 8-10 entries) | Should | 2 h |
-| 12 | Anonymous Public Mode: egress-locked origin container and `sol audit` | Should | 2 h |
-
-**Cut line:** if you are behind, drop 9 and 10 first, then 12, then 11. Tasks 1-8 are the demo.
-
-### 10.3 Definition of done
-
-- [ ] `sol` starts, generates keys, shows a Tor address in the panel.
-- [ ] Adding Navidrome in the panel proxies it with no router changes.
-- [ ] A second laptop on a different network (phone hotspot) pairs by pasting or scanning the link, runs `sol connect`, and plays music from `localhost:9000`.
-- [ ] An unpaired client gets nothing.
-- [ ] Clicking Remove kills the second laptop's access.
-- [ ] (Should) The same file has the same hash when fetched over Tor and I2P.
-- [ ] (Should) The directory page loads over clearweb and lists seeded hosts with live status.
-- [ ] (Should) `sol audit` passes and `curl ifconfig.me` inside the origin container shows a Tor exit IP.
-
-### 10.4 Demo script (2 minutes)
-
-1. Show a laptop with no open router ports and Navidrome running locally.
-2. Open the Sol panel. Add the Navidrome service. Show the Tor address.
-3. On a second laptop (on a phone hotspot), run `sol connect <link>` from the pairing link. Open `localhost:9000`. Music plays.
-4. Try the same address from a third machine without pairing. Nothing loads.
-5. Click Remove on the second laptop. Reload. Access is gone.
-6. (If built) Show the same file hash fetched over Tor and I2P.
-7. (If built) Open the directory page, point at a seeded entry with its status light.
-8. (If built) Flip a service to `anonymous-public`, run `sol audit`, then show `curl ifconfig.me` from the origin container returning a Tor exit IP.
-
-### 10.5 Explicitly out of scope for the hackathon
-
-DHT, relays, hole punching, native QUIC transport, directory federation and signed-entry verification (the MVP page is hand-curated), WASM sandbox, Rip Galore, Subsonic compatibility layer, multi-node replication, community pinning, mobile apps, multi-platform bundled binaries, and the gateway (so no phone or plain-browser access yet). These go on the roadmap slide.
-
-## 11. Risks and mitigations (hackathon)
-
-| Risk | Mitigation |
-|---|---|
-| I2P tunnels not ready at demo time | Start i2pd early. Tor is the fallback. |
-| Tor slow on first connection | Pre-warm Tor. Use small test tracks. |
-| Bundled `tor` or `i2pd` fails to start on the demo machine | Test on the demo machine early. Keep the Docker provider as a fallback if time allows. |
-| Stale bundled versions | Pin and record the versions. Note in the pitch that an update path is planned. |
-| Docker not running when needed for Navidrome or the egress-lock step | Start and test Docker before the event. These are the only Docker dependencies. |
-| `sol connect` fails over Tor on the second laptop | Test on a different network by hour 8. Keep a clearnet transport as a fallback for the demo. |
-| Navidrome WebSocket/stream issues through proxy | Test range requests early. |
-| Directory lists a bad actor | Hand-curate the MVP list, publish listing criteria, add a report link. |
-
-## 12. Roadmap
-
-### v0.2 (after hackathon)
+### v0.2
 - **Gateway mode** (sessions, pairing page, HTTPS front door) so phones and plain browsers work with nothing installed.
 - QR-scan mobile app.
 - Service templates (Jellyfin, Nextcloud, Vaultwarden, Immich).
@@ -408,8 +335,10 @@ DHT, relays, hole punching, native QUIC transport, directory federation and sign
 - **Multi-platform bundles** (Section 6.2.1): Linux, macOS, and Windows on amd64 and arm64, checksum verification in the release build, and an update path for bundled Tor and i2pd. Native and Docker stay as optional providers.
 
 ### v0.5: Connectivity and storage
-- Native transport: QUIC with Noise encryption, for fast non-anonymous use.
-- Connectivity ladder: outbound-only, UPnP/NAT-PMP/PCP, hole punching, relay fallback.
+- **Direct mode** (design sketch in Section 10.1): Tor finds the peer and carries the fallback;
+  data moves over a direct WireGuard connection when one can be made. Aim: Tailscale speed with
+  no coordination server, no relay company, and no account.
+- Connectivity ladder: same LAN, then hole punching, then UPnP/NAT-PMP/PCP, then Tor fallback.
 - Multi-device replication ("pin to my other devices").
 - Cache and stream node roles.
 - Address-advertisement record: signed list of a node's current transport endpoints.
@@ -425,7 +354,68 @@ DHT, relays, hole punching, native QUIC transport, directory federation and sign
 - Subsonic API compatibility so existing music apps work as clients.
 - One-click installs for Umbrel, Unraid, Synology, Raspberry Pi, and Docker.
 
-## 13. Final-version features
+### 10.1 Design sketch: direct mode (Tor for finding the peer, WireGuard for the data)
+
+Status: idea, not built. Nothing here changes `sol/1` until it ships as a new protocol version.
+
+**Goal.** Match Tailscale's speed between a user's own devices without any of the servers
+Tailscale relies on. No anonymity network can beat a direct connection, because anonymity
+means routing through strangers' machines. So the target is "as fast as Tailscale when a
+direct path exists, as private as Tor when it doesn't".
+
+**How Tailscale does it, for comparison.** Each device has a WireGuard key. A company-run
+coordination server hands out public keys, current endpoints, and ACLs. Devices learn their
+public address from STUN servers, then hole-punch a direct WireGuard (UDP) path. When hole
+punching fails, traffic goes through company-run DERP relays (WireGuard packets inside
+HTTPS/TCP, still end-to-end encrypted). The data is usually direct, but the company sees
+metadata: devices, public IPs, and when they're online.
+
+**Sol's mapping.**
+
+| Tailscale piece | Sol replacement |
+|---|---|
+| Account + coordination server (key distribution) | Pairing link. Add a WireGuard public key to the pairing exchange |
+| Coordination server (endpoint exchange) | The authenticated Tor connection from the existing `sol/1` handshake |
+| STUN | Public STUN servers (they learn only the public IP), or a peer reports the address it sees |
+| DERP relays | Today's Tor tunnel, with no Sol-run servers |
+| ACLs | Existing per-device, per-service access and instant revocation |
+
+**Connectivity ladder**, tried in order, per connection:
+
+1. Same LAN: connect to the node's local address directly (cheapest win, ship first).
+2. Hole-punched UDP: both sides send to each other's public endpoint simultaneously.
+3. Port mapping (UPnP / NAT-PMP / PCP) where the router allows it.
+4. Fallback: the existing Tor stream tunnel. It is always available, so a failed punch is
+   never a dead end.
+
+**Decisions and their reasons.**
+
+- **Stay layer 4 (userspace), not a VPN.** Tailscale is a layer-3 VPN: a TUN device, a
+  driver on Windows, root/admin rights, and the OS VPN slot on phones. Sol forwards ports to
+  `localhost` and needs none of that. Use the WireGuard protocol in userspace (as Tailscale's
+  `--tun=userspace-networking` does) so install stays beginner-friendly.
+- **The fallback is Sol's existing Tor stream, not WireGuard-over-Tor.** Tor carries only TCP,
+  so WireGuard over Tor would mean wrapping UDP in a TCP stream (as DERP does). Running user
+  TCP inside WireGuard inside a Tor TCP stream degrades badly on packet loss, and it would be
+  slower than today's path. Switching between two paths is simpler and faster.
+- **I2P stays an optional transport.** It isn't faster than Tor (comparable hop counts),
+  takes minutes to integrate a new router, and is harder to bundle. Its native datagrams
+  could carry WireGuard without TCP wrapping, which is worth revisiting as a fallback option.
+- **Dependency.** The stdlib has neither WireGuard nor QUIC. `wireguard-go` (by the WireGuard
+  authors) is the candidate justified exception to the no-third-party-dependencies rule.
+  A hand-rolled Noise-over-UDP protocol is the alternative, and it is the riskier one.
+
+**Privacy cost (must be explicit in the UI and `docs/THREAT_MODEL.md`).** A direct connection
+reveals each side's IP address to the other, and the public IP to whichever STUN server is
+used. That is acceptable between a user's own paired devices, so direct mode is opt-in per
+service. Anonymous public services must never use it, and `sol audit` should fail if they do.
+
+**Work this implies:** a new protocol version in `docs/PROTOCOL.md` (WireGuard key in
+pairing, endpoint-exchange message), threat-model updates, e2e tests for each step of the
+ladder including fallback, and a panel indicator showing "direct" or "via Tor" per connection
+(the equivalent of `tailscale ping` reporting `via DERP`).
+
+## 11. Final-version features
 
 | Feature | Description |
 |---|---|
@@ -435,7 +425,7 @@ DHT, relays, hole punching, native QUIC transport, directory federation and sign
 | Content policy | Per-node allowlists and opt-in pinning so operators control what they host |
 | Audit log | Signed, local, tamper-evident record of access |
 
-## 14. Open questions
+## 12. Open questions
 
 1. Sol-native name resolution: do we want a TLD-like suffix (`<pubkey>.sol`) in clients, and how does a plain browser resolve it through the gateway?
 2. Does i2pd's encrypted leaseset support meet our needs, or do we require Java I2P for that feature?
@@ -443,8 +433,10 @@ DHT, relays, hole punching, native QUIC transport, directory federation and sign
 4. Licensing: AGPL (keeps forks open) or MIT/Apache (max adoption)?
 5. Directory governance: who curates, how listings are disputed, and which external directories to federate with.
 6. Project name: "Sol" is fine for now, but check for trademark collisions before publishing.
+7. Direct mode (Section 10.1): accept `wireguard-go` as a dependency, or build Noise over UDP on
+   stdlib crypto? Which STUN source is acceptable given it learns the node's public IP?
 
-## 15. Repo layout
+## 13. Repo layout
 
 ```
 sol/

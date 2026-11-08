@@ -1,4 +1,4 @@
-# Demo service for the hackathon: Navidrome (a music server) on 127.0.0.1:4533.
+# Example service: Navidrome (a music server) on 127.0.0.1:4533.
 # Sol itself does not need Docker. Tor runs as a normal child process of sol.
 #
 #   mkdir -p demo-music && cp some.flac demo-music/

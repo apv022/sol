@@ -129,7 +129,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Gateway: open services in a normal phone browser | 🗺️ v0.2 |
 | Known-hosts directory | 🗺️ |
 
-The full roadmap is in [docs/spec.md §12](docs/spec.md#12-roadmap).
+The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
 
 ## How Sol compares
 
