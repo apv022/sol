@@ -92,11 +92,7 @@ and testing only, since clearnet traffic is not encrypted.
 Details: [docs/PROTOCOL.md](docs/PROTOCOL.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 
-## Built with Sol: Lumen
-
-[**Lumen**](https://github.com/apv022/lumen) is a personal AI agent that runs on your computer and
-is reached through Sol, from a laptop with `sol connect` or a phone. It's a good example of putting
-any app behind Sol: add one service and you have private, password-protected access from anywhere.
+## Screenshots
 
 | Panel home | Devices | Services (dark) |
 |---|---|---|
