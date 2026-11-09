@@ -15,7 +15,9 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -177,6 +179,9 @@ func (b *stunBind) filter(fn conn.ReceiveFunc) conn.ReceiveFunc {
 		for {
 			n, err := fn(packets, sizes, eps)
 			if err != nil {
+				if isUDPReset(err) {
+					continue // an ICMP "port unreachable" for an earlier send; not fatal
+				}
 				return n, err
 			}
 			kept := 0
@@ -218,6 +223,19 @@ func (b *stunBind) filter(fn conn.ReceiveFunc) conn.ReceiveFunc {
 			// WireGuard an empty batch.
 		}
 	}
+}
+
+// isUDPReset reports the error some systems (Windows above all) return on
+// a UDP socket after an ICMP "port unreachable" for an earlier send, e.g.
+// to a peer's old port after it restarted. wireguard-go treats receive
+// errors as fatal and would stop receiving altogether, so the filter
+// swallows these and keeps reading.
+func isUDPReset(err error) bool {
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "forcibly closed") || strings.Contains(msg, "10054") || strings.Contains(msg, "connection refused")
 }
 
 func (b *stunBind) deliver(p []byte) {

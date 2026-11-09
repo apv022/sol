@@ -3,11 +3,14 @@ package transport
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -233,6 +236,9 @@ func TestWireGuardPunchesThroughNATFiltering(t *testing.T) {
 }
 
 func TestWireGuardBusyPortFallsBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows lets two UDP sockets share a port, so there is no clash to fall back from")
+	}
 	busy, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -251,5 +257,17 @@ func TestWireGuardBusyPortFallsBack(t *testing.T) {
 	t.Cleanup(func() { w.Stop() })
 	if st := w.Status(); st.State != StateReady || !strings.Contains(st.Detail, "random port") {
 		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestUDPResetIsNotFatal(t *testing.T) {
+	for _, err := range []error{syscall.ECONNREFUSED, syscall.ECONNRESET,
+		errors.New("wsarecvfrom: An existing connection was forcibly closed by the remote host.")} {
+		if !isUDPReset(err) {
+			t.Errorf("%v treated as fatal", err)
+		}
+	}
+	if isUDPReset(net.ErrClosed) {
+		t.Fatal("a closed socket must stay fatal")
 	}
 }
