@@ -12,11 +12,14 @@
 //     entry that runs a different data directory (ErrOther).
 //   - The entry records PATH as it was when enabled, so the node finds tor
 //     where the user's shell did (launchd's default PATH lacks Homebrew).
-//   - A node that can't start is not restarted forever: the entry sets
-//     SOL_SUPERVISED=1, and a supervised node that fails before it is up
-//     (bad config, another node holding the data directory) exits 0, which
-//     neither systemd (Restart=on-failure) nor launchd (KeepAlive on
-//     unsuccessful exit) restarts. Crashes after start-up are restarted.
+//   - A node that can never start is not restarted forever: the entry sets
+//     SOL_SUPERVISED=1, and a supervised node finding another node on its
+//     data directory exits 0, which neither systemd (Restart=on-failure) nor
+//     launchd (KeepAlive on unsuccessful exit) restarts. Other failures are
+//     retried: systemd gives up after 5 in 5 minutes; launchd retries every
+//     30 s (it has no limit to set).
+//   - Linux support means a systemd user manager; other init systems are
+//     reported as unsupported.
 //   - Windows is not supported yet and says so (ErrNotImplemented).
 package autostart
 
@@ -28,6 +31,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/apv022/sol/internal/config"
 )
@@ -62,6 +66,9 @@ type Manager struct {
 	// ConfigHome is $XDG_CONFIG_HOME ("" means ~/.config), where the
 	// systemd user manager looks for units.
 	ConfigHome string
+	// SystemdRunning reports whether systemd is the init system ("" Home
+	// tests set it directly); see ForThisProcess.
+	SystemdRunning bool
 
 	// Run executes a command (exec.Command(...).CombinedOutput by default);
 	// tests replace it.
@@ -109,6 +116,36 @@ func (m Manager) wantsPath() string {
 	return filepath.Join(m.userUnitDir(), "default.target.wants", unitName)
 }
 
+// managerConfigHome asks the systemd user manager which XDG_CONFIG_HOME it
+// uses: that is where it looks for units, whatever this shell exports.
+func (m Manager) managerConfigHome() string {
+	out, err := m.output("systemctl", "--user", "show-environment")
+	if err != nil {
+		return m.ConfigHome
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(line, "XDG_CONFIG_HOME="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// atAnyConfigHome is m for whichever config home (this process's or the
+// default ~/.config) already holds the unit, so status agrees no matter
+// which environment asks.
+func (m Manager) atAnyConfigHome() Manager {
+	if m.ConfigHome == "" {
+		return m
+	}
+	if _, err := os.Stat(m.unitPath()); err == nil {
+		return m
+	}
+	d := m
+	d.ConfigHome = ""
+	return d
+}
+
 func (m Manager) plistPath() string {
 	return filepath.Join(m.Home, "Library", "LaunchAgents", Label+".plist")
 }
@@ -117,6 +154,10 @@ func (m Manager) plistPath() string {
 func (m Manager) Status() State {
 	switch m.GOOS {
 	case "linux":
+		if !m.SystemdRunning {
+			return State{}
+		}
+		m = m.atAnyConfigHome()
 		_, err := os.Lstat(m.wantsPath())
 		return m.state(m.unitPath(), err == nil, " --data "+systemdQuote(m.DataDir)+"\n")
 	case "darwin":
@@ -135,10 +176,18 @@ func (m Manager) Enable(startNow bool) error {
 	}
 	switch m.GOOS {
 	case "linux":
+		if !m.SystemdRunning {
+			return ErrNotImplemented
+		}
+		m.ConfigHome = m.managerConfigHome()
+		_, existed := os.Stat(m.unitPath())
 		if err := writeFile(m.unitPath(), SystemdUnit(m.Exe, m.DataDir, m.Path)); err != nil {
 			return err
 		}
 		if err := m.run("systemctl", "--user", "daemon-reload"); err != nil {
+			if existed != nil {
+				os.Remove(m.unitPath()) // don't leave a half-set-up entry behind
+			}
 			return err
 		}
 		// Clears a start-limit hit from earlier failures, or --now can't start it.
@@ -155,9 +204,11 @@ func (m Manager) Enable(startNow bool) error {
 		if !startNow {
 			return nil // launchd loads it at the next login
 		}
-		// bootout first so re-enabling picks up a changed plist; it fails
-		// harmlessly when nothing is loaded.
-		m.run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", m.UID, Label))
+		// bootout first so re-enabling picks up a changed plist (it fails
+		// harmlessly when nothing is loaded), and wait for the old job to be
+		// gone: bootstrapping while it still exits fails, or starts a node
+		// that finds the old one still holding the data directory.
+		m.bootout()
 		return m.run("launchctl", "bootstrap", fmt.Sprintf("gui/%d", m.UID), m.plistPath())
 	}
 	return ErrNotImplemented
@@ -199,6 +250,7 @@ func (m Manager) Disable() error {
 	}
 	switch m.GOOS {
 	case "linux":
+		m = m.atAnyConfigHome()
 		if _, err := os.Stat(m.unitPath()); errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
@@ -210,7 +262,7 @@ func (m Manager) Disable() error {
 		}
 		return m.run("systemctl", "--user", "daemon-reload")
 	case "darwin":
-		m.run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", m.UID, Label))
+		m.bootout()
 		if err := os.Remove(m.plistPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -235,6 +287,21 @@ func (m Manager) state(path string, registered bool, mine string) State {
 	return st
 }
 
+// bootoutWait bounds how long bootout waits for the job to go away.
+var bootoutWait = 10 * time.Second
+
+func (m Manager) bootout() {
+	target := fmt.Sprintf("gui/%d/%s", m.UID, Label)
+	if m.run("launchctl", "bootout", target) != nil {
+		return // wasn't loaded
+	}
+	for deadline := time.Now().Add(bootoutWait); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if m.run("launchctl", "print", target) != nil {
+			return
+		}
+	}
+}
+
 func writeFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -249,12 +316,19 @@ func systemdQuote(s string) string {
 	return `"` + r.Replace(s) + `"`
 }
 
+// envQuote quotes an Environment= assignment: like systemdQuote, but "$"
+// stays as is (Environment= expands specifiers, not variables).
+func envQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%")
+	return `"` + r.Replace(s) + `"`
+}
+
 // SystemdUnit is the user unit that runs the node. After 5 failed starts
 // in 5 minutes systemd gives up (instead of retrying forever).
 func SystemdUnit(exe, dataDir, path string) string {
 	env := ""
 	if path != "" {
-		env = "Environment=" + systemdQuote("PATH="+path) + "\n"
+		env = "Environment=" + envQuote("PATH="+path) + "\n"
 	}
 	// No network-online.target: it belongs to the system manager, not the
 	// user one. Tor retries on its own and restarts on network changes.
@@ -330,6 +404,10 @@ func ForThisProcess(goos, dataDir string) (Manager, error) {
 	}
 	m := Manager{GOOS: goos, Home: home, Exe: exe, DataDir: abs, UID: os.Getuid(),
 		Path: os.Getenv("PATH"), ConfigHome: os.Getenv("XDG_CONFIG_HOME")}
+	// sd_booted(3): systemd is the init system iff this directory exists.
+	if fi, err := os.Stat("/run/systemd/system"); err == nil && fi.IsDir() {
+		m.SystemdRunning = true
+	}
 	if strings.Contains(exe, string(filepath.Separator)+"go-build") {
 		return m, ErrGoRun
 	}

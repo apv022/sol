@@ -178,10 +178,13 @@ func runNode(ctx context.Context, args []string) error {
 	data, _ := flags("run", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&panel, "panel", "", "panel listen address (default 127.0.0.1:<panel_port>)")
 	})
-	// Under `sol autostart`, a node that can't start exits 0 so the service
-	// manager doesn't restart it forever (internal/autostart package doc).
+	// Under `sol autostart`, a node that can never start here (another node
+	// holds the data directory) exits 0 so the service manager doesn't
+	// restart it forever. Other start-up errors may clear up (a port still
+	// held by a node that is exiting), so they exit non-zero and are retried
+	// (internal/autostart package doc).
 	startupFailed := func(err error) error {
-		if os.Getenv(autostart.SupervisedEnv) != "" {
+		if os.Getenv(autostart.SupervisedEnv) != "" && errors.Is(err, node.ErrAlreadyRunning) {
 			fmt.Fprintln(os.Stderr, "sol: not starting:", err)
 			os.Exit(0)
 		}

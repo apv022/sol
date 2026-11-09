@@ -205,6 +205,8 @@ func New(opts Options) (*Node, error) {
 		n.removeAccess(p)
 		n.mu.Lock()
 		delete(n.lastGood, p.ID)
+		delete(n.directFail, p.ID)
+		delete(n.lastDirectRefresh, p.ID)
 		n.mu.Unlock()
 		n.log.Add(events.KindRevoke, "peer removed: "+peers.Describe(p))
 	})
@@ -259,6 +261,22 @@ func (n *Node) Run(ctx context.Context) error {
 	n.started = time.Now()
 	snap := n.cfg.Snapshot()
 
+	// The control socket doubles as the per-data-directory lock, so take it
+	// first: a second node fails with ErrAlreadyRunning, not a port clash.
+	var ctlLn net.Listener
+	if n.opts.ControlPath != "off" {
+		path := n.opts.ControlPath
+		if path == "" {
+			path = control.Path(n.opts.DataDir)
+		}
+		var err error
+		if ctlLn, err = listenControl(path); err != nil {
+			return err
+		}
+		defer ctlLn.Close()
+		n.controlPath = path
+	}
+
 	nodeAddr := n.opts.NodeAddr
 	if nodeAddr == "" {
 		nodeAddr = fmt.Sprintf("127.0.0.1:%d", snap.NodePort)
@@ -293,17 +311,7 @@ func (n *Node) Run(ctx context.Context) error {
 		go panelSrv.Serve(panelLn)
 	}
 
-	var ctlLn net.Listener
-	if n.opts.ControlPath != "off" {
-		path := n.opts.ControlPath
-		if path == "" {
-			path = control.Path(n.opts.DataDir)
-		}
-		if ctlLn, err = listenControl(path); err != nil {
-			return err
-		}
-		defer ctlLn.Close()
-		n.controlPath = path
+	if ctlLn != nil {
 		go n.serveControl(ctlLn)
 	}
 
@@ -397,6 +405,14 @@ func (n *Node) refreshNodePublication(force bool) {
 }
 
 // ownAddrs returns the node's public addresses, per transport.
+// directAddr is this node's current direct-mode address ("" when off).
+func (n *Node) directAddr() string {
+	if t, ok := n.reg.Get("direct"); ok {
+		return t.Status().Addresses[pubNode]
+	}
+	return ""
+}
+
 func (n *Node) ownAddrs() map[string]string {
 	addrs := map[string]string{}
 	for _, st := range n.reg.Statuses() {
@@ -667,7 +683,7 @@ func (n *Node) closeConns(match func(connInfo) bool) {
 // services we share with it.
 func (n *Node) peerInfo(p config.Peer) protocol.PeerInfo {
 	pi := protocol.PeerInfo{NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), PeerID: p.ID, Services: []protocol.ServiceInfo{},
-		Direct: n.ownAddrs()["direct"]}
+		Direct: n.directAddr()}
 	for _, name := range p.Shares {
 		switch name {
 		case peers.Inbox, peers.Files:

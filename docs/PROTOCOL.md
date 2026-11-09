@@ -117,7 +117,9 @@ link-local are skipped; at most 8). A dialer:
 
 1. connects to every candidate at once (`DirectDialTimeout`, 3 s) and keeps the first that
    succeeds;
-2. sends the 5-byte preamble `SOLD1`; the listener closes, sending nothing, on anything else;
+2. sends the preamble `SOLD1` + the first 16 bytes of `SHA-256("sol direct" | node public key)`.
+   The listener closes, sending nothing, on anything else, so only someone who already knows
+   which node they want ever sees its certificate;
 3. runs TLS 1.3. The server certificate is self-signed with the **node's ed25519 key**, and the
    dialer accepts only the key named in the address (no CA, no trust on first use);
 4. runs the normal handshake above inside TLS.
@@ -126,7 +128,9 @@ Direct addresses change with the network, so `PeerInfo` carries the callee's cur
 (`"direct": "sol-direct:..."`, or `""` when off), and the caller replaces its record. When a
 dialer reaches a peer over another transport although the peer has a direct address, it asks
 for the current one (`list`, at most every 5 minutes). A direct address that just failed is
-tried last for a minute, so a dead path doesn't slow every connection. Only the node
+tried last for a minute, doubling with each failure up to an hour, so a dead path doesn't slow
+every connection. A peer may only announce a direct address for its own node key; anything else
+is dropped. Only the node
 publication is carried: public and anonymous services are never reachable directly.
 
 ## What this protocol does not do

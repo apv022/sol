@@ -22,6 +22,9 @@ import (
 // terminating NUL).
 const maxSocketPath = 103
 
+// ErrAlreadyRunning means another node holds this data directory.
+var ErrAlreadyRunning = errors.New("another Sol node is already running with this data directory")
+
 // listenControl opens the control socket. A stale socket file left by a
 // crashed node is replaced; a live one means another node already runs on
 // this data directory.
@@ -34,7 +37,7 @@ func listenControl(path string) (net.Listener, error) {
 	}
 	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 		c.Close()
-		return nil, errors.New("another Sol node is already running with this data directory")
+		return nil, ErrAlreadyRunning
 	}
 	os.Remove(path)
 	ln, err := net.Listen("unix", path)

@@ -42,8 +42,13 @@ func transportPreference(name string) int {
 
 // directBackoff is how long a failed direct address is tried last instead
 // of first, so a dead direct path doesn't add DirectDialTimeout to every
-// connection.
-var directBackoff = time.Minute
+// connection. It doubles with each failure of the same address, up to
+// directBackoffMax (two peers on different home networks advertise LAN
+// addresses the other can never reach).
+var (
+	directBackoff    = time.Minute
+	directBackoffMax = time.Hour
+)
 
 // addrsInOrder lists p's addresses: its direct address first (unless it
 // failed within directBackoff), then the one that last worked, then the
@@ -75,19 +80,22 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	df := n.directFail[p.ID]
 	n.mu.Unlock()
 	direct := p.Addrs["direct"]
-	if _, ok := n.reg.Get("direct"); !ok || (df.addr == direct && time.Since(df.at) < directBackoff) {
-		direct = "" // not now: tried in the normal order below
-	}
+	backingOff := direct != "" && df.addr == direct && time.Since(df.at) < df.wait
 	out := make([]string, 0, len(cs)+1)
-	for _, a := range []string{direct, last} {
-		if a != "" && !slices.Contains(out, a) {
+	add := func(a string) {
+		if a != "" && !slices.Contains(out, a) && !(backingOff && a == direct) {
 			out = append(out, a)
 		}
 	}
+	if _, ok := n.reg.Get("direct"); ok {
+		add(direct)
+	}
+	add(last)
 	for _, c := range cs {
-		if !slices.Contains(out, c.addr) {
-			out = append(out, c.addr)
-		}
+		add(c.addr)
+	}
+	if backingOff {
+		out = append(out, direct) // last resort only
 	}
 	return out
 }
@@ -112,14 +120,15 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
 			if t.Name() == "direct" {
-				n.mu.Lock()
-				n.directFail[p.ID] = directFailure{addr, time.Now()}
-				n.mu.Unlock()
+				n.noteDirectFailure(p.ID, addr)
 			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
 			conn.Close()
+			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) {
+				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
+			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
 				return nil, err // the peer answered; another path will not help
 			}
@@ -324,11 +333,13 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 }
 
 // setDirect records a peer's current direct-mode address, or forgets it
-// when the peer has direct mode off. A malformed address is ignored.
+// when the peer has direct mode off. An address that is malformed or names
+// another node's key is dropped: a peer may only announce its own.
 func setDirect(p *config.Peer, addr string) {
 	if addr != "" {
-		if _, _, err := transport.ParseDirectAddr(addr); err != nil {
-			return
+		pub, _, err := transport.ParseDirectAddr(addr)
+		if err != nil || (p.NodeID != "" && identity.NodeID(pub) != p.NodeID) {
+			addr = ""
 		}
 	}
 	if p.Addrs == nil {
@@ -402,6 +413,23 @@ func (n *Node) Unpair(ctx context.Context, id string) (p config.Peer, notified b
 type directFailure struct {
 	addr string
 	at   time.Time
+	wait time.Duration // current backoff
+}
+
+// noteDirectFailure starts or doubles the backoff for peer id's direct
+// address. Dials without a peer record (pairing) aren't tracked.
+func (n *Node) noteDirectFailure(id, addr string) {
+	if id == "" {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f := n.directFail[id]
+	wait := directBackoff
+	if f.addr == addr && f.wait > 0 {
+		wait = min(f.wait*2, directBackoffMax)
+	}
+	n.directFail[id] = directFailure{addr: addr, at: time.Now(), wait: wait}
 }
 
 // refreshDirectEvery rate-limits refreshDirect per peer.

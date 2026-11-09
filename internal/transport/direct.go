@@ -4,27 +4,33 @@ package transport
 // straight to this machine's IP addresses (same LAN, IPv6, a tailnet, a
 // public IP) when they can, and over Tor when they can't.
 //
-// Wire: the dialer sends the 5-byte preamble "SOLD1", then a TLS 1.3
-// handshake, then the usual Sol handshake (internal/protocol) inside TLS.
+// Wire: the dialer sends the preamble "SOLD1" + tag (16 bytes,
+// SHA-256("sol direct" | node public key)), then a TLS 1.3 handshake, then
+// the usual Sol handshake (internal/protocol) inside TLS. The tag proves the
+// dialer already knows which node it wants, so the listener never shows its
+// certificate (the node's public key) to anyone who doesn't.
 //
 // Invariants:
 //   - The server certificate is self-signed with the node's own ed25519 key,
 //     and the dialer accepts only the exact key named in the address
 //     ("sol-direct:<node id>@host:port,..."). There is no CA and nothing to
 //     trust on first use: a man in the middle can't complete the handshake.
-//   - Anything that doesn't send the preamble gets no bytes back (port
-//     scanners and HTTP probes see a silent port, like the node listener).
+//   - Anything that doesn't send this node's preamble gets no bytes back
+//     (port scanners and HTTP probes see a silent port, like the node
+//     listener), and can't learn the node's key.
+//   - A port that can't be opened is retried until it can.
 //   - Only the node publication ("node") is carried. Public and anonymous
 //     services are never published here.
 //   - Direct mode shows peers this machine's IP addresses, so it is opt-in
 //     (config transports.direct).
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -43,8 +49,9 @@ import (
 )
 
 const (
-	directScheme   = "sol-direct:"
-	directPreamble = "SOLD1"
+	directScheme  = "sol-direct:"
+	directMagic   = "SOLD1"
+	directTagSize = 16
 	// DirectDialTimeout bounds one direct attempt (all candidates in
 	// parallel). It is short on purpose: Tor is the fallback.
 	DirectDialTimeout = 3 * time.Second
@@ -58,21 +65,39 @@ type Direct struct {
 	// port forwarded on the router). Empty means this machine's addresses.
 	Advertise []string
 
-	key    crypto.Signer // the node key (ed25519)
-	nodeID string
-	cert   tls.Certificate
+	key      crypto.Signer // the node key (ed25519)
+	nodeID   string
+	preamble []byte      // what dialers must send first (see the file comment)
+	srvTLS   *tls.Config // built once in Start
 
-	mu     sync.Mutex
-	state  State
-	detail string
-	ln     net.Listener
-	target string
+	mu       sync.Mutex
+	state    State
+	detail   string
+	ln       net.Listener
+	target   string
+	retrying bool
+	cands    []string // cached candidates, refreshed every candidateTTL
+	candsAt  time.Time
+	stopped  chan struct{}
+}
+
+// candidateTTL is how long the interface scan is cached. Status is called
+// on every dial and panel refresh; addresses change rarely.
+const candidateTTL = 30 * time.Second
+
+// retryListenEvery is how often a busy direct port is tried again.
+var retryListenEvery = 10 * time.Second
+
+func preambleFor(pub ed25519.PublicKey) []byte {
+	h := sha256.Sum256(append([]byte("sol direct"), pub...))
+	return append([]byte(directMagic), h[:directTagSize]...)
 }
 
 // NewDirect constructs the transport for the node key (identity.Signer).
 func NewDirect(listenAddr string, key crypto.Signer, advertise ...string) *Direct {
+	pub := key.Public().(ed25519.PublicKey)
 	return &Direct{ListenAddr: listenAddr, Advertise: advertise, key: key,
-		nodeID: identity.NodeID(key.Public().(ed25519.PublicKey)), state: StateStopped}
+		nodeID: identity.NodeID(pub), preamble: preambleFor(pub), state: StateStopped}
 }
 
 // SetAdvertise replaces the advertised candidates (nil: this machine's
@@ -80,6 +105,7 @@ func NewDirect(listenAddr string, key crypto.Signer, advertise ...string) *Direc
 func (d *Direct) SetAdvertise(cands []string) {
 	d.mu.Lock()
 	d.Advertise = cands
+	d.candsAt = time.Time{}
 	d.mu.Unlock()
 }
 
@@ -95,7 +121,8 @@ func (d *Direct) Start(ctx context.Context) error {
 		d.state, d.detail = StateFailed, err.Error()
 		return err
 	}
-	d.cert = cert
+	d.srvTLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
+	d.stopped = make(chan struct{})
 	d.state = StateReady
 	return nil
 }
@@ -132,16 +159,46 @@ func (d *Direct) Publish(ctx context.Context, p Publication) (string, error) {
 		return "", errors.New("direct: not started")
 	}
 	d.target = p.Target
-	if d.ln == nil {
-		ln, err := net.Listen("tcp", d.ListenAddr)
-		if err != nil {
-			d.detail = "can't listen on " + d.ListenAddr + ": " + err.Error()
-			return "", fmt.Errorf("direct listen %s: %w", d.ListenAddr, err)
-		}
-		d.ln = ln
-		go d.serve(ln)
+	if d.ln == nil && !d.listenLocked() && !d.retrying {
+		d.retrying = true
+		go d.retryListen()
+		return "", errors.New("direct: " + d.detail)
 	}
 	return d.addressLocked(), nil
+}
+
+func (d *Direct) listenLocked() bool {
+	ln, err := net.Listen("tcp", d.ListenAddr)
+	if err != nil {
+		d.state, d.detail = StateStarting, "can't listen on "+d.ListenAddr+" ("+err.Error()+"); retrying"
+		return false
+	}
+	d.ln, d.state, d.detail, d.candsAt = ln, StateReady, "", time.Time{}
+	go d.serve(ln)
+	return true
+}
+
+// retryListen keeps trying the port until it opens or the transport stops.
+// Peers learn the new address at their next refresh.
+func (d *Direct) retryListen() {
+	tick := time.NewTicker(retryListenEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-d.stopped:
+			return
+		case <-tick.C:
+		}
+		d.mu.Lock()
+		done := d.ln != nil || d.state == StateStopped || d.listenLocked()
+		if done {
+			d.retrying = false
+		}
+		d.mu.Unlock()
+		if done {
+			return
+		}
+	}
 }
 
 // addressLocked builds "sol-direct:<node id>@cand,cand,...".
@@ -156,7 +213,10 @@ func (d *Direct) addressLocked() string {
 	case la.IP.IsLoopback(): // tests, or a node only meant for this machine
 		cands = []string{la.String()}
 	default:
-		cands = candidates(la.Port)
+		if time.Since(d.candsAt) > candidateTTL {
+			d.cands, d.candsAt = candidates(la.Port), time.Now()
+		}
+		cands = d.cands
 	}
 	if len(cands) == 0 {
 		return ""
@@ -175,14 +235,16 @@ func skipIface(name string) bool {
 	return false
 }
 
-// candidates lists host:port for every address a peer might reach: private
-// and public IPv4, global IPv6 (no loopback, no link-local).
+// candidates lists host:port for every address a peer might reach (no
+// loopback, no link-local), most useful first: private IPv4 (same LAN),
+// then global IPv6, then other IPv4 (tailnet, public), so the cap doesn't
+// push out a working IPv6 address.
 func candidates(port int) []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	var v4, v6 []string
+	var lan, v6, v4 []string
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || skipIface(ifc.Name) {
 			continue
@@ -198,14 +260,17 @@ func candidates(port int) []string {
 				continue
 			}
 			hp := net.JoinHostPort(ip.String(), strconv.Itoa(port))
-			if ip.To4() != nil {
+			switch {
+			case ip.To4() != nil && ip.IsPrivate():
+				lan = append(lan, hp)
+			case ip.To4() != nil:
 				v4 = append(v4, hp)
-			} else if ip.IsGlobalUnicast() {
+			case ip.IsGlobalUnicast():
 				v6 = append(v6, hp)
 			}
 		}
 	}
-	out := append(v4, v6...)
+	out := append(append(lan, v6...), v4...)
 	if len(out) > directMaxCands {
 		out = out[:directMaxCands]
 	}
@@ -228,15 +293,15 @@ func (d *Direct) serve(ln net.Listener) {
 
 func (d *Direct) handle(c net.Conn) {
 	c.SetDeadline(time.Now().Add(10 * time.Second))
-	pre := make([]byte, len(directPreamble))
-	if _, err := io.ReadFull(c, pre); err != nil || !bytes.Equal(pre, []byte(directPreamble)) {
-		c.Close() // not a Sol node: send nothing
+	pre := make([]byte, len(d.preamble))
+	if _, err := io.ReadFull(c, pre); err != nil || subtle.ConstantTimeCompare(pre, d.preamble) != 1 {
+		c.Close() // not someone looking for this node: send nothing
 		return
 	}
 	d.mu.Lock()
-	cert, target := d.cert, d.target
+	target := d.target
 	d.mu.Unlock()
-	tc := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	tc := tls.Server(c, d.srvTLS)
 	if err := tc.Handshake(); err != nil {
 		tc.Close()
 		return
@@ -347,7 +412,7 @@ func dialPinned(ctx context.Context, addr string, pub ed25519.PublicKey) (net.Co
 	if dl, ok := ctx.Deadline(); ok {
 		raw.SetDeadline(dl)
 	}
-	if _, err := raw.Write([]byte(directPreamble)); err != nil {
+	if _, err := raw.Write(preambleFor(pub)); err != nil {
 		raw.Close()
 		return nil, err
 	}
@@ -404,6 +469,9 @@ func (d *Direct) Stop() error {
 	if d.ln != nil {
 		d.ln.Close()
 		d.ln = nil
+	}
+	if d.stopped != nil && d.state != StateStopped {
+		close(d.stopped)
 	}
 	d.state = StateStopped
 	return nil

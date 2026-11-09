@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recorder struct{ calls []string }
@@ -41,7 +42,7 @@ func TestPlistEscapes(t *testing.T) {
 func TestLinuxEnableDisable(t *testing.T) {
 	home := t.TempDir()
 	rec := &recorder{}
-	m := Manager{GOOS: "linux", Home: home, Exe: "/usr/bin/sol", DataDir: "/home/a/.sol", Run: rec.run}
+	m := Manager{GOOS: "linux", SystemdRunning: true, Home: home, Exe: "/usr/bin/sol", DataDir: "/home/a/.sol", Run: rec.run}
 	if st := m.Status(); !st.Supported || st.Enabled {
 		t.Fatalf("before: %+v", st)
 	}
@@ -51,7 +52,7 @@ func TestLinuxEnableDisable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".config/systemd/user/sol.service")); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"systemctl --user daemon-reload", "systemctl --user reset-failed sol.service", "systemctl --user enable sol.service"}
+	want := []string{"systemctl --user show-environment", "systemctl --user daemon-reload", "systemctl --user reset-failed sol.service", "systemctl --user enable sol.service"}
 	if strings.Join(rec.calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("calls %q, want %q", rec.calls, want)
 	}
@@ -82,7 +83,7 @@ func TestLinuxEnableDisable(t *testing.T) {
 	if err := m.Enable(true); err != nil {
 		t.Fatal(err)
 	}
-	if rec.calls[2] != "systemctl --user enable --now sol.service" {
+	if rec.calls[3] != "systemctl --user enable --now sol.service" {
 		t.Fatalf("start now: %q", rec.calls)
 	}
 
@@ -99,6 +100,9 @@ func TestLinuxEnableDisable(t *testing.T) {
 }
 
 func TestDarwinEnable(t *testing.T) {
+	old := bootoutWait
+	bootoutWait = 10 * time.Millisecond
+	t.Cleanup(func() { bootoutWait = old })
 	home := t.TempDir()
 	rec := &recorder{}
 	m := Manager{GOOS: "darwin", Home: home, Exe: "/usr/local/bin/sol", DataDir: "/Users/a/.sol", UID: 501, Run: rec.run}
@@ -129,7 +133,7 @@ func TestWindowsIsHonest(t *testing.T) {
 func TestUnregisteredOtherEntryIsProtected(t *testing.T) {
 	home := t.TempDir()
 	rec := &recorder{}
-	a := Manager{GOOS: "linux", Home: home, Exe: "/usr/bin/sol", DataDir: "/data/a", Run: rec.run}
+	a := Manager{GOOS: "linux", SystemdRunning: true, Home: home, Exe: "/usr/bin/sol", DataDir: "/data/a", Run: rec.run}
 	if err := a.Enable(false); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +149,7 @@ func TestUnregisteredOtherEntryIsProtected(t *testing.T) {
 }
 
 func TestXDGConfigHome(t *testing.T) {
-	m := Manager{GOOS: "linux", Home: "/home/a", ConfigHome: "/home/a/.xdg"}
+	m := Manager{GOOS: "linux", SystemdRunning: true, Home: "/home/a", ConfigHome: "/home/a/.xdg"}
 	if m.unitPath() != "/home/a/.xdg/systemd/user/sol.service" {
 		t.Fatal(m.unitPath())
 	}
@@ -157,5 +161,58 @@ func TestDarwinActiveNeedsARunningProcess(t *testing.T) {
 	}}
 	if m.Active() {
 		t.Fatal("a loaded job without a process is not active")
+	}
+}
+
+func TestNoSystemdIsUnsupported(t *testing.T) {
+	m := Manager{GOOS: "linux", Home: t.TempDir(), DataDir: "/d"}
+	if m.Status().Supported {
+		t.Fatal("linux without systemd claims support")
+	}
+	if err := m.Enable(true); err != ErrNotImplemented {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := os.Stat(m.unitPath()); !os.IsNotExist(err) {
+		t.Fatal("unit written without systemd")
+	}
+}
+
+func TestFailedReloadLeavesNoUnit(t *testing.T) {
+	m := Manager{GOOS: "linux", SystemdRunning: true, Home: t.TempDir(), DataDir: "/d",
+		Run: func(string, ...string) ([]byte, error) { return nil, os.ErrPermission }}
+	if err := m.Enable(true); err == nil {
+		t.Fatal("expected the systemctl error")
+	}
+	if _, err := os.Stat(m.unitPath()); !os.IsNotExist(err) {
+		t.Fatal("half-set-up unit left behind")
+	}
+}
+
+func TestPathWithDollarIsKept(t *testing.T) {
+	if u := SystemdUnit("/s", "/d", "/opt/a$b/bin"); !strings.Contains(u, `Environment="PATH=/opt/a$b/bin"`) {
+		t.Fatalf("PATH mangled:\n%s", u)
+	}
+}
+
+func TestUnitGoesWhereTheManagerLooks(t *testing.T) {
+	home := t.TempDir()
+	m := Manager{GOOS: "linux", SystemdRunning: true, Home: home, ConfigHome: home + "/shell-only", DataDir: "/d",
+		Run: func(name string, args ...string) ([]byte, error) {
+			if strings.Join(args, " ") == "--user show-environment" {
+				return []byte("HOME=" + home + "\nPATH=/usr/bin\n"), nil // the manager has no XDG_CONFIG_HOME
+			}
+			return nil, nil
+		}}
+	if err := m.Enable(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(home + "/.config/systemd/user/sol.service"); err != nil {
+		t.Fatal("unit not in the manager's config home")
+	}
+	// Status from the shell (with its own XDG_CONFIG_HOME) still finds it.
+	os.MkdirAll(home+"/.config/systemd/user/default.target.wants", 0o755)
+	os.Symlink("../sol.service", home+"/.config/systemd/user/default.target.wants/sol.service")
+	if !m.Status().Enabled {
+		t.Fatalf("status from the shell: %+v", m.Status())
 	}
 }

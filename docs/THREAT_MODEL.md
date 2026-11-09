@@ -29,10 +29,14 @@ says plainly what is and isn't protected in the current build. The longer design
 
 ## What is NOT protected (yet, or ever)
 
-- **Direct mode shows your IP addresses** (LAN, IPv6, tailnet) to your peers, and anyone who can
-  reach the direct port and sends the preamble learns your node key (its public half). It's off
-  by default; turn it on only for peers you'd trust with your IP. Public and anonymous services
-  are never published on it. Port scanners that don't speak Sol get no reply.
+- **Direct mode shows your IP addresses** (LAN, IPv6, tailnet) to your peers. It's off by
+  default; turn it on only for peers you'd trust with your IP. Public and anonymous services are
+  never published on it. The port answers only dialers that already know your node ID (the
+  preamble carries a hash of it), so scanners get silence and can't learn your key. Someone who
+  has your node ID (from a pairing link) can still tell the port is a Sol node.
+- **Direct addresses are dialled as announced.** A peer can announce a direct address only for
+  its own key, but it chooses the host:ports, so a malicious peer could make your node send a
+  short TLS hello to up to 8 addresses on your network, at most once a minute (backing off).
 - **Clearnet transport.** It's unencrypted and shows your LAN IP. Use it only on a trusted LAN or
   for testing. Peers are still authenticated, but traffic can be read.
 - **Your peers know your onion.** Pairing is mutual, so each peer can reach your node's address
