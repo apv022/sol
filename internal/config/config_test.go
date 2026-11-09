@@ -207,3 +207,17 @@ func TestLoadKeepsDirectAdvertiseAsWritten(t *testing.T) {
 		t.Fatalf("stored direct settings changed: %+v", tc)
 	}
 }
+
+func TestDirectListenValidation(t *testing.T) {
+	c := Default()
+	for _, bad := range []string{"7701", "host", ":99999"} {
+		c.Transports.DirectListen = bad
+		if c.Validate() == nil {
+			t.Errorf("direct_listen %q accepted", bad)
+		}
+	}
+	c.Transports.DirectListen = "127.0.0.1:7701"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

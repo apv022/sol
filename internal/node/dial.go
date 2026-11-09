@@ -162,10 +162,10 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 				delete(n.directFail, p.ID)
 			}
 			n.mu.Unlock()
-			// Reached it, but not directly although it has a direct address (it
-			// failed just now, or is backing off): the address may be stale, so
-			// ask for the current one over this working path. Rate-limited.
-			if t.Name() != "direct" && p.Addrs["direct"] != "" && req.Op != protocol.OpList {
+			// Reached it, but not directly: its direct address may be stale,
+			// or it may have turned direct mode on since we last asked. Ask
+			// over this working path (rate-limited per peer).
+			if t.Name() != "direct" && req.Op != protocol.OpList {
 				if n.directUsable() {
 					go n.refreshDirect(p.ID)
 				}
@@ -356,7 +356,15 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 // setDirect records a peer's current direct-mode address, or forgets it
 // when the peer has direct mode off. An address that is malformed or names
 // another node's key is dropped: a peer may only announce its own.
+//
+// Any other key holding a direct address is dropped too: the dialer routes
+// by address, not by key, so it would otherwise bypass this check.
 func setDirect(p *config.Peer, addr string) {
+	for k, v := range p.Addrs {
+		if k != "direct" && transport.IsDirect(v) {
+			delete(p.Addrs, k)
+		}
+	}
 	if addr != "" {
 		pub, _, err := transport.ParseDirectAddr(addr)
 		if err != nil || (p.NodeID != "" && identity.NodeID(pub) != p.NodeID) {
@@ -467,8 +475,9 @@ func (n *Node) noteDirectFailure(id, addr string) {
 	n.directFail[id] = directFailure{addr: addr, at: time.Now(), wait: wait}
 }
 
-// refreshDirectEvery rate-limits refreshDirect per peer.
-const refreshDirectEvery = 5 * time.Minute
+// refreshDirectEvery rate-limits refreshDirect per peer: a peer that turns
+// direct mode on is learned within this long of being reached over Tor.
+var refreshDirectEvery = 5 * time.Minute
 
 // refreshDirect asks a peer for its current addresses after a direct
 // attempt failed (it moved networks, or got a new DHCP lease), at most once

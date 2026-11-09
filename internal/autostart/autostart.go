@@ -340,7 +340,9 @@ func (m Manager) state(path string, registered bool, mine string) State {
 }
 
 // bootoutWait bounds how long bootout waits for the job to go away.
-var bootoutWait = 10 * time.Second
+// It covers a node's normal shutdown (tor, open streams); if it runs out,
+// the new job finds the data directory still locked and doesn't start.
+var bootoutWait = 30 * time.Second
 
 func (m Manager) bootout() {
 	target := fmt.Sprintf("gui/%d/%s", m.UID, Label)
@@ -486,8 +488,9 @@ var goRunPath = regexp.MustCompile(`(^|/)go-build[0-9]+/b[0-9]+/exe/[^/]+$`)
 // directory or (Go 1.24+) cached in the build cache, which `go clean` and
 // cache trimming delete.
 func isGoRunBinary(exe string) bool {
-	if goRunPath.MatchString(filepath.ToSlash(exe)) {
-		return true
+	base := filepath.Base(exe)
+	if goRunPath.MatchString(filepath.ToSlash(exe)) || strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return true // (go test binaries too: tests must not read the real user's entry)
 	}
 	cache := os.Getenv("GOCACHE")
 	if cache == "" {

@@ -216,7 +216,7 @@ func (d *Direct) retryListen(stopped chan struct{}) {
 			d.mu.Unlock()
 			return
 		}
-		done := d.ln != nil || d.listenLocked()
+		done := d.ln != nil || d.target == "" || d.listenLocked() // target "": unpublished
 		if done {
 			d.retrying = false
 		}
@@ -312,7 +312,13 @@ func candidates(la *net.TCPAddr, listen string) []string {
 	return out
 }
 
+// maxPreAuth caps connections still in the preamble or TLS handshake. The
+// port can be public, so without a cap anyone could hold thousands of idle
+// sockets for 10 s each and exhaust the node's file descriptors.
+const maxPreAuth = 64
+
 func (d *Direct) serve(ln net.Listener) {
+	slots := make(chan struct{}, maxPreAuth)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -322,11 +328,26 @@ func (d *Direct) serve(ln net.Listener) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		go d.handle(c)
+		select {
+		case slots <- struct{}{}:
+			go d.handle(c, func() { <-slots })
+		default:
+			c.Close() // too many unauthenticated connections: drop, send nothing
+		}
 	}
 }
 
-func (d *Direct) handle(c net.Conn) {
+// handle runs one inbound connection; done releases its pre-auth slot once
+// the TLS handshake is over (or the connection is dropped).
+func (d *Direct) handle(c net.Conn, done func()) {
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			done()
+		}
+	}
+	defer release()
 	c.SetDeadline(time.Now().Add(10 * time.Second))
 	pre := make([]byte, len(d.preamble))
 	if _, err := io.ReadFull(c, pre); err != nil || subtle.ConstantTimeCompare(pre, d.preamble) != 1 {
@@ -334,14 +355,19 @@ func (d *Direct) handle(c net.Conn) {
 		return
 	}
 	d.mu.Lock()
-	target := d.target
+	target, cfg := d.target, d.srvTLS
 	d.mu.Unlock()
-	tc := tls.Server(c, d.srvTLS)
+	if target == "" || cfg == nil {
+		c.Close() // unpublished or stopped meanwhile
+		return
+	}
+	tc := tls.Server(c, cfg)
 	if err := tc.Handshake(); err != nil {
 		tc.Close()
 		return
 	}
 	c.SetDeadline(time.Time{})
+	release()
 	out, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
 		slog.Debug("direct: node listener unreachable", "err", err)
@@ -358,6 +384,7 @@ func (d *Direct) Unpublish(id string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.target = "" // also tells a running retry loop to stop
 	if d.ln != nil {
 		d.ln.Close()
 		d.ln = nil
@@ -533,4 +560,12 @@ func (d *Direct) Stop() error {
 	}
 	d.state, d.retrying = StateStopped, false
 	return nil
+}
+
+// SetRetryListenEvery shortens the busy-port retry interval for direct
+// transports created after the call (tests in other packages).
+func SetRetryListenEvery(t interface{ Cleanup(func()) }, d time.Duration) {
+	old := retryListenEvery
+	retryListenEvery = d
+	t.Cleanup(func() { retryListenEvery = old })
 }

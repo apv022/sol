@@ -33,6 +33,13 @@ func TestSetDirectOnlyAcceptsThePeersOwnAddress(t *testing.T) {
 	if p.Addrs["direct"] != "" {
 		t.Fatalf("accepted another node's address: %q", p.Addrs["direct"])
 	}
+	// A direct address under another key would bypass the check (the dialer
+	// routes by address, not key): dropped.
+	p.Addrs["clearnet"] = "sol-direct:" + other + "@10.0.0.9:7701"
+	setDirect(&p, "")
+	if _, ok := p.Addrs["clearnet"]; ok {
+		t.Fatal("kept a direct address under another key")
+	}
 	setDirect(&p, "sol-direct:"+own+"@10.0.0.2:7701")
 	setDirect(&p, "garbage")
 	if p.Addrs["direct"] != "" || p.Addrs["tor"] == "" {

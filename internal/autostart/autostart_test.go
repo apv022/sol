@@ -302,3 +302,9 @@ func TestGoCacheBinaryIsGoRun(t *testing.T) {
 		t.Fatal("cached go run binary not detected")
 	}
 }
+
+func TestGoTestBinaryIsTemporary(t *testing.T) {
+	if !isGoRunBinary("/tmp/go-build1/b001/node.test") || !isGoRunBinary(`C:\\Temp\\b001\\node.test.exe`) {
+		t.Fatal("go test binary not detected")
+	}
+}

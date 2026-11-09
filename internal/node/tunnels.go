@@ -457,3 +457,11 @@ func SetRetryPortEvery(t interface{ Cleanup(func()) }, d time.Duration) {
 	retryPortEvery = d
 	t.Cleanup(func() { retryPortEvery = old })
 }
+
+// SetRefreshDirectEvery shortens the direct-address refresh interval for a
+// test.
+func SetRefreshDirectEvery(t interface{ Cleanup(func()) }, d time.Duration) {
+	old := refreshDirectEvery
+	refreshDirectEvery = d
+	t.Cleanup(func() { refreshDirectEvery = old })
+}

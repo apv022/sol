@@ -1,8 +1,10 @@
 package e2e
 
 import (
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/identity"
@@ -171,4 +173,36 @@ func TestLinkWithForeignDirectAddressIsCleaned(t *testing.T) {
 	if got := aOnB.Addrs["direct"]; got != "" {
 		t.Fatalf("stored a direct address for another node: %q", got)
 	}
+}
+
+// A peer that turns direct mode on after pairing (here: its port was busy
+// when it paired) is learned by itself the next time it's reached otherwise.
+func TestDirectLearnedAfterPairing(t *testing.T) {
+	transport.SetRetryListenEvery(t, 20*time.Millisecond)
+	node.SetRefreshDirectEvery(t, 0) // in real use: within 5 minutes
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	dir := t.TempDir()
+	id, _ := identity.LoadOrCreate(filepath.Join(dir, "node.key"))
+	a := startNode(t, dir, "alpha", func(o *node.Options) {
+		o.Transports = []transport.Transport{transport.NewDirect(busy.Addr().String(), id.Signer()), transport.NewClearnet("127.0.0.1:0", "")}
+	})
+	b, _ := directNode(t, "beta")
+	webApp(t, a, "web", "alpha says")
+	bOnA, aOnB := pair(t, a, b)
+	a.SetShare(bOnA.ID, "web", true)
+	b.RefreshPeer(b.ctx, aOnB.ID)
+	if via := viaOf(t, b, aOnB.ID, "web"); via != "clearnet" {
+		t.Fatalf("before a's direct port opens: %q", via)
+	}
+	busy.Close() // a's direct listener comes up on its own
+	waitFor(t, "b to learn a's direct address and use it", func() bool {
+		viaOf(t, b, aOnB.ID, "web") // each fallback dial may trigger the refresh
+		time.Sleep(20 * time.Millisecond)
+		for _, p := range b.Peers() {
+			if p.ID == aOnB.ID && p.Addrs["direct"] != "" {
+				return viaOf(t, b, aOnB.ID, "web") == "direct"
+			}
+		}
+		return false
+	})
 }

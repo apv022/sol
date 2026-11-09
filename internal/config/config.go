@@ -20,10 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -438,6 +440,13 @@ func (c *Config) validateLocked() error {
 			errs = append(errs, fmt.Errorf("peer %q: %w", p.ID, ErrDuplicate))
 		}
 		ids[p.ID] = true
+	}
+	if c.Transports.DirectListen != "" {
+		if _, port, err := net.SplitHostPort(c.Transports.DirectListen); err != nil {
+			errs = append(errs, fmt.Errorf("direct_listen %q: want host:port, e.g. \":7701\"", c.Transports.DirectListen))
+		} else if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
+			errs = append(errs, fmt.Errorf("direct_listen %q: bad port", c.Transports.DirectListen))
+		}
 	}
 	ports := map[int]bool{}
 	for _, t := range c.Tunnels {

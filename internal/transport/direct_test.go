@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -302,4 +303,59 @@ func TestDirectHandlesOnlyWhileStarted(t *testing.T) {
 	if d.Handles(a) {
 		t.Fatal("handles after Stop")
 	}
+}
+
+// Unpublish while the port is being retried: the loop stops, and the node
+// never becomes reachable directly after it asked not to be.
+func TestUnpublishStopsTheRetryLoop(t *testing.T) {
+	SetRetryListenEvery(t, 20*time.Millisecond)
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := busy.Addr().String()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(addr, priv)
+	d.Start(context.Background())
+	t.Cleanup(func() { d.Stop() })
+	d.Publish(context.Background(), Publication{ID: "node", Target: echoTarget(t)})
+	d.Unpublish("node")
+	busy.Close()
+	time.Sleep(150 * time.Millisecond)
+	if c, err := net.Dial("tcp", addr); err == nil {
+		c.Close()
+		t.Fatal("the retry loop reopened an unpublished port")
+	}
+}
+
+// Idle unauthenticated connections are capped; past the cap, new ones are
+// dropped at once instead of piling up.
+func TestPreAuthConnectionsAreCapped(t *testing.T) {
+	_, addr := startDirect(t)
+	_, cands, _ := ParseDirectAddr(addr)
+	var idle []net.Conn
+	t.Cleanup(func() {
+		for _, c := range idle {
+			c.Close()
+		}
+	})
+	for range maxPreAuth {
+		c, err := net.Dial("tcp", cands[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, c)
+	}
+	time.Sleep(100 * time.Millisecond) // let the server take them
+	extra, err := net.Dial("tcp", cands[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	extra.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := extra.Read(make([]byte, 1)); isTimeout(err) {
+		t.Fatal("connection past the cap was held open")
+	}
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
