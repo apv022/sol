@@ -153,7 +153,7 @@ func (n *Node) Peers() []api.PeerView {
 		k := key{ci.peer, ci.service, ci.outbound}
 		cv := live[k]
 		if cv == nil {
-			cv = &api.ConnectionView{Service: ci.service, Outbound: ci.outbound, Since: ci.since}
+			cv = &api.ConnectionView{Service: ci.service, Outbound: ci.outbound, Since: ci.since, Via: ci.via}
 			live[k] = cv
 		}
 		cv.Streams++

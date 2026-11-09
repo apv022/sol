@@ -106,13 +106,17 @@ type Node struct {
 	public   map[string]*publicService
 	lastAuth map[string]string // transport -> client-auth key set last published for the node
 	lastGood map[string]string // peer id -> address that last worked
+
+	tmu     sync.Mutex
+	tunnels map[int]*tunnel // by local port (tunnels.go)
 }
 
 // connInfo describes one live, handshake-verified connection with a peer.
 type connInfo struct {
 	peer, service string
 	since         time.Time
-	outbound      bool // we dialed the peer (false: the peer dialed us)
+	outbound      bool   // we dialed the peer (false: the peer dialed us)
+	via           string // outbound only: the transport that carried it
 }
 
 type publicService struct {
@@ -167,6 +171,7 @@ func New(opts Options) (*Node, error) {
 		public:   map[string]*publicService{},
 		lastAuth: map[string]string{},
 		lastGood: map[string]string{},
+		tunnels:  map[int]*tunnel{},
 	}
 	ts := opts.Transports
 	if ts == nil {
@@ -181,6 +186,7 @@ func New(opts Options) (*Node, error) {
 	// longer even find our onion.
 	n.peers.OnRemove(func(p config.Peer) {
 		n.closeConns(func(ci connInfo) bool { return ci.peer == p.ID })
+		n.stopTunnels(func(t config.Tunnel) bool { return t.Peer == p.ID })
 		n.removeAccess(p)
 		n.mu.Lock()
 		delete(n.lastGood, p.ID)
@@ -245,6 +251,10 @@ func (n *Node) Run(ctx context.Context) error {
 	}
 	defer nodeLn.Close()
 	n.nodeAddr = nodeLn.Addr().String()
+
+	// Tunnels first, so the panel and CLI see them from their first request.
+	n.startSavedTunnels()
+	defer n.stopTunnels(func(config.Tunnel) bool { return true })
 
 	var panelSrv *http.Server
 	if n.opts.PanelAddr != "off" {
@@ -315,6 +325,7 @@ func (n *Node) shutdown(panelSrv *http.Server) {
 		panelSrv.Shutdown(sctx)
 		cancel()
 	}
+	n.stopTunnels(func(config.Tunnel) bool { return true })
 	n.closeConns(func(connInfo) bool { return true })
 	n.mu.Lock()
 	for _, p := range n.public {

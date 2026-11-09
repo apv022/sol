@@ -109,7 +109,7 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 			n.lastGood[p.ID] = addr
 			n.mu.Unlock()
 		}
-		return conn, nil
+		return &pathConn{Conn: conn, via: t.Name()}, nil
 	}
 	return nil, errors.Join(errs...)
 }
@@ -167,10 +167,26 @@ func explain(err error) string {
 	return msg
 }
 
+// pathConn remembers which transport carried a connection ("tor",
+// "direct", ...), for the panel's "via" indicator.
+type pathConn struct {
+	net.Conn
+	via string
+}
+
+// CloseWrite keeps half-close working through the wrapper.
+func (c *pathConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
 // trackedConn unregisters itself from the node's connection table on Close.
 type trackedConn struct {
 	net.Conn
 	n    *Node
+	via  string
 	once sync.Once
 }
 
@@ -202,8 +218,12 @@ func (n *Node) DialPeer(ctx context.Context, id, service string) (net.Conn, erro
 	if err != nil {
 		return nil, err
 	}
-	tc := &trackedConn{Conn: conn, n: n}
-	n.track(tc, connInfo{peer: p.ID, service: service, since: time.Now().UTC(), outbound: true})
+	via := ""
+	if pc, ok := conn.(*pathConn); ok {
+		via = pc.via
+	}
+	tc := &trackedConn{Conn: conn, n: n, via: via}
+	n.track(tc, connInfo{peer: p.ID, service: service, since: time.Now().UTC(), outbound: true, via: via})
 	return tc, nil
 }
 

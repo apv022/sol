@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,7 +40,6 @@ import (
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/gateway"
-	"github.com/apv022/sol/internal/netutil"
 	"github.com/apv022/sol/internal/node"
 	"github.com/apv022/sol/internal/peers"
 )
@@ -71,8 +71,11 @@ Use your peers:
   sol peers [-r]              list peers; -r asks each one what it shares now
   sol share <peer> <service>  let a peer open one of your services (--off to stop).
                               "_files" is your shared-files page.
-  sol open <peer> [-L service=127.0.0.1:PORT ...] [--port 9000]
-                              open local tunnels to what a peer shares with you
+  sol open <peer> [service ...] [-L service=PORT ...]
+                              reach what a peer shares with you on 127.0.0.1 (ports from 9000).
+                              The node keeps these tunnels, also after restarts.
+  sol tunnels                 list open tunnels and whether the peer answers
+  sol close <peer> [service]  close tunnels
   sol send <peer> <file>...   send files to a peer (they land in its Files tab)
   sol unpair <peer>           remove a peer here and tell it to remove you
 
@@ -99,7 +102,7 @@ func main() {
 	commands := map[string]func(context.Context, []string) error{
 		"run": runNode, "node": runNode,
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
-		"open": runOpen, "send": runSend, "unpair": runUnpair, "name": runName,
+		"open": runOpen, "tunnels": runTunnels, "close": runClose, "send": runSend, "unpair": runUnpair, "name": runName,
 		"services": runServices, "service": runService,
 		"status": runStatus, "audit": runAudit,
 		"gateway": func(ctx context.Context, _ []string) error { return gateway.Run(ctx) },
@@ -335,21 +338,22 @@ func runShare(ctx context.Context, args []string) error {
 	return nil
 }
 
-// tunnelFlags collects repeated -L service=addr flags.
+// tunnelFlags collects repeated -L service=PORT flags.
 type tunnelFlags []string
 
 func (t *tunnelFlags) String() string     { return strings.Join(*t, ",") }
 func (t *tunnelFlags) Set(v string) error { *t = append(*t, v); return nil }
 
+// runOpen asks the node to keep tunnels to a peer's services. The node owns
+// them: they stay open after this command exits and come back on the same
+// ports after a restart.
 func runOpen(ctx context.Context, args []string) error {
 	var tunnels tunnelFlags
-	var firstPort int
 	data, pos := flags("open", args, func(fs *flag.FlagSet) {
-		fs.Var(&tunnels, "L", "tunnel `service=127.0.0.1:PORT` (repeatable)")
-		fs.IntVar(&firstPort, "port", 9000, "first local port for automatic mapping")
+		fs.Var(&tunnels, "L", "pick the local port: `service=PORT` or service=127.0.0.1:PORT (repeatable)")
 	})
-	if len(pos) != 1 {
-		return errors.New("usage: sol open <peer> [-L service=127.0.0.1:PORT ...]")
+	if len(pos) < 1 {
+		return errors.New("usage: sol open <peer> [service ...] [-L service=PORT ...]")
 	}
 	path := sock(data)
 	fmt.Println("Asking the peer what it shares (over Tor this can take a minute)...")
@@ -365,90 +369,105 @@ func runOpen(ctx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "couldn't refresh (%s); using the last known list\n", p.Error)
 	}
 
-	mapping := map[string]string{}
-	if len(tunnels) == 0 {
-		port := firstPort
-		for _, s := range p.Services {
-			if s.Name == peers.Inbox {
-				continue // use `sol send` for that
-			}
-			mapping[s.Name] = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-			port++
-		}
-	}
+	ports := map[string]int{}
 	for _, t := range tunnels {
 		svc, addr, ok := strings.Cut(t, "=")
 		if !ok {
-			return fmt.Errorf("bad -L %q, want service=127.0.0.1:PORT", t)
+			return fmt.Errorf("bad -L %q, want service=PORT", t)
 		}
-		mapping[svc] = addr
-		if host, _, err := net.SplitHostPort(addr); err == nil {
+		if host, port, err := net.SplitHostPort(addr); err == nil {
 			if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-				fmt.Printf("WARNING: %s is reachable from your network (%s). Anyone who can reach this\n"+
-					"machine can use the tunnel without pairing. Use this only on a network you trust.\n", svc, addr)
+				return fmt.Errorf("-L %s: tunnels listen on 127.0.0.1 only", t)
+			}
+			addr = port
+		}
+		n, err := strconv.Atoi(addr)
+		if err != nil {
+			return fmt.Errorf("bad -L %q, want service=PORT", t)
+		}
+		ports[svc] = n
+	}
+	want := pos[1:]
+	for svc := range ports {
+		if !slices.Contains(want, svc) {
+			want = append(want, svc)
+		}
+	}
+	if len(want) == 0 {
+		for _, s := range p.Services {
+			if s.Name != peers.Inbox { // use `sol send` for that
+				want = append(want, s.Name)
 			}
 		}
 	}
-	if len(mapping) == 0 {
+	if len(want) == 0 {
 		return fmt.Errorf("%s doesn't share anything with you yet. On %s: sol share %s <service>", p.Name, p.Name, quote(nameOf(ctx, data)))
 	}
-
-	errc := make(chan error, len(mapping))
-	for _, svc := range sortedKeys(mapping) {
-		ln, err := net.Listen("tcp", mapping[svc])
+	sort.Strings(want)
+	var errs []error
+	opened := 0
+	for _, svc := range want {
+		var t control.Tunnel
+		err := control.Call(ctx, path, control.Request{Op: control.OpTunnelOpen, Peer: p.ID, Service: unlabel(svc), Port: ports[svc]}, &t)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("%s: %w", label(svc), err))
+			continue
 		}
-		defer ln.Close()
-		scheme := "tcp"
-		for _, s := range p.Services {
-			if s.Name == svc && s.Protocol == config.ProtocolHTTP {
-				scheme = "http"
-			}
-		}
-		fmt.Printf("  %-14s -> %s://%s\n", label(svc), scheme, ln.Addr())
-		go func() { errc <- tunnel(ctx, ln, path, p.ID, svc) }()
+		opened++
+		fmt.Printf("  %-14s -> %s\n", label(svc), tunnelTarget(t))
 	}
-	fmt.Println("Tunnels open. Press Ctrl+C to stop.")
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-errc:
-		return err
+	if opened > 0 {
+		fmt.Printf("These stay open, also after a restart. Close with: sol close %s [service]\n", quote(p.Name))
 	}
+	return errors.Join(errs...)
 }
 
-// tunnel accepts local connections and pipes each one to the peer's
-// service through the node.
-func tunnel(ctx context.Context, ln net.Listener, path, peer, service string) error {
-	go func() { <-ctx.Done(); ln.Close() }()
-	for {
-		local, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		go func() {
-			c, err := control.Dial(ctx, path)
-			if err != nil {
-				local.Close()
-				return
-			}
-			err = c.Send(control.Request{Op: control.OpDial, Peer: peer, Service: service})
-			if err == nil {
-				err = c.Recv(nil) // the node's answer: did the peer accept?
-			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", label(service), err)
-				c.Close()
-				local.Close()
-				return
-			}
-			netutil.Pipe(local, c)
-		}()
+func tunnelTarget(t control.Tunnel) string {
+	if t.URL != "" {
+		return t.URL
 	}
+	return t.Addr + " (tcp)"
+}
+
+func runTunnels(ctx context.Context, args []string) error {
+	data, _ := flags("tunnels", args, nil)
+	var list []control.Tunnel
+	if err := control.Call(ctx, sock(data), control.Request{Op: control.OpTunnels}, &list); err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		fmt.Println("No tunnels. Open one with: sol open <peer>")
+		return nil
+	}
+	for _, t := range list {
+		state := "ok"
+		switch {
+		case !t.Listening:
+			state = "NOT LISTENING: " + t.LastError
+		case t.LastError != "":
+			state = "peer unreachable: " + t.LastError
+		case t.Via != "":
+			state = "ok, via " + t.Via
+		}
+		fmt.Printf("  %-12s %-14s %-28s %s\n", t.Peer, label(t.Service), tunnelTarget(t), state)
+	}
+	return nil
+}
+
+func runClose(ctx context.Context, args []string) error {
+	data, pos := flags("close", args, nil)
+	if len(pos) < 1 || len(pos) > 2 {
+		return errors.New("usage: sol close <peer> [service]")
+	}
+	req := control.Request{Op: control.OpTunnelClose, Peer: pos[0]}
+	if len(pos) == 2 {
+		req.Service = unlabel(pos[1])
+	}
+	if err := control.Call(ctx, sock(data), req, nil); err != nil {
+		return err
+	}
+	fmt.Println("Closed.")
+	return nil
 }
 
 func runSend(ctx context.Context, args []string) error {
@@ -671,6 +690,17 @@ func nameOf(ctx context.Context, data string) string {
 		return "<this node>"
 	}
 	return st.Name
+}
+
+// unlabel turns a label printed by label (e.g. "shared files") back into
+// the service name, so users can type what they see.
+func unlabel(s string) string {
+	for _, b := range []string{peers.Files, peers.Inbox} {
+		if s == label(b) || s == strings.ReplaceAll(label(b), " ", "-") {
+			return b
+		}
+	}
+	return s
 }
 
 func label(service string) string {

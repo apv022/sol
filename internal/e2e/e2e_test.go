@@ -36,9 +36,10 @@ import (
 
 type testNode struct {
 	*node.Node
-	t   *testing.T
-	ctx context.Context
-	dir string
+	t    *testing.T
+	ctx  context.Context
+	dir  string
+	stop func() // stops the node now (also runs at cleanup)
 }
 
 type opt func(*node.Options)
@@ -91,13 +92,14 @@ func startNode(t *testing.T, dir, name string, opts ...opt) *testNode {
 	exited := make(chan struct{})
 	var runErr error
 	go func() { runErr = n.Run(ctx); close(exited) }()
-	t.Cleanup(func() { cancel(); <-exited })
+	stop := func() { cancel(); <-exited }
+	t.Cleanup(stop)
 	select {
 	case <-n.Ready():
 	case <-exited:
 		t.Fatalf("node exited: %v", runErr)
 	}
-	return &testNode{Node: n, t: t, ctx: ctx, dir: dir}
+	return &testNode{Node: n, t: t, ctx: ctx, dir: dir, stop: stop}
 }
 
 // pair makes a and b peers (b joins a's link) and returns each one's record

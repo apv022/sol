@@ -9,7 +9,7 @@
 "use strict";
 
 let csrf = "";
-let state = { status: null, services: [], peers: [], files: [], events: [], audit: [] };
+let state = { status: null, services: [], peers: [], tunnels: [], files: [], events: [], audit: [] };
 
 // ---------- helpers ----------
 
@@ -98,6 +98,8 @@ document.addEventListener("click", e => {
     "unpair": () => unpair(arg),
     "send-file": () => pickFilesFor(arg),
     "refresh-peer": () => refreshPeer(arg),
+    "open-tunnel": () => openTunnel(arg, t.dataset.svc),
+    "close-tunnel": () => closeTunnel(arg),
     "copy-text": () => copy(arg),
     "show-qr": () => showQr(arg),
     "play": () => play(arg),
@@ -318,15 +320,12 @@ function renderPeers() {
       ${p.online
         ? `<p class="okline">🔒 Connected and verified</p>
            ${p.connections.map(c => `<p class="small">${c.outbound ? "You →" : "→ your"} <b>${esc(svcLabel(c.service))}</b>
-             <span class="muted">· ${c.streams} connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}</span></p>`).join("")}`
+             <span class="muted">· ${c.streams} connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}${c.via ? " · " + esc(viaLabel(c.via)) : ""}</span></p>`).join("")}`
         : `<p class="muted">Not connected · last seen ${esc(ago(p.last_seen))}</p>`}
 
       <h4>It shares with you</h4>
       ${theirs.length
-        ? `<p>${theirs.map(s => `<span class="tag">${esc(svcLabel(s.name))}</span>`).join(" ")}</p>
-           <p class="muted small">Open them on this computer with:</p>
-           <div class="copyrow"><code>sol open ${esc(shellArg(p.name))}</code>
-             <button class="ghost small" data-action="copy-text" data-arg="sol open ${esc(shellArg(p.name))}">Copy</button></div>`
+        ? `<div class="theirs">${theirs.map(svc => theirService(p, svc)).join("")}</div>`
         : `<p class="muted small">Nothing yet (it can still receive files from you).</p>`}
       <button class="ghost small" data-action="refresh-peer" data-arg="${esc(p.id)}">Check again</button>
 
@@ -352,8 +351,49 @@ function renderPeers() {
       <button data-action="pair">Invite a machine</button> <button class="ghost" data-action="join">Join with a link</button></div>`;
 }
 
-// Quote a name for the shell when it isn't a plain word.
-const shellArg = s => /^[\w.-]+$/.test(s) ? s : "'" + String(s).replace(/'/g, "'\\''") + "'";
+const viaLabel = v => ({ "tor": "via Tor", "direct": "direct", "clearnet": "LAN (unencrypted)", "i2p": "via I2P" })[v] || "via " + v;
+
+// One service a peer shares with us: Open it, or show its open tunnel.
+function theirService(p, svc) {
+  const tun = state.tunnels.find(t => t.peer === p.id && t.service === svc.name);
+  const label = esc(svcLabel(svc.name));
+  if (!tun) {
+    return `<div class="svcrow"><span class="tag">${label}</span>
+      <button class="small" data-action="open-tunnel" data-arg="${esc(p.id)}" data-svc="${esc(svc.name)}">Open</button></div>`;
+  }
+  const status = !tun.listening ? `<span class="error">${esc(tun.last_error || "port unavailable")}</span>`
+    : tun.last_error ? `<span class="warn-text">peer unreachable right now</span>`
+    : tun.via ? `<span class="muted">${esc(viaLabel(tun.via))}</span>` : `<span class="muted">ready</span>`;
+  const target = tun.url
+    ? `<a href="${esc(tun.url)}" target="_blank" rel="noopener noreferrer">${esc(tun.addr)}</a>`
+    : `<code>${esc(tun.addr)}</code> <button class="ghost small" data-action="copy-text" data-arg="${esc(tun.addr)}">Copy</button>`;
+  return `<div class="svcrow"><span class="tag">${label}</span> ${target} ${status}
+    ${tun.url ? `<button class="small" data-action="open-tunnel" data-arg="${esc(p.id)}" data-svc="${esc(svc.name)}">Open</button>` : ""}
+    <button class="ghost small" data-action="close-tunnel" data-arg="${esc(String(tun.port))}">Close</button></div>`;
+}
+
+// Open a peer's service. The node keeps the tunnel (also after restarts),
+// so this page can be closed. The tab is opened right away, inside the
+// click, so popup blockers allow it; it's pointed at the tunnel once the
+// node answers.
+async function openTunnel(id, svc) {
+  const known = (state.peers.find(p => p.id === id)?.services || []).find(s => s.name === svc);
+  const tab = known && known.protocol === "http" ? window.open("about:blank", "_blank") : null;
+  if (tab) tab.opener = null;
+  try {
+    const tun = await api(`/api/peers/${encodeURIComponent(id)}/services/${encodeURIComponent(svc)}/open`, { method: "POST" });
+    if (tun.url && tab) tab.location.href = tun.url;
+    else if (tab) tab.close();
+    if (!tun.url) toast(`${svcLabel(svc)} is on ${tun.addr} (for apps that aren't web pages)`);
+    refresh();
+  } catch (err) { if (tab) tab.close(); fail(err); }
+}
+
+async function closeTunnel(port) {
+  try { await api("/api/tunnels/" + encodeURIComponent(port), { method: "DELETE" }); toast("Tunnel closed"); refresh(); }
+  catch (err) { fail(err); }
+}
+
 
 document.addEventListener("change", e => {
   const box = e.target.closest("[data-share]");
@@ -562,10 +602,10 @@ async function refresh() {
   try {
     const s = await api("/api/status");
     csrf = s.csrf || csrf;
-    const [services, peers, events, files, audit] = await Promise.all([
-      api("/api/services"), api("/api/peers"), api("/api/events"), api("/api/files"), api("/api/audit"),
+    const [services, peers, tunnels, events, files, audit] = await Promise.all([
+      api("/api/services"), api("/api/peers"), api("/api/tunnels"), api("/api/events"), api("/api/files"), api("/api/audit"),
     ]);
-    state = { status: s, services, peers, events, files, audit };
+    state = { status: s, services, peers, tunnels, events, files, audit };
     renderHome(); renderServices(); renderPeers(); renderFiles(); renderEvents();
   } catch (err) {
     $("status-pill").className = "pill bad";

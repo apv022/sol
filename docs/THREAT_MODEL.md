@@ -20,6 +20,7 @@ says plainly what is and isn't protected in the current build. The longer design
 | Other local users driving your node | The CLI talks to the node over a `0600` Unix socket in the `0700` data directory; it's never on the network | `control`, `node/ctlserver.go` |
 | A leaked pairing link | Single use, expires in 10 minutes, and the secret is compared by hash | `pairing` |
 | Knowing who is really connected | The panel's "Connected and verified" status lists only streams that passed the handshake with that peer's key | `node.Peers` |
+| Malicious web pages reading a peer's app through a tunnel | Tunnels bind `127.0.0.1`; `http` tunnels accept only a `127.0.0.1`/`localhost` Host header (DNS rebinding) and add no forwarding headers | `node/tunnels.go` |
 | Malicious web pages attacking the panel | Loopback-only bind, Host header check (DNS rebinding), CSRF token, strict CSP, HTML escaping | `api.guard`, `web/app.js` |
 | Linking a public site to your private node | Each public service gets its own onion key | `node.publishService` |
 | Network observers | Tor encrypts end to end. Onion services use no exit nodes | Tor |
@@ -35,6 +36,10 @@ says plainly what is and isn't protected in the current build. The longer design
 - **Addresses a peer gives you are dialled as given.** A peer's card can name any address on any
   enabled transport. With clearnet enabled, a malicious peer could make your node dial a LAN
   address. Keep clearnet off outside testing.
+- **Tunnels are local ports.** Any program running on this machine (any user, on a shared
+  computer) can connect to `127.0.0.1:<port>` and use a peer's service with your access. A web
+  page can still *send* blind requests to a `tcp` tunnel, as it can to any local port. Close
+  tunnels you don't use.
 - **A compromised node machine.** Anyone with your user account has `node.key`, every service, and
   the access keys for every peer (they are in `config.json`). Unpair it from your other machines.
 - **A compromised service.** Services run as normal local processes. Sandboxing is v1.0.

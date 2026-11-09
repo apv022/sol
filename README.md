@@ -66,12 +66,16 @@ sol service add navidrome 4533 --http --share laptop
 ```
 
 (or in the panel: **Services → Add**, then tick it for the laptop on the **Peers** tab). On the
-laptop:
+laptop, click **Open** next to it on the **Peers** tab, or:
 
 ```sh
 sol open home
-#   navidrome -> http://127.0.0.1:9000
+#   navidrome -> http://127.0.0.1:9000/
 ```
+
+The tunnel belongs to the node, not the terminal: it stays open, comes back on the same port
+after a restart (bookmark it), and heals by itself when the other machine reboots or changes
+networks.
 
 **Send files**, either way: `sol send home notes.pdf` (or **Send a file…** on the Peers tab).
 They show up in the other machine's Files tab, marked with who sent them.
@@ -121,7 +125,8 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 | `sol service add <name> <port> [--http] [--public] [--share PEER]` | Add an app running on `127.0.0.1:<port>` (private unless `--public`) |
 | `sol service remove\|public\|private <name>` | Remove a service, or change who can open it |
 | `sol share <peer> <service> [--off]` | Let a peer open a service (`_files` = your shared files page) |
-| `sol open <peer> [-L svc=127.0.0.1:PORT]` | Local tunnels to what a peer shares (default 9000, 9001, …) |
+| `sol open <peer> [service…] [-L svc=PORT]` | Keep what a peer shares reachable on `127.0.0.1` (ports from 9000; saved, survive restarts) |
+| `sol tunnels`, `sol close <peer> [service]` | List tunnels and whether the peer answers; close them |
 | `sol send <peer> <file>…` | Send files to a peer |
 | `sol unpair <peer>` | Remove a peer here and tell it to remove you |
 | `sol name [NEW]`, `sol status` | Show or change this machine's name; show its id and addresses |
@@ -138,7 +143,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 |---|---|
 | Tor onion services with client authorization | ✅ |
 | Mutual peer pairing, per-peer sharing, instant unpairing on both sides | ✅ |
-| Any TCP service, tunnels with `sol open` | ✅ |
+| Any TCP service; lasting tunnels from the panel's **Open** button or `sol open` | ✅ |
 | Send files between peers, both ways, SHA-256 verified, with size limits | ✅ |
 | Web panel: guided setup, invite/join, share toggles, live "connected and verified" status | ✅ |
 | Public services on their own onion | ✅ |

@@ -176,6 +176,45 @@ func (n *Node) handleControl(c net.Conn) {
 	case control.OpServiceVis:
 		err := n.SetServiceVisibility(req.Service, req.Visibility)
 		reply(n.controlServiceNamed(req.Service), err)
+	case control.OpTunnels:
+		out := []control.Tunnel{}
+		for _, t := range n.Tunnels() {
+			out = append(out, controlTunnel(t))
+		}
+		reply(out, nil)
+	case control.OpTunnelOpen:
+		p, err := n.peers.Find(req.Peer)
+		if err != nil {
+			reply(nil, err)
+			return
+		}
+		t, err := n.OpenTunnel(p.ID, req.Service, req.Port)
+		reply(controlTunnel(t), err)
+	case control.OpTunnelClose:
+		p, err := n.peers.Find(req.Peer)
+		if err != nil {
+			reply(nil, err)
+			return
+		}
+		closed := 0
+		for _, t := range n.Tunnels() {
+			if t.Peer == p.ID && (req.Service == "" || t.Service == req.Service) {
+				if err := n.CloseTunnel(t.Port); err != nil {
+					reply(nil, err)
+					return
+				}
+				closed++
+			}
+		}
+		if closed == 0 {
+			what := p.Name
+			if req.Service != "" {
+				what += "'s " + req.Service
+			}
+			reply(nil, fmt.Errorf("no open tunnel to %s", what))
+			return
+		}
+		reply(nil, nil)
 	default:
 		reply(nil, fmt.Errorf("unknown op %q", req.Op))
 	}
@@ -247,4 +286,15 @@ func (b *bufferedConn) CloseWrite() error {
 		return cw.CloseWrite()
 	}
 	return b.Conn.Close()
+}
+
+func controlTunnel(t api.TunnelView) control.Tunnel {
+	name := t.PeerName
+	if name == "" {
+		name = t.Peer
+	}
+	return control.Tunnel{
+		Port: t.Port, Peer: name, Service: t.Service, Protocol: t.Protocol, Addr: t.Addr,
+		URL: t.URL, Listening: t.Listening, LastError: t.LastError, Via: t.Via,
+	}
 }

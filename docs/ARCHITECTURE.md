@@ -9,8 +9,7 @@ format, see [PROTOCOL.md](PROTOCOL.md).
 ```mermaid
 flowchart LR
     subgraph laptop[Laptop: a Sol node]
-        app[Browser / music app / ssh] -->|localhost:9000| open[sol open]
-        open -->|control.sock| lnode[node]
+        app[Browser / music app / ssh] -->|localhost:9000| lnode[node: tunnel]
     end
     lnode -->|signed handshake over Tor| onion[(server .onion)]
     visitor[Tor Browser visitor] -->|no handshake| svconion[(public service .onion)]
@@ -40,8 +39,8 @@ files, because the laptop publishes its own onion.
 
 | Package | Job | Key types and functions |
 |---|---|---|
-| `cmd/sol` | CLI: runs the node, or sends one request to it over the control socket | `runNode`, `runPair`, `runOpen`, `runSend`, `tunnel` |
-| `internal/node` | Composition root. Node listener, routing, peers, pairing, dialing out, inbox, control socket, publications | `New`, `Run`, `handleConn`, `Pair`, `DialPeer`, `SendFile`, `Unpair`; implements `api.Backend` |
+| `cmd/sol` | CLI: runs the node, or sends one request to it over the control socket | `runNode`, `runPair`, `runOpen`, `runSend`, `runTunnels` |
+| `internal/node` | Composition root. Node listener, routing, peers, pairing, dialing out, inbox, tunnels, control socket, publications | `New`, `Run`, `handleConn`, `Pair`, `DialPeer`, `OpenTunnel`, `SendFile`, `Unpair`; implements `api.Backend` |
 | `internal/protocol` | The handshake | `ReadRequest`, `Accept`, `ClientHandshake`, `ReadPeerInfo`, `Card` |
 | `internal/peers` | Peer list with change hooks and share lists | `Peers.Add/Remove/Lookup/Find/SetShared/AccessKeys`, `Inbox`, `Files` |
 | `internal/pairing` | One-time tokens and `sol://pair` links | `Manager.NewToken/Consume/Pending`, `Link`, `ParseLink` |
@@ -71,8 +70,12 @@ packages `config`, `identity`, `events`, `control`, and `netutil` import no othe
 ### Opening a peer's service (`sol open server` → Navidrome)
 
 1. `sol open` asks the node to refresh the peer (`OpPeers` with `refresh`), which sends `list` to
-   the peer and saves what it shares. It then listens on `127.0.0.1:9000…` per shared service.
-2. For each local connection, `sol open` opens `control.sock` and sends `OpDial`.
+   the peer and saves what it shares. It then sends `OpTunnelOpen` per service (the panel's Open
+   button calls `POST /api/peers/{id}/services/{svc}/open`). `Node.OpenTunnel` (`tunnels.go`)
+   listens on `127.0.0.1:9000…` and saves the tunnel in config; `startSavedTunnels` reopens it
+   at the next start.
+2. For each local connection (or, for `http` services, each upstream connection the tunnel's
+   reverse proxy needs, after its Host check), the tunnel calls `DialPeer`.
 3. The node's `DialPeer` → `dial` picks an address (last one that worked, then ready transports,
    then Tor before I2P before clearnet), dials it (`transport.Tor.Dial` → SOCKS5 →
    `<peer>.onion:80`), and runs the handshake, checking the callee is the expected node.
@@ -150,7 +153,7 @@ anonymous-public). Anonymous-public services are never published on clearnet.
 ```
 ~/.sol/
 ├── node.key                ed25519 seed (0600). Back this up: it is the node's identity
-├── config.json             name, services, peers (incl. access keys), ports, transports (0600, atomic)
+├── config.json             name, services, peers (incl. access keys), tunnels, ports, transports (0600, atomic)
 ├── control.sock            local CLI socket (0600; only while the node runs)
 ├── blobs/<sha256>          (+ .names.json: display name and sender per file)
 ├── bin/                    extracted bundled binaries

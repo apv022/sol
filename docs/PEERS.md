@@ -80,12 +80,31 @@ sol invite                   print a pairing link
 sol pair <link>              pair with the node that made the link
 sol peers                    list peers and what they share
 sol share <peer> <service>   let a peer open one of your services (--off to stop)
-sol open <peer> [-L svc=addr]  local tunnels to a peer's services (default 127.0.0.1:9000…)
+sol open <peer> [service]    keep a peer's services on 127.0.0.1 (ports from 9000)
+sol tunnels                  list tunnels; sol close <peer> [service] closes them
 sol send <peer> <file>       send a file to a peer's inbox
 sol unpair <peer>            remove a peer here, and tell it to remove you
 ```
 
 `<peer>` is a name or the start of an id.
+
+## Tunnels
+
+A tunnel makes one of a peer's services reachable on this machine at `127.0.0.1:<port>`. The
+node owns it (the panel's **Open** button and `sol open` both ask the node), so nothing has to
+stay running in a terminal:
+
+- It is saved in `config.json` (`tunnels`) and reopens on the **same port** when the node starts,
+  so bookmarks keep working. Automatic ports start at 9000.
+- The listener stays up while the peer is unreachable. Each new connection dials the peer fresh,
+  with the usual retries, so a reboot or a network change on either side heals by itself. The
+  panel and `sol tunnels` show the last error and which transport carried the last connection.
+- `http` services go through a small reverse proxy that accepts only `Host: 127.0.0.1:<port>`
+  or `localhost:<port>`. That stops a web page from using DNS rebinding to read the peer's app
+  through your loopback port. It adds no `X-Forwarded-*` headers. `tcp` services are a raw pipe.
+- Tunnels listen on `127.0.0.1` only. Any program on this machine can use them, like any local port.
+- Unpairing closes and forgets the peer's tunnels. If the peer stops sharing the service, the
+  tunnel stays but every connection is refused; close it with **Close** or `sol close`.
 
 ## Unpairing
 

@@ -17,6 +17,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
   path, or a new protocol plug in without changing pairing or the handshake.
 
 ### Added
+- **Open a peer's app from the panel.** Every service a peer shares with you has an **Open**
+  button; `sol open` does the same. The node now owns tunnels: they stay open without a terminal,
+  are saved and reopen on the same port after a restart, survive the peer going offline (each
+  connection dials fresh), and show their status and transport. `sol tunnels` and
+  `sol close <peer> [service]` manage them. `http` tunnels check the Host header against DNS
+  rebinding.
 - Send files between peers, both ways: `sol send <peer> <file>` or the panel's Send a file. The
   sender checks the receiver's SHA-256; per-file (4 GiB) and total (20 GiB) limits; received files
   are labelled with the sender and kept off your shared-files page.

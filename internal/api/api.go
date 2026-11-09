@@ -24,6 +24,9 @@
 //	PUT    /api/peers/{id}/shares/{service} {shared}: let the peer open a service, or stop
 //	POST   /api/peers/{id}/send             multipart field "file": send to the peer's inbox
 //	DELETE /api/peers/{id}                  unpair (and tell the peer)
+//	POST   /api/peers/{id}/services/{service}/open  {port?}: keep the peer's service on 127.0.0.1 -> tunnel
+//	GET    /api/tunnels                     open tunnels with their status
+//	DELETE /api/tunnels/{port}              close a tunnel
 //	GET    /api/files                       list blobs (with who sent each)
 //	POST   /api/files                       multipart upload, field "file"
 //	GET    /blob/{hash}                     stream a blob (range requests)
@@ -43,6 +46,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/apv022/sol/internal/audit"
@@ -71,6 +75,9 @@ type Backend interface {
 	SendFile(ctx context.Context, id, name string, r io.Reader) (hash string, size int64, err error)
 	Unpair(ctx context.Context, id string) (p config.Peer, notified bool, err error)
 	RestartTransport(name string) error
+	Tunnels() []TunnelView
+	OpenTunnel(peer, service string, port int) (TunnelView, error)
+	CloseTunnel(port int) error
 	Blobs() *blob.Store
 	Events() *events.Log
 	Audit(ctx context.Context) []audit.Result
@@ -116,9 +123,26 @@ type PeerView struct {
 // ConnectionView groups one peer's open connections to one service.
 type ConnectionView struct {
 	Service  string    `json:"service"`
-	Outbound bool      `json:"outbound"` // we opened it to the peer's service
-	Streams  int       `json:"streams"`  // open TCP streams (a browser opens several)
-	Since    time.Time `json:"since"`    // oldest open stream
+	Outbound bool      `json:"outbound"`      // we opened it to the peer's service
+	Streams  int       `json:"streams"`       // open TCP streams (a browser opens several)
+	Since    time.Time `json:"since"`         // oldest open stream
+	Via      string    `json:"via,omitempty"` // outbound: transport that carries it ("tor", "direct", ...)
+}
+
+// TunnelView is a peer's service this node keeps reachable on 127.0.0.1.
+type TunnelView struct {
+	Port      int       `json:"port"`
+	Peer      string    `json:"peer"` // peer id
+	PeerName  string    `json:"peer_name"`
+	Service   string    `json:"service"`
+	Protocol  string    `json:"protocol"`
+	Addr      string    `json:"addr"`          // 127.0.0.1:<port>
+	URL       string    `json:"url,omitempty"` // http services: what to open in a browser
+	Listening bool      `json:"listening"`     // false: the port couldn't be opened
+	Active    int       `json:"active"`        // connections in use right now
+	LastOK    time.Time `json:"last_ok"`       // last time the peer answered
+	LastError string    `json:"last_error,omitempty"`
+	Via       string    `json:"via,omitempty"` // transport of the last good connection
 }
 
 // InviteInfo is the body of POST /api/peers/invite.
@@ -153,6 +177,9 @@ func Handler(b Backend, web fs.FS) http.Handler {
 	mux.HandleFunc("PUT /api/peers/{id}/shares/{service}", s.setShare)
 	mux.HandleFunc("POST /api/peers/{id}/send", s.sendFile)
 	mux.HandleFunc("DELETE /api/peers/{id}", s.unpair)
+	mux.HandleFunc("POST /api/peers/{id}/services/{service}/open", s.openTunnel)
+	mux.HandleFunc("GET /api/tunnels", s.listTunnels)
+	mux.HandleFunc("DELETE /api/tunnels/{port}", s.closeTunnel)
 	mux.HandleFunc("GET /api/files", s.listFiles)
 	mux.HandleFunc("POST /api/files", s.upload)
 	mux.Handle("GET /blob/", b.Blobs().Handler("/blob/"))
@@ -429,4 +456,39 @@ func (s *server) audit(w http.ResponseWriter, r *http.Request) {
 		res = []audit.Result{}
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) listTunnels(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.b.Tunnels())
+}
+
+func (s *server) openTunnel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Port int `json:"port"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, err)
+			return
+		}
+	}
+	t, err := s.b.OpenTunnel(r.PathValue("id"), r.PathValue("service"), body.Port)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *server) closeTunnel(w http.ResponseWriter, r *http.Request) {
+	port, err := strconv.Atoi(r.PathValue("port"))
+	if err != nil {
+		writeErr(w, errors.New("bad port"))
+		return
+	}
+	if err := s.b.CloseTunnel(port); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

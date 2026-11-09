@@ -11,6 +11,8 @@
 // carries raw bytes:
 //
 //	dial  after an OK response, the connection is a pipe to the peer's service
+//	tunnel-open / tunnel-close / tunnels manage the node's own tunnels (they
+//	      keep running after the command exits)
 //	send  after an OK response, the client writes the file and closes its
 //	      write side; the server answers with a second Response holding the hash
 package control
@@ -45,6 +47,10 @@ const (
 	OpServiceAdd    = "service-add"    // Service, Port, Visibility, Protocol -> LocalService
 	OpServiceRemove = "service-remove" // Service
 	OpServiceVis    = "service-vis"    // Service, Visibility -> LocalService
+
+	OpTunnels     = "tunnels"      // -> []Tunnel
+	OpTunnelOpen  = "tunnel-open"  // Peer, Service, Port (0: pick one) -> Tunnel
+	OpTunnelClose = "tunnel-close" // Peer, Service (empty: all of the peer's tunnels)
 )
 
 // Request is one command.
@@ -110,6 +116,19 @@ type PeerView struct {
 	Services []Service `json:"services"` // what it lets us open
 	Online   bool      `json:"online"`
 	Error    string    `json:"error,omitempty"` // why a refresh failed
+}
+
+// Tunnel is a peer's service the node keeps reachable on 127.0.0.1.
+type Tunnel struct {
+	Port      int    `json:"port"`
+	Peer      string `json:"peer"` // peer name
+	Service   string `json:"service"`
+	Protocol  string `json:"protocol"`
+	Addr      string `json:"addr"`
+	URL       string `json:"url,omitempty"`
+	Listening bool   `json:"listening"`
+	LastError string `json:"last_error,omitempty"`
+	Via       string `json:"via,omitempty"`
 }
 
 // Unpaired is the answer to OpUnpair.

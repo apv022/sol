@@ -69,6 +69,15 @@ type Service struct {
 	Transports []string `json:"transports,omitempty"` // empty means every enabled transport
 }
 
+// Tunnel is a peer's service that this node keeps reachable on
+// 127.0.0.1:Port (docs/PEERS.md, "Tunnels"). Tunnels are saved so they come
+// back on the same port after a restart, and bookmarks keep working.
+type Tunnel struct {
+	Peer    string `json:"peer"`    // peer ID
+	Service string `json:"service"` // the peer's service name
+	Port    int    `json:"port"`    // local port on 127.0.0.1
+}
+
 // RemoteService is one service a peer shares with us.
 type RemoteService struct {
 	Name     string `json:"name"`
@@ -147,6 +156,7 @@ type Config struct {
 	Runtime    RuntimeConfig    `json:"runtime"`
 	Services   []Service        `json:"services"`
 	Peers      []Peer           `json:"peers"`
+	Tunnels    []Tunnel         `json:"tunnels"`
 
 	mu   sync.Mutex
 	path string // empty for in-memory configs (tests); Save is then a no-op
@@ -170,6 +180,7 @@ func Default() *Config {
 		},
 		Services: []Service{},
 		Peers:    []Peer{},
+		Tunnels:  []Tunnel{},
 	}
 }
 
@@ -277,6 +288,9 @@ func (c *Config) applyDefaults() {
 	if c.Peers == nil {
 		c.Peers = []Peer{}
 	}
+	if c.Tunnels == nil {
+		c.Tunnels = []Tunnel{}
+	}
 	for i := range c.Services {
 		if c.Services[i].Protocol == "" {
 			c.Services[i].Protocol = ProtocolTCP
@@ -382,6 +396,19 @@ func (c *Config) validateLocked() error {
 		}
 		ids[p.ID] = true
 	}
+	ports := map[int]bool{}
+	for _, t := range c.Tunnels {
+		if t.Port < 1 || t.Port > 65535 {
+			errs = append(errs, fmt.Errorf("tunnel %s/%s: port %d out of range", t.Peer, t.Service, t.Port))
+		}
+		if ports[t.Port] {
+			errs = append(errs, fmt.Errorf("tunnel port %d: %w", t.Port, ErrDuplicate))
+		}
+		ports[t.Port] = true
+		if !ids[t.Peer] {
+			errs = append(errs, fmt.Errorf("tunnel %s/%s: no such peer", t.Peer, t.Service))
+		}
+	}
 	for _, p := range c.Runtime.ProviderOrder {
 		if !slices.Contains(knownProviders, p) {
 			errs = append(errs, fmt.Errorf("unknown runtime provider %q", p))
@@ -421,7 +448,8 @@ func (c *Config) mutate(fn func() error) error {
 	for i, p := range c.Peers {
 		peers[i] = p.Clone()
 	}
-	rollback := func() { c.Name, c.Services, c.Peers = name, services, peers }
+	tunnels := slices.Clone(c.Tunnels)
+	rollback := func() { c.Name, c.Services, c.Peers, c.Tunnels = name, services, peers, tunnels }
 	if err := fn(); err != nil {
 		rollback()
 		return err
@@ -534,6 +562,7 @@ func (c *Config) DeletePeer(id string) (Peer, error) {
 		}
 		removed = c.Peers[i].Clone()
 		c.Peers = slices.Delete(c.Peers, i, i+1)
+		c.Tunnels = slices.DeleteFunc(c.Tunnels, func(t Tunnel) bool { return t.Peer == id })
 		return nil
 	})
 	return removed, err
@@ -613,9 +642,43 @@ func (c *Config) Snapshot() *Config {
 		Runtime:    RuntimeConfig{ProviderOrder: slices.Clone(c.Runtime.ProviderOrder), ContainerRuntime: c.Runtime.ContainerRuntime},
 		Services:   slices.Clone(c.Services),
 		Peers:      make([]Peer, 0, len(c.Peers)),
+		Tunnels:    slices.Clone(c.Tunnels),
 	}
 	for _, p := range c.Peers {
 		cp.Peers = append(cp.Peers, p.Clone())
 	}
 	return cp
+}
+
+// TunnelList returns a copy of the saved tunnels.
+func (c *Config) TunnelList() []Tunnel {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.Tunnels)
+}
+
+// AddTunnel saves a tunnel. A tunnel for the same peer and service, or one
+// on the same port, is a duplicate.
+func (c *Config) AddTunnel(t Tunnel) error {
+	return c.mutate(func() error {
+		if slices.ContainsFunc(c.Tunnels, func(x Tunnel) bool {
+			return x.Peer == t.Peer && x.Service == t.Service || x.Port == t.Port
+		}) {
+			return fmt.Errorf("tunnel %s/%s: %w", t.Peer, t.Service, ErrDuplicate)
+		}
+		c.Tunnels = append(c.Tunnels, t)
+		return nil
+	})
+}
+
+// RemoveTunnel forgets the tunnel to peer's service.
+func (c *Config) RemoveTunnel(peer, service string) error {
+	return c.mutate(func() error {
+		i := slices.IndexFunc(c.Tunnels, func(x Tunnel) bool { return x.Peer == peer && x.Service == service })
+		if i < 0 {
+			return fmt.Errorf("tunnel %s/%s: %w", peer, service, ErrNotFound)
+		}
+		c.Tunnels = slices.Delete(c.Tunnels, i, i+1)
+		return nil
+	})
 }
