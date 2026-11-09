@@ -357,11 +357,11 @@ Listing criteria are published. Entries that serve illegal content are removed o
 
 ### 10.1 Design sketch: direct mode (Tor for finding the peer, WireGuard for the data)
 
-Status: **rung 1 shipped** (direct TCP + TLS 1.3 pinned to the node key; see
-[PROTOCOL.md](PROTOCOL.md#direct-mode-transport)). It covers same-LAN, IPv6, tailnet, and
-public-IP/port-forwarded peers with no new dependency and no root. Rungs 2 and 3 (hole
-punching, port mapping) are still ideas and are where `wireguard-go` or a QUIC-like UDP layer
-would come in.
+Status: **shipped** (see [PROTOCOL.md](PROTOCOL.md#direct-mode)): rung 1 (same LAN, IPv6,
+tailnet, forwarded ports) and rung 2 (UDP hole punching over WireGuard, with `wireguard-go` as
+the one justified dependency), plus a TLS-over-TCP path for networks that block UDP. Rung 3
+(UPnP / NAT-PMP / PCP port mapping) is still an idea; it would help symmetric NATs, which stay
+on Tor today.
 
 **Goal.** Match Tailscale's speed between a user's own devices without any of the servers
 Tailscale relies on. No anonymity network can beat a direct connection, because anonymity

@@ -103,41 +103,79 @@ onion address already authenticates the callee.
 | `_inbox` | HTTP. `PUT /files/{name}` with the file as the body → `201 {"hash", "size"}`. Requests carrying `Origin` or `Sec-Fetch-Site` are refused, so browsers can't be used to send |
 | `_files` | HTTP. The shared-files page `/` and `/blob/<sha256>[/<name>][?download]` |
 
-## Direct mode transport
+## Direct mode
 
-With `transports.direct` on, a node also listens on `direct_listen` (default `:7701`) and
-publishes the address
+With `transports.direct` on, peers connect straight to each other when they can and over Tor
+when they can't. Two transports carry it, tried in this order:
+
+1. **WireGuard** (`wg`, UDP `direct_listen` port, default 7701): the official `wireguard-go`,
+   in userspace with its own network stack (no root, no TUN device). It punches through NATs.
+2. **TLS** (`direct`, TCP, same port number): for networks that block UDP.
+
+### WireGuard
+
+Each node has a WireGuard key (`wg.key`) and, inside the tunnel, the address
+`fd53:4f4c:` + the first 96 bits of `SHA-256(WireGuard public key)`. Its address is
+
+```
+sol-wg:<base64url WireGuard public key>@<host:port>,<host:port>,...
+```
+
+The candidates are the STUN-mapped public address (asked on WireGuard's own socket, so it is
+the mapping WireGuard's packets use), then LAN IPv4, global IPv6 and other addresses (at most 8).
+
+Making a path:
+
+1. Peers exchange WireGuard addresses over the authenticated channels: the pairing link and card,
+   `PeerInfo.wg` in answers, and the caller's `direct` map in every `list` request (signed with
+   the rest of the request). Each side adds the other to its WireGuard device: WireGuard then
+   answers that key and nothing else, and pins it to its tunnel address (AllowedIPs).
+2. Both sides send **punch packets** (`SOLP` + their 32-byte WireGuard public key, filtered
+   out before WireGuard sees them) to each other's candidates. They open each NAT towards the
+   other and tell the receiver where the sender really appears from.
+3. Only the side with the **lower WireGuard key** starts handshakes: two simultaneous
+   initiations cancel each other. It starts one when a punch arrives (to the address it came
+   from), and blindly from the second round on. The other side answers punches with a punch.
+4. Once a handshake completes, keepalives (25 s) hold the NAT mappings open and WireGuard
+   follows the peer's address as it moves (roaming).
+5. Inside the tunnel the caller connects to `[peer tunnel address]:7700` and runs the normal
+   handshake above, which still checks the node key.
+
+A punch from a peer we think is connected means its side lost the session (it restarted or
+moved): the initiator drops the stale session and handshakes again (at most every 10 s, since
+punch packets are unauthenticated). A dial waits up to 3 s for a handshake; until then Tor
+carries the connection, and a refresh over Tor swaps fresh addresses so the next one goes direct.
+Pairing never tries WireGuard (the inviter can't know the joiner's key yet). Symmetric NATs
+can't be punched; those peers stay on Tor. Nothing is relayed through third parties.
+
+### TLS
 
 ```
 sol-direct:<node id>@<host:port>,<host:port>,...
 ```
 
-listing its usable IPs (LAN IPv4, global IPv6, a tailnet address; container bridges and
-link-local are skipped; at most 8). A dialer:
+A dialer connects to every candidate at once (3 s) and keeps the first that succeeds; sends the
+preamble `SOLD1` + the first 16 bytes of `SHA-256("sol direct" | node public key)` (the
+listener closes, sending nothing, on anything else, so only someone who already knows which node
+they want ever sees its certificate); runs TLS 1.3, where the server certificate is self-signed
+with the node's ed25519 key and the dialer accepts only the key named in the address; then runs
+the normal handshake inside TLS.
 
-1. connects to every candidate at once (`DirectDialTimeout`, 3 s) and keeps the first that
-   succeeds;
-2. sends the preamble `SOLD1` + the first 16 bytes of `SHA-256("sol direct" | node public key)`.
-   The listener closes, sending nothing, on anything else, so only someone who already knows
-   which node they want ever sees its certificate;
-3. runs TLS 1.3. The server certificate is self-signed with the **node's ed25519 key**, and the
-   dialer accepts only the key named in the address (no CA, no trust on first use);
-4. runs the normal handshake above inside TLS.
+### Both
 
-Direct addresses change with the network, so `PeerInfo` carries the callee's current one
-(`"direct": "sol-direct:..."`, or `""` when off), and the caller replaces its record. When a
-dialer reaches a peer over another transport although the peer has a direct address, it asks
-for the current one (`list`, at most every 5 minutes). A direct address that just failed is
-tried last for a minute, doubling with each failure up to an hour (a cancelled dial, or one whose
-deadline was already spent, doesn't count), so a dead path doesn't slow
-every connection. A peer may only announce a direct address for its own node key; anything else
-is dropped. Only the node
-publication is carried: public and anonymous services are never reachable directly.
+Peers learn each other's current addresses in `PeerInfo` and `list` requests, and a peer may only
+announce a TLS address for its own node key. When a dialer reaches a peer over another transport,
+it asks for current addresses (`list`, at most every 5 minutes). A direct address that just
+failed is tried last for a minute, doubling with each failure up to an hour (a cancelled dial, or
+one whose deadline was already spent, doesn't count), unless WireGuard reports the tunnel live
+again. Peer-supplied candidates must be plain IP addresses (no names, loopback, link-local or
+multicast). Only the node publication is carried: public and anonymous services are never
+reachable directly.
 
 ## What this protocol does not do
 
 - **No encryption of its own.** Confidentiality comes from the transport: Tor and I2P encrypt end
-  to end, and direct mode uses TLS 1.3 pinned to the node key. The clearnet transport is unencrypted and meant for LANs and tests. Someone on that path
+  to end, and direct mode uses WireGuard, or TLS 1.3 pinned to the node key. The clearnet transport is unencrypted and meant for LANs and tests. Someone on that path
   can read the traffic and could relay a connection, though they cannot forge a node's signature.
 - **No per-request authorization.** Once a `connect` succeeds, the pipe is trusted until it
   closes. Removing a peer closes its live connections in both directions immediately, and

@@ -46,7 +46,7 @@ files, because the laptop publishes its own onion.
 | `internal/pairing` | One-time tokens and `sol://pair` links | `Manager.NewToken/Consume/Pending`, `Link`, `ParseLink` |
 | `internal/identity` | ed25519 node keys, x25519 Tor client-auth keys | `LoadOrCreate`, `NodeID`, `DeviceID`, `NewX25519` |
 | `internal/config` | `~/.sol/config.json`: atomic save, validation, migration | `Load`, `AddService`, `AddPeer`, `UpdatePeer`, `Snapshot` |
-| `internal/transport` | `Transport` interface, `Registry`, Tor / direct / clearnet / I2P(stub), per-peer access | `Publication`, `Access`, `AccessIssuer`, `ClientAuthorizer`, `Tor`, `Direct`, `Clearnet` |
+| `internal/transport` | `Transport` interface, `Registry`, Tor / WireGuard / TLS direct / clearnet / I2P(stub), STUN, per-peer access | `Publication`, `Access`, `AccessIssuer`, `ClientAuthorizer`, `Tor`, `WG`, `Direct`, `Clearnet` |
 | `internal/runtime` | Find and run external programs (tor) | `Provider`, `Select`, `Native`, `Bundled`, `Docker`(stub) |
 | `internal/autostart` | Start the node at login: systemd user unit (Linux), LaunchAgent (macOS) | `Manager.Enable/Disable/Status`, `SystemdUnit`, `LaunchAgentPlist` |
 | `internal/control` | Control-socket wire format and client | `Request`, `Call`, `Dial`, `Path` |
@@ -155,6 +155,7 @@ anonymous-public). Anonymous-public services are never published on clearnet.
 ```
 ~/.sol/
 ├── node.key                ed25519 seed (0600). Back this up: it is the node's identity
+├── wg.key                  WireGuard key for direct mode (0600; replaced freely, peers relearn it)
 ├── config.json             name, services, peers (incl. access keys), tunnels, ports, transports (0600, atomic)
 ├── control.sock            local CLI socket (0600; only while the node runs)
 ├── autostart-unit          where `sol autostart on` wrote the systemd unit (Linux, if enabled)

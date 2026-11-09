@@ -29,8 +29,10 @@ const perAddrDialTimeout = 2 * time.Minute
 // (LAN) last. Unknown future transports go in between.
 func transportPreference(name string) int {
 	switch name {
+	case "wg":
+		return -2 // WireGuard: fastest, and punches NATs
 	case "direct":
-		return -1 // fastest when it works; fails within seconds when it doesn't
+		return -1 // TLS over TCP, for networks that block UDP
 	case "tor":
 		return 0
 	case "i2p":
@@ -76,17 +78,30 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 		}
 		return cs[i].pref < cs[j].pref
 	})
+	// Direct-mode addresses go first (WireGuard, then TLS), unless they
+	// failed recently: then they are tried last, as a last resort.
+	fast := []string{p.Addrs["wg"], p.Addrs["direct"]}
 	n.mu.Lock()
 	last := n.lastGood[p.ID]
-	df := n.directFail[p.ID]
+	backingOff := map[string]bool{}
+	for _, a := range fast {
+		if df := n.directFail[failKey(p.ID, a)]; a != "" && df.addr == a && time.Since(df.at) < df.wait {
+			backingOff[a] = true
+		}
+	}
 	n.mu.Unlock()
-	direct := p.Addrs["direct"]
-	backingOff := direct != "" && df.addr == direct && time.Since(df.at) < df.wait
+	// A path that healed in the background (WireGuard reports a live
+	// tunnel) needn't wait out its backoff.
+	for a := range backingOff {
+		if t, err := n.reg.For(a); err == nil {
+			if l, ok := t.(interface{ Live(string) bool }); ok && l.Live(a) {
+				delete(backingOff, a)
+			}
+		}
+	}
 	out := make([]string, 0, len(cs)+1)
-	// add appends a if an enabled transport handles it. A direct address
-	// that is backing off is held back unless lastResort is set.
 	add := func(a string, lastResort bool) {
-		if a == "" || slices.Contains(out, a) || (backingOff && a == direct && !lastResort) {
+		if a == "" || slices.Contains(out, a) || (backingOff[a] && !lastResort) {
 			return
 		}
 		if _, err := n.reg.For(a); err != nil {
@@ -94,29 +109,42 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 		}
 		out = append(out, a)
 	}
-	haveDirect := n.directUsable()
-	if haveDirect {
-		add(direct, false)
+	for _, a := range fast {
+		add(a, false)
 	}
-	// An old direct address is stale, and with direct off nothing can dial it.
-	if !transport.IsDirect(last) || (haveDirect && last == direct) {
+	// An old direct address is stale (the peer has announced a new one).
+	if !isFast(last) || slices.Contains(fast, last) {
 		add(last, false)
 	}
 	for _, c := range cs {
 		add(c.addr, false)
 	}
-	if backingOff && haveDirect {
-		add(direct, true)
+	for _, a := range fast {
+		if backingOff[a] {
+			add(a, true)
+		}
 	}
 	return out
+}
+
+// isFast reports whether addr is a direct-mode address (WireGuard or TLS).
+func isFast(addr string) bool { return transport.IsDirect(addr) || transport.IsWG(addr) }
+
+// failKey keys directFail by peer and kind of direct address.
+func failKey(id, addr string) string {
+	if transport.IsWG(addr) {
+		return id + "|wg"
+	}
+	return id + "|direct"
 }
 
 // directUsable reports whether this node can dial direct addresses now
 // (direct mode is on, started, and didn't fail closed). It asks the
 // registry the same question dialOnce does.
 func (n *Node) directUsable() bool {
-	_, err := n.reg.For("sol-direct:")
-	return err == nil
+	_, errD := n.reg.For("sol-direct:")
+	_, errW := n.reg.For("sol-wg:")
+	return errD == nil || errW == nil
 }
 
 // dialOnce opens a stream to p and completes the handshake for req, trying
@@ -128,6 +156,12 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 	}
 	var errs []error
 	for _, addr := range addrs {
+		// Pairing: the inviter can't know our WireGuard key yet, so a
+		// WireGuard handshake can only fail (and hold WireGuard's 5 s retry
+		// timer, slowing the first real connection). TLS direct is fine.
+		if req.Op == protocol.OpPair && transport.IsWG(addr) {
+			continue
+		}
 		t, err := n.reg.For(addr)
 		if err != nil {
 			errs = append(errs, err)
@@ -139,14 +173,14 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
-			if t.Name() == "direct" && blameDirect(ctx, attempt) {
+			if isFast(addr) && blameDirect(ctx, attempt) {
 				n.noteDirectFailure(p.ID, addr)
 			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
 			conn.Close()
-			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && blameDirect(ctx, attempt) {
+			if isFast(addr) && !errors.Is(err, protocol.ErrRejected) && blameDirect(ctx, attempt) {
 				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
@@ -158,14 +192,14 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		if p.ID != "" {
 			n.mu.Lock()
 			n.lastGood[p.ID] = addr
-			if t.Name() == "direct" {
-				delete(n.directFail, p.ID)
+			if isFast(addr) {
+				delete(n.directFail, failKey(p.ID, addr))
 			}
 			n.mu.Unlock()
 			// Reached it, but not directly: its direct address may be stale,
 			// or it may have turned direct mode on since we last asked. Ask
 			// over this working path (rate-limited per peer).
-			if t.Name() != "direct" && req.Op != protocol.OpList {
+			if !isFast(addr) && req.Op != protocol.OpList {
 				if n.directUsable() {
 					n.goBG(func() { n.refreshDirect(p.ID) })
 				}
@@ -304,7 +338,7 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 		return config.Peer{}, err
 	}
 	inviter := config.Peer{NodeID: l.NodeID, Name: l.Name, Addrs: maps.Clone(l.Addrs), AccessOut: l.Access}
-	setDirect(&inviter, inviter.Addrs["direct"]) // only the inviter's own key
+	setFast(&inviter, inviter.Addrs["direct"], inviter.Addrs["wg"]) // only the inviter's own key
 	if inviter.Name == "" || config.ValidateName(inviter.Name) != nil {
 		inviter.Name = "peer"
 	}
@@ -343,41 +377,52 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 	}
 	inviter.AccessIn = accessIn
 	inviter.Services = remoteServices(info.Services)
-	setDirect(&inviter, info.Direct)
+	setFast(&inviter, info.Direct, info.WG)
 	p, err := n.peers.Add(inviter, pub)
 	if err != nil {
 		return config.Peer{}, err
 	}
 	n.installAccess(p) // Add replaced any old record, whose removal forgot the key
+	n.syncWG(p)
 	n.log.Add(events.KindPair, "paired with "+peers.Describe(p))
 	return p, nil
 }
 
-// setDirect records a peer's current direct-mode address, or forgets it
-// when the peer has direct mode off. An address that is malformed or names
-// another node's key is dropped: a peer may only announce its own.
+// setFast records a peer's current direct-mode addresses (TLS "direct",
+// WireGuard "wg"), or forgets them when the peer has them off. A direct
+// address that is malformed or names another node's key is dropped: a peer
+// may only announce its own. (A WireGuard key isn't tied to the node key;
+// it is trusted because it arrived over the authenticated channel, and the
+// Sol handshake inside the tunnel still checks the node key.)
 //
-// Any other key holding a direct address is dropped too: the dialer routes
-// by address, not by key, so it would otherwise bypass this check.
-func setDirect(p *config.Peer, addr string) {
+// Direct-mode addresses under any other key are dropped too: the dialer
+// routes by address, not by key, so they would bypass these checks.
+func setFast(p *config.Peer, direct, wg string) {
 	for k, v := range p.Addrs {
-		if k != "direct" && transport.IsDirect(v) {
+		if k != "direct" && k != "wg" && isFast(v) {
 			delete(p.Addrs, k)
 		}
 	}
-	if addr != "" {
-		pub, _, err := transport.ParseDirectAddr(addr)
+	if direct != "" {
+		pub, _, err := transport.ParseDirectAddr(direct)
 		if err != nil || (p.NodeID != "" && identity.NodeID(pub) != p.NodeID) {
-			addr = ""
+			direct = ""
+		}
+	}
+	if wg != "" {
+		if _, _, err := transport.ParseWGAddr(wg); err != nil {
+			wg = ""
 		}
 	}
 	if p.Addrs == nil {
 		p.Addrs = map[string]string{}
 	}
-	if addr == "" {
-		delete(p.Addrs, "direct")
-	} else {
-		p.Addrs["direct"] = addr
+	for k, v := range map[string]string{"direct": direct, "wg": wg} {
+		if v == "" {
+			delete(p.Addrs, k)
+		} else {
+			p.Addrs[k] = v
+		}
 	}
 }
 
@@ -396,7 +441,7 @@ func (n *Node) RefreshPeer(ctx context.Context, id string) (config.Peer, error) 
 	if !ok {
 		return config.Peer{}, fmt.Errorf("peer %q: %w", id, config.ErrNotFound)
 	}
-	conn, err := n.dial(ctx, p, protocol.Request{Op: protocol.OpList}, false)
+	conn, err := n.dial(ctx, p, protocol.Request{Op: protocol.OpList, Direct: n.fastAddrs()}, false)
 	if errors.Is(err, protocol.ErrRejected) {
 		return p, fmt.Errorf("%s no longer accepts this node; it may have unpaired", p.Name)
 	}
@@ -408,14 +453,18 @@ func (n *Node) RefreshPeer(ctx context.Context, id string) (config.Peer, error) 
 	if err != nil {
 		return p, err
 	}
-	return n.peers.Update(id, func(rec *config.Peer) error {
+	up, err := n.peers.Update(id, func(rec *config.Peer) error {
 		rec.Services = remoteServices(info.Services)
-		setDirect(rec, info.Direct)
+		setFast(rec, info.Direct, info.WG)
 		if config.ValidateName(info.Name) == nil {
 			rec.Name = info.Name
 		}
 		return nil
 	})
+	if err == nil {
+		n.syncWG(up)
+	}
+	return up, err
 }
 
 // Unpair removes a peer here and tries to tell it, so it removes us too.
@@ -467,12 +516,13 @@ func (n *Node) noteDirectFailure(id, addr string) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	f := n.directFail[id]
+	k := failKey(id, addr)
+	f := n.directFail[k]
 	wait := directBackoff
 	if f.addr == addr && f.wait > 0 {
 		wait = min(f.wait*2, directBackoffMax)
 	}
-	n.directFail[id] = directFailure{addr: addr, at: time.Now(), wait: wait}
+	n.directFail[k] = directFailure{addr: addr, at: time.Now(), wait: wait}
 }
 
 // refreshDirectEvery rate-limits refreshDirect per peer: a peer that turns

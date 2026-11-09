@@ -249,3 +249,18 @@ func TestPeerInfoAfterAccept(t *testing.T) {
 		t.Fatalf("ReadPeerInfo = %+v, %v", pi, err)
 	}
 }
+
+// An empty Direct map is omitted on the wire, so it must sign the same as
+// none at all (regression: every list from a node without direct mode was
+// rejected).
+func TestEmptyDirectSignsLikeNone(t *testing.T) {
+	id, _ := identity.Generate()
+	callee, _ := identity.Generate()
+	nonce := make([]byte, nonceSize)
+	a, _ := signedMessage(callee.Public(), nonce, &Request{Op: OpList, Direct: map[string]string{}})
+	b, _ := signedMessage(callee.Public(), nonce, &Request{Op: OpList})
+	if string(a) != string(b) {
+		t.Fatal("empty and absent Direct sign differently")
+	}
+	_ = id
+}

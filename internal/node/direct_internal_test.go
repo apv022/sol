@@ -24,24 +24,24 @@ func nodeID(t *testing.T) string {
 func TestSetDirectOnlyAcceptsThePeersOwnAddress(t *testing.T) {
 	own, other := nodeID(t), nodeID(t)
 	p := config.Peer{NodeID: own, Addrs: map[string]string{"tor": "x.onion:80"}}
-	setDirect(&p, "sol-direct:"+own+"@10.0.0.2:7701")
+	setFast(&p, "sol-direct:"+own+"@10.0.0.2:7701", "")
 	if p.Addrs["direct"] == "" {
 		t.Fatal("own address dropped")
 	}
 	// Another node's key: dropped (and the old one with it, it's stale).
-	setDirect(&p, "sol-direct:"+other+"@10.0.0.9:22")
+	setFast(&p, "sol-direct:"+other+"@10.0.0.9:22", "")
 	if p.Addrs["direct"] != "" {
 		t.Fatalf("accepted another node's address: %q", p.Addrs["direct"])
 	}
 	// A direct address under another key would bypass the check (the dialer
 	// routes by address, not key): dropped.
 	p.Addrs["clearnet"] = "sol-direct:" + other + "@10.0.0.9:7701"
-	setDirect(&p, "")
+	setFast(&p, "", "")
 	if _, ok := p.Addrs["clearnet"]; ok {
 		t.Fatal("kept a direct address under another key")
 	}
-	setDirect(&p, "sol-direct:"+own+"@10.0.0.2:7701")
-	setDirect(&p, "garbage")
+	setFast(&p, "sol-direct:"+own+"@10.0.0.2:7701", "")
+	setFast(&p, "garbage", "")
 	if p.Addrs["direct"] != "" || p.Addrs["tor"] == "" {
 		t.Fatalf("malformed address handling: %v", p.Addrs)
 	}
@@ -56,13 +56,13 @@ func TestDirectBackoffDoubles(t *testing.T) {
 	waits := []time.Duration{}
 	for range 8 {
 		n.noteDirectFailure("p", "a")
-		waits = append(waits, n.directFail["p"].wait)
+		waits = append(waits, n.directFail[failKey("p", "a")].wait)
 	}
 	if waits[0] != directBackoff || waits[1] != 2*directBackoff || waits[7] != directBackoffMax {
 		t.Fatalf("backoff: %v", waits)
 	}
 	n.noteDirectFailure("p", "b") // a new address starts over
-	if n.directFail["p"].wait != directBackoff {
+	if n.directFail[failKey("p", "a")].wait != directBackoff {
 		t.Fatal("new address kept the old backoff")
 	}
 }
@@ -123,7 +123,7 @@ func TestDirectBlameRules(t *testing.T) {
 
 	n := testNode()
 	n.dialOnce(context.Background(), p, protocol.Request{Op: protocol.OpConnect})
-	if n.directFail["p"].addr != p.Addrs["direct"] {
+	if n.directFail[failKey("p", p.Addrs["direct"])].addr != p.Addrs["direct"] {
 		t.Fatal("a failed direct attempt with a live context wasn't recorded")
 	}
 
@@ -165,27 +165,29 @@ func TestBadDirectAdvertiseFailsClosed(t *testing.T) {
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701"}
 	id, _ := identity.Generate()
 	ts, warnings := buildTransports(cfg, t.TempDir(), id)
-	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" || len(warnings) != 2 {
+	if len(ts) != 2 || transport.Usable(ts[0]) || transport.Usable(ts[1]) || ts[0].Name() != "wg" || ts[1].Name() != "direct" || len(warnings) != 2 {
 		t.Fatalf("transports: %+v, warnings %v", ts, warnings)
 	}
 	// A failed-closed direct transport doesn't make the node chase direct
 	// addresses it can never dial.
 	n := &Node{reg: transport.NewRegistry(), lastGood: map[string]string{}, directFail: map[string]directFailure{}}
 	n.reg.Add(ts[0])
+	n.reg.Add(ts[1])
 	n.reg.Add(fakeTransport{"tor"})
 	if n.directUsable() {
 		t.Fatal("unavailable direct transport counted as usable")
 	}
 	da := "sol-direct:" + id.NodeID() + "@10.0.0.2:7701"
 	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": da, "tor": "tor:x"}}
-	n.directFail["p"] = directFailure{addr: da, at: time.Now(), wait: time.Hour} // also as last resort
+	n.directFail[failKey("p", da)] = directFailure{addr: da, at: time.Now(), wait: time.Hour} // also as last resort
 	if got := n.addrsInOrder(p); strings.Join(got, ",") != "tor:x" {
 		t.Fatalf("failed-closed direct still dialled: %v", got)
 	}
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701", "203.0.113.7:7701"}
 	ts, _ = buildTransports(cfg, t.TempDir(), id)
-	d, ok := ts[0].(*transport.Direct)
-	if !ok || len(d.Advertise) != 1 || d.Advertise[0] != "203.0.113.7:7701" {
-		t.Fatalf("mixed entries: %+v", ts[0])
+	w, okW := ts[0].(*transport.WG)
+	d, okD := ts[1].(*transport.Direct)
+	if !okW || !okD || len(d.Advertise) != 1 || d.Advertise[0] != "203.0.113.7:7701" || len(w.Advertise) != 1 {
+		t.Fatalf("mixed entries: %+v", ts)
 	}
 }

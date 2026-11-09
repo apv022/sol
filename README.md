@@ -149,7 +149,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Web panel: guided setup, invite/join, share toggles, live "connected and verified" status | ✅ |
 | Public services on their own onion | ✅ |
 | Shared files page for peers, streaming, SHA-256 fingerprints | ✅ |
-| Direct mode: straight to a peer's IP when reachable (LAN, IPv6, tailnet), Tor otherwise | ✅ opt-in (`"direct": true`) · 🗺️ NAT hole punching |
+| Direct mode over WireGuard: straight to a peer, punching through home routers (Tailscale-style), TLS where UDP is blocked, Tor otherwise | ✅ opt-in (`"direct": true`) · ❌ symmetric NATs stay on Tor (no relays) |
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |

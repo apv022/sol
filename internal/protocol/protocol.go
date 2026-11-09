@@ -97,8 +97,11 @@ type Request struct {
 	Service string `json:"service,omitempty"`
 	Secret  string `json:"secret,omitempty"` // pair: one-time pairing secret
 	Card    *Card  `json:"card,omitempty"`   // pair: the joiner's card
-	PubKey  string `json:"pubkey"`           // base64 ed25519 key of the caller
-	Sig     string `json:"sig"`              // base64 signature, see signedMessage
+	// Direct (list only): the caller's current direct-mode addresses
+	// ("direct", "wg"), so the callee can reach it directly too.
+	Direct map[string]string `json:"direct,omitempty"`
+	PubKey string            `json:"pubkey"` // base64 ed25519 key of the caller
+	Sig    string            `json:"sig"`    // base64 signature, see signedMessage
 
 	// Key is the decoded PubKey, filled in by ReadRequest.
 	Key ed25519.PublicKey `json:"-"`
@@ -117,6 +120,8 @@ type PeerInfo struct {
 	Name     string        `json:"name"`
 	PeerID   string        `json:"peer_id"` // the caller's id as the callee knows it
 	Services []ServiceInfo `json:"services"`
+	// WG is the callee's current WireGuard address ("" when off).
+	WG string `json:"wg"`
 	// Direct is the callee's current direct-mode address ("" when off).
 	// Direct addresses change with the network, so peers refresh them here
 	// rather than only at pairing. The caller never trusts it for identity:
@@ -148,6 +153,14 @@ func signedMessage(calleePub ed25519.PublicKey, nonce []byte, r *Request) ([]byt
 	lp([]byte(r.Service))
 	lp([]byte(r.Secret))
 	lp(card)
+	var direct []byte
+	if len(r.Direct) > 0 { // empty and absent sign the same (JSON omits an empty map)
+		var err error
+		if direct, err = json.Marshal(r.Direct); err != nil { // sorted keys: canonical
+			return nil, err
+		}
+	}
+	lp(direct)
 	return b.Bytes(), nil
 }
 

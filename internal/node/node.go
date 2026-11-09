@@ -247,6 +247,11 @@ func New(opts Options) (*Node, error) {
 	n.peers.OnRemove(func(p config.Peer) {
 		n.closeConns(func(ci connInfo) bool { return ci.peer == p.ID })
 		n.stopTunnels(func(t config.Tunnel) bool { return t.Peer == p.ID })
+		if t, ok := n.reg.Get("wg"); ok {
+			if w, ok := t.(*transport.WG); ok && p.Addrs["wg"] != "" {
+				w.RemovePeer(p.Addrs["wg"]) // its tunnel closes at once
+			}
+		}
 		n.removeAccess(p)
 		n.mu.Lock()
 		delete(n.lastGood, p.ID)
@@ -285,9 +290,20 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 			// peers more than the user chose to advertise.
 			why := "no usable direct_advertise entry (IP:port only); direct mode is off until config.json is fixed"
 			warnings = append(warnings, "direct: "+why)
-			ts = append(ts, transport.NewUnavailable("direct", errors.New(why)))
+			ts = append(ts, transport.NewUnavailable("wg", errors.New(why)), transport.NewUnavailable("direct", errors.New(why)))
 		} else {
-			ts = append(ts, transport.NewDirect(snap.Transports.DirectListen, id.Signer(), usable...))
+			stun := snap.Transports.STUN
+			if len(stun) == 0 {
+				stun = transport.DefaultSTUN
+			}
+			if snap.Transports.NoSTUN {
+				stun = nil
+			}
+			// WireGuard first (UDP, punches NATs); TLS over TCP on the same
+			// port number for networks that block UDP.
+			ts = append(ts,
+				transport.NewWG(snap.Transports.DirectListen, filepath.Join(dataDir, "wg.key"), usable, stun),
+				transport.NewDirect(snap.Transports.DirectListen, id.Signer(), usable...))
 		}
 	}
 	if snap.Transports.Clearnet {
@@ -379,6 +395,7 @@ func (n *Node) Run(ctx context.Context) error {
 	}
 	for _, p := range n.peers.List() {
 		n.installAccess(p)
+		n.syncWG(p)
 	}
 	n.refreshNodePublication(true)
 	for _, svc := range n.cfg.ServiceList() {
@@ -459,6 +476,40 @@ func (n *Node) refreshNodePublication(force bool) {
 		if _, err := t.Publish(n.ctx, transport.Publication{ID: pubNode, Target: n.nodeAddr, ClientAuth: keys}); err != nil {
 			n.log.Add(events.KindTransport, "publishing the node on "+name+": "+err.Error())
 		}
+	}
+}
+
+// wgAddr is this node's current WireGuard address ("" when off).
+func (n *Node) wgAddr() string {
+	if t, ok := n.reg.Get("wg"); ok {
+		return t.Status().Addresses[pubNode]
+	}
+	return ""
+}
+
+// fastAddrs are this node's current direct-mode addresses, sent to a peer
+// with every list request so it can reach this node directly too.
+func (n *Node) fastAddrs() map[string]string {
+	out := map[string]string{}
+	if a := n.directAddr(); a != "" {
+		out["direct"] = a
+	}
+	if a := n.wgAddr(); a != "" {
+		out["wg"] = a
+	}
+	return out
+}
+
+// syncWG tells the WireGuard transport about p (so both sides can find each
+// other), or forgets it when p has no WireGuard address.
+func (n *Node) syncWG(p config.Peer) {
+	t, ok := n.reg.Get("wg")
+	w, isWG := t.(*transport.WG)
+	if !ok || !isWG {
+		return
+	}
+	if a := p.Addrs["wg"]; a != "" {
+		w.SetPeer(a)
 	}
 }
 
@@ -568,6 +619,15 @@ func (n *Node) handleConn(c net.Conn) {
 	}
 	switch req.Op {
 	case protocol.OpList:
+		if len(req.Direct) > 0 { // the caller's current direct addresses
+			if up, err := n.peers.Update(p.ID, func(rec *config.Peer) error {
+				setFast(rec, req.Direct["direct"], req.Direct["wg"])
+				return nil
+			}); err == nil {
+				p = up
+				n.syncWG(up)
+			}
+		}
 		protocol.Accept(c, n.peerInfo(p))
 		c.Close()
 	case protocol.OpUnpair:
@@ -613,13 +673,14 @@ func (n *Node) handlePair(c net.Conn, req *protocol.Request) {
 		accessIn[t] = a.Authorize
 	}
 	joiner := config.Peer{NodeID: identity.NodeID(req.Key), Name: name, Addrs: maps.Clone(req.Card.Addrs), AccessIn: accessIn, AccessOut: req.Card.Access}
-	setDirect(&joiner, joiner.Addrs["direct"]) // a joiner may only announce its own key
+	setFast(&joiner, joiner.Addrs["direct"], joiner.Addrs["wg"]) // a joiner may only announce its own key
 	p, err := n.peers.Add(joiner, req.Key)
 	if err != nil {
 		n.reject(c, "pairing failed: "+err.Error())
 		return
 	}
 	n.installAccess(p)
+	n.syncWG(p)
 	if err := protocol.Accept(c, n.peerInfo(p)); err != nil {
 		return
 	}
@@ -745,7 +806,7 @@ func (n *Node) closeConns(match func(connInfo) bool) {
 // services we share with it.
 func (n *Node) peerInfo(p config.Peer) protocol.PeerInfo {
 	pi := protocol.PeerInfo{NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), PeerID: p.ID, Services: []protocol.ServiceInfo{},
-		Direct: n.directAddr()}
+		Direct: n.directAddr(), WG: n.wgAddr()}
 	for _, name := range p.Shares {
 		switch name {
 		case peers.Inbox, peers.Files:

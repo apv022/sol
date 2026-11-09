@@ -24,8 +24,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
   `sol close <peer> [service]` manage them. `http` tunnels check the Host header against DNS
   rebinding.
 - **Direct mode** (opt-in, `"direct": true` under `transports`): peers connect straight to each
-  other's IP addresses when they can (same LAN, IPv6, a shared tailnet) over TLS 1.3 pinned to the
-  node key, and over Tor when they can't. Addresses refresh themselves after a network change;
+  other over **WireGuard** (the official wireguard-go, in userspace: no root), with NAT hole
+  punching (STUN on the WireGuard socket, endpoints exchanged over Tor, punch packets, a single
+  handshake initiator), so two homes behind ordinary routers connect directly. TLS 1.3 pinned to
+  the node key covers networks that block UDP, and Tor everything else. Addresses refresh themselves after a network change;
   the panel shows "direct" or "via Tor" per connection. Public services are never direct. Peers
   may announce direct addresses only for their own key, as plain IPs; the port stays silent to
   anyone who doesn't already know the node's ID. `direct_advertise` (for a forwarded port) takes

@@ -147,6 +147,12 @@ type TransportsConfig struct {
 	Direct bool `json:"direct"`
 	// DirectListen is the direct-mode listen address (default ":7701").
 	DirectListen string `json:"direct_listen,omitempty"`
+	// STUN lists the STUN servers asked for this machine's public address
+	// (they learn that address, not whom you talk to). Empty means the
+	// defaults (transport.DefaultSTUN); NoSTUN turns STUN off (then only
+	// peers on the same network, IPv6 or a tailnet can connect directly).
+	STUN   []string `json:"stun,omitempty"`
+	NoSTUN bool     `json:"no_stun,omitempty"`
 	// DirectAdvertise replaces the advertised IP:port list, e.g. with a
 	// port forwarded on the router ("203.0.113.7:7701"). IP addresses only:
 	// peers never dial names an address list gives them. Loopback

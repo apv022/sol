@@ -356,7 +356,7 @@ function renderPeers() {
       <button data-action="pair">Invite a machine</button> <button class="ghost" data-action="join">Join with a link</button></div>`;
 }
 
-const viaLabel = v => ({ "tor": "via Tor", "direct": "direct", "clearnet": "LAN (unencrypted)", "i2p": "via I2P" })[v] || "via " + v;
+const viaLabel = v => ({ "tor": "via Tor", "wg": "direct (WireGuard)", "direct": "direct (TLS)", "clearnet": "LAN (unencrypted)", "i2p": "via I2P" })[v] || "via " + v;
 
 // One service a peer shares with us: Open it, or show its open tunnel.
 function theirService(p, svc) {

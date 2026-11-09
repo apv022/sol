@@ -24,11 +24,19 @@ says plainly what is and isn't protected in the current build. The longer design
 | Malicious web pages attacking the panel | Loopback-only bind, Host header check (DNS rebinding), CSRF token, strict CSP, HTML escaping | `api.guard`, `web/app.js` |
 | Linking a public site to your private node | Each public service gets its own onion key | `node.publishService` |
 | Network observers | Tor encrypts end to end. Onion services use no exit nodes. Direct mode uses TLS 1.3 | Tor, `transport/direct.go` |
-| A man in the middle on a direct connection (hostile Wi-Fi, a stale address now used by someone else) | The direct address names the node key; the dialer accepts only a TLS certificate for exactly that key, then the signed handshake runs inside | `transport/direct.go` |
+| A man in the middle on a direct connection (hostile Wi-Fi, a stale address now used by someone else) | WireGuard authenticates the peer's key (exchanged over Tor). TLS direct accepts only a certificate for the node key named in the address. Either way the signed Sol handshake runs inside | `transport/wg.go`, `transport/direct.go` |
+| Strangers probing the direct port | WireGuard answers only paired peers' keys; the TLS port answers only dialers who know the node ID. Neither replies to scanners | `transport/wg.go`, `transport/direct.go` |
 | Tampered bundled tor binary | A pinned SHA-256 is checked before extraction | `runtime/bundled.go` |
 
 ## What is NOT protected (yet, or ever)
 
+- **STUN servers learn your public IP.** With direct mode on, the node asks STUN servers
+  (Cloudflare and Google by default; `stun` in config, or `no_stun: true`) for its public
+  address. They learn that address and that you run something, not whom you talk to.
+- **Punch packets are unauthenticated hints.** Anyone who knows a peer's WireGuard key could
+  forge one. At worst that makes your node send a WireGuard handshake to an address of their
+  choosing, or briefly reset one session (at most every 10 s). WireGuard still authenticates
+  everything.
 - **Direct mode shows your IP addresses** (LAN, IPv6, tailnet) to your peers. It's off by
   default; turn it on only for peers you'd trust with your IP. Public and anonymous services are
   never published on it. The port answers only dialers that already know your node ID (the

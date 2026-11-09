@@ -33,7 +33,7 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
   `dial.go` (reaching peers, pairing as the joiner, unpair), `inbox.go` (files),
   `ctlserver.go` (CLI socket), `views.go` (panel backend).
 - `internal/protocol`: the handshake. Security-critical. Spec in `docs/PROTOCOL.md`.
-- `internal/transport`: `Transport` interface; `tor.go` (control port + SOCKS), `clearnet.go`, `i2p.go` (stub).
+- `internal/transport`: `Transport` interface; `tor.go` (control port + SOCKS), `wg.go` + `stun.go` (WireGuard direct mode, hole punching), `direct.go` (TLS direct), `clearnet.go`, `i2p.go` (stub).
 - `internal/runtime`: running `tor` as a child process (native / bundled / docker stub).
 - `internal/api` + `web/`: the panel. Plain JS, no build step.
 - `internal/e2e`: the tests that prove the product works. Extend them for any behaviour change.
@@ -41,7 +41,10 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 
 ## Rules
 
-1. **No third-party Go dependencies** without a strong reason. The stdlib covers this project.
+1. **No third-party Go dependencies** without a strong reason. The stdlib covers this project,
+   with one deliberate exception: the official `wireguard-go` (and the gVisor network stack it
+   brings) for direct mode, because hand-rolling a NAT-punching encrypted UDP protocol is the
+   riskier choice.
 2. **Never send bytes to a rejected connection.** Use `node.reject` (close + log).
 3. **Never log secrets**: pairing secrets, keys, Tor client-auth keys, request bodies.
 4. **The panel stays loopback-only** with the Host check and CSRF. Don't loosen `api.guard`.
