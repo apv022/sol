@@ -46,7 +46,7 @@ files, because the laptop publishes its own onion.
 | `internal/pairing` | One-time tokens and `sol://pair` links | `Manager.NewToken/Consume/Pending`, `Link`, `ParseLink` |
 | `internal/identity` | ed25519 node keys, x25519 Tor client-auth keys | `LoadOrCreate`, `NodeID`, `DeviceID`, `NewX25519` |
 | `internal/config` | `~/.sol/config.json`: atomic save, validation, migration | `Load`, `AddService`, `AddPeer`, `UpdatePeer`, `Snapshot` |
-| `internal/transport` | `Transport` interface, `Registry`, Tor / clearnet / I2P(stub), per-peer access | `Publication`, `Access`, `AccessIssuer`, `ClientAuthorizer`, `Tor`, `Clearnet` |
+| `internal/transport` | `Transport` interface, `Registry`, Tor / direct / clearnet / I2P(stub), per-peer access | `Publication`, `Access`, `AccessIssuer`, `ClientAuthorizer`, `Tor`, `Direct`, `Clearnet` |
 | `internal/runtime` | Find and run external programs (tor) | `Provider`, `Select`, `Native`, `Bundled`, `Docker`(stub) |
 | `internal/autostart` | Start the node at login: systemd user unit (Linux), LaunchAgent (macOS) | `Manager.Enable/Disable/Status`, `SystemdUnit`, `LaunchAgentPlist` |
 | `internal/control` | Control-socket wire format and client | `Request`, `Call`, `Dial`, `Path` |
@@ -77,8 +77,9 @@ packages `config`, `identity`, `events`, `control`, and `netutil` import no othe
    at the next start.
 2. For each local connection (or, for `http` services, each upstream connection the tunnel's
    reverse proxy needs, after its Host check), the tunnel calls `DialPeer`.
-3. The node's `DialPeer` → `dial` picks an address (last one that worked, then ready transports,
-   then Tor before I2P before clearnet), dials it (`transport.Tor.Dial` → SOCKS5 →
+3. The node's `DialPeer` → `dial` picks an address (the peer's direct address unless it failed in
+   the last minute, then the last one that worked, then ready transports, then Tor before I2P
+   before clearnet), dials it (`transport.Tor.Dial` → SOCKS5 →
    `<peer>.onion:80`), and runs the handshake, checking the callee is the expected node.
 4. On the peer, Tor forwards to the node listener `127.0.0.1:8081`, and `node.handleConn` →
    `protocol.ReadRequest` verifies the signature.

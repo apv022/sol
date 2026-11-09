@@ -137,6 +137,15 @@ type TransportsConfig struct {
 	ClearnetListen string `json:"clearnet_listen,omitempty"`
 	// ClearnetAdvertise overrides the host:port put in pairing links.
 	ClearnetAdvertise string `json:"clearnet_advertise,omitempty"`
+	// Direct enables direct mode: peers connect straight to this machine's
+	// IP addresses (TLS pinned to the node key) when they can, and over Tor
+	// when they can't. Off by default because it shows peers your IP.
+	Direct bool `json:"direct"`
+	// DirectListen is the direct-mode listen address (default ":7701").
+	DirectListen string `json:"direct_listen,omitempty"`
+	// DirectAdvertise replaces the advertised host:port list, e.g. with a
+	// port forwarded on the router ("203.0.113.7:7701").
+	DirectAdvertise []string `json:"direct_advertise,omitempty"`
 }
 
 // RuntimeConfig controls how tor/i2pd are obtained (spec.md 6.2.1).
@@ -173,6 +182,7 @@ func Default() *Config {
 		Transports: TransportsConfig{
 			Tor:            true,
 			ClearnetListen: "0.0.0.0:7700",
+			DirectListen:   ":7701",
 		},
 		Runtime: RuntimeConfig{
 			ProviderOrder:    slices.Clone(knownProviders),
@@ -275,6 +285,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Transports.ClearnetListen == "" {
 		c.Transports.ClearnetListen = d.Transports.ClearnetListen
+	}
+	if c.Transports.DirectListen == "" {
+		c.Transports.DirectListen = d.Transports.DirectListen
 	}
 	if len(c.Runtime.ProviderOrder) == 0 {
 		c.Runtime.ProviderOrder = d.Runtime.ProviderOrder

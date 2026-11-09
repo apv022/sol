@@ -117,6 +117,11 @@ type PeerInfo struct {
 	Name     string        `json:"name"`
 	PeerID   string        `json:"peer_id"` // the caller's id as the callee knows it
 	Services []ServiceInfo `json:"services"`
+	// Direct is the callee's current direct-mode address ("" when off).
+	// Direct addresses change with the network, so peers refresh them here
+	// rather than only at pairing. The caller never trusts it for identity:
+	// the direct transport pins the node key named in the address itself.
+	Direct string `json:"direct"`
 }
 
 // signedMessage builds the exact bytes that are signed. Each variable-length

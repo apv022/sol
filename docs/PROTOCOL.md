@@ -103,10 +103,36 @@ onion address already authenticates the callee.
 | `_inbox` | HTTP. `PUT /files/{name}` with the file as the body → `201 {"hash", "size"}`. Requests carrying `Origin` or `Sec-Fetch-Site` are refused, so browsers can't be used to send |
 | `_files` | HTTP. The shared-files page `/` and `/blob/<sha256>[/<name>][?download]` |
 
+## Direct mode transport
+
+With `transports.direct` on, a node also listens on `direct_listen` (default `:7701`) and
+publishes the address
+
+```
+sol-direct:<node id>@<host:port>,<host:port>,...
+```
+
+listing its usable IPs (LAN IPv4, global IPv6, a tailnet address; container bridges and
+link-local are skipped; at most 8). A dialer:
+
+1. connects to every candidate at once (`DirectDialTimeout`, 3 s) and keeps the first that
+   succeeds;
+2. sends the 5-byte preamble `SOLD1`; the listener closes, sending nothing, on anything else;
+3. runs TLS 1.3. The server certificate is self-signed with the **node's ed25519 key**, and the
+   dialer accepts only the key named in the address (no CA, no trust on first use);
+4. runs the normal handshake above inside TLS.
+
+Direct addresses change with the network, so `PeerInfo` carries the callee's current one
+(`"direct": "sol-direct:..."`, or `""` when off), and the caller replaces its record. When a
+dialer reaches a peer over another transport although the peer has a direct address, it asks
+for the current one (`list`, at most every 5 minutes). A direct address that just failed is
+tried last for a minute, so a dead path doesn't slow every connection. Only the node
+publication is carried: public and anonymous services are never reachable directly.
+
 ## What this protocol does not do
 
 - **No encryption of its own.** Confidentiality comes from the transport: Tor and I2P encrypt end
-  to end. The clearnet transport is unencrypted and meant for LANs and tests. Someone on that path
+  to end, and direct mode uses TLS 1.3 pinned to the node key. The clearnet transport is unencrypted and meant for LANs and tests. Someone on that path
   can read the traffic and could relay a connection, though they cannot forge a node's signature.
 - **No per-request authorization.** Once a `connect` succeeds, the pipe is trusted until it
   closes. Removing a peer closes its live connections in both directions immediately, and
@@ -127,7 +153,8 @@ sol://pair?node=<node id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port
 ```
 
 `node` and `s` are required, plus at least one address. Every parameter other than `v`, `node`,
-`name` and `s` names a transport: `<transport>=<address>` or `auth.<transport>=<credential>`. The
+`name` and `s` names a transport: `<transport>=<address>` or `auth.<transport>=<credential>`
+(for example `direct=sol-direct:...`). The
 link is a password: it is single use and expires after 10 minutes.
 
 ## Versioning

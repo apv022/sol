@@ -11,6 +11,7 @@
 package identity
 
 import (
+	"crypto"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -85,6 +86,10 @@ func (i *Identity) DeviceID() string { return DeviceID(i.Public()) }
 
 // Sign signs msg.
 func (i *Identity) Sign(msg []byte) []byte { return ed25519.Sign(i.priv, msg) }
+
+// Signer exposes the key as a crypto.Signer, for the direct transport's TLS
+// certificate. Callers must not export or log it.
+func (i *Identity) Signer() crypto.Signer { return i.priv }
 
 // NodeID encodes a public key as a node ID (52 lowercase base32 chars).
 func NodeID(pub ed25519.PublicKey) string { return strings.ToLower(b32.EncodeToString(pub)) }

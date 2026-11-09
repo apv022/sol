@@ -23,11 +23,16 @@ says plainly what is and isn't protected in the current build. The longer design
 | Malicious web pages reading a peer's app through a tunnel | Tunnels bind `127.0.0.1`; `http` tunnels accept only a `127.0.0.1`/`localhost` Host header (DNS rebinding) and add no forwarding headers | `node/tunnels.go` |
 | Malicious web pages attacking the panel | Loopback-only bind, Host header check (DNS rebinding), CSRF token, strict CSP, HTML escaping | `api.guard`, `web/app.js` |
 | Linking a public site to your private node | Each public service gets its own onion key | `node.publishService` |
-| Network observers | Tor encrypts end to end. Onion services use no exit nodes | Tor |
+| Network observers | Tor encrypts end to end. Onion services use no exit nodes. Direct mode uses TLS 1.3 | Tor, `transport/direct.go` |
+| A man in the middle on a direct connection (hostile Wi-Fi, a stale address now used by someone else) | The direct address names the node key; the dialer accepts only a TLS certificate for exactly that key, then the signed handshake runs inside | `transport/direct.go` |
 | Tampered bundled tor binary | A pinned SHA-256 is checked before extraction | `runtime/bundled.go` |
 
 ## What is NOT protected (yet, or ever)
 
+- **Direct mode shows your IP addresses** (LAN, IPv6, tailnet) to your peers, and anyone who can
+  reach the direct port and sends the preamble learns your node key (its public half). It's off
+  by default; turn it on only for peers you'd trust with your IP. Public and anonymous services
+  are never published on it. Port scanners that don't speak Sol get no reply.
 - **Clearnet transport.** It's unencrypted and shows your LAN IP. Use it only on a trusted LAN or
   for testing. Peers are still authenticated, but traffic can be read.
 - **Your peers know your onion.** Pairing is mutual, so each peer can reach your node's address

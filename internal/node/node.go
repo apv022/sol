@@ -108,6 +108,9 @@ type Node struct {
 	public   map[string]*publicService
 	lastAuth map[string]string // transport -> client-auth key set last published for the node
 	lastGood map[string]string // peer id -> address that last worked
+	// peer id -> last refreshDirect (dial.go)
+	lastDirectRefresh map[string]time.Time
+	directFail        map[string]directFailure // peer id -> last failed direct address
 
 	tmu     sync.Mutex
 	tunnels map[int]*tunnel // by local port (tunnels.go)
@@ -176,11 +179,18 @@ func New(opts Options) (*Node, error) {
 		lastAuth: map[string]string{},
 		lastGood: map[string]string{},
 		tunnels:  map[int]*tunnel{},
+
+		lastDirectRefresh: map[string]time.Time{},
+		directFail:        map[string]directFailure{},
 	}
-	n.autostart, _ = autostart.ForThisProcess(goruntime.GOOS, opts.DataDir) // a zero Manager reports "unsupported"
+	// A temporary binary (go run, go test) reports autostart as unsupported
+	// rather than reading the real user's entry.
+	if m, err := autostart.ForThisProcess(goruntime.GOOS, opts.DataDir); err == nil {
+		n.autostart = m
+	}
 	ts := opts.Transports
 	if ts == nil {
-		ts = buildTransports(cfg, opts.DataDir)
+		ts = buildTransports(cfg, opts.DataDir, id)
 	}
 	for _, t := range ts {
 		n.reg.Add(t)
@@ -203,7 +213,7 @@ func New(opts Options) (*Node, error) {
 }
 
 // buildTransports creates the transports enabled in config.
-func buildTransports(cfg *config.Config, dataDir string) []transport.Transport {
+func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) []transport.Transport {
 	snap := cfg.Snapshot()
 	ropts := runtime.Options{BinDir: filepath.Join(dataDir, "bin"), ContainerRuntime: snap.Runtime.ContainerRuntime}
 	var ts []transport.Transport
@@ -217,6 +227,9 @@ func buildTransports(cfg *config.Config, dataDir string) []transport.Transport {
 	if snap.Transports.I2P {
 		prov, _ := runtime.Select(snap.Runtime.ProviderOrder, "i2pd", ropts)
 		ts = append(ts, transport.NewI2P(filepath.Join(dataDir, "i2pd"), prov))
+	}
+	if snap.Transports.Direct {
+		ts = append(ts, transport.NewDirect(snap.Transports.DirectListen, id.Signer(), snap.Transports.DirectAdvertise...))
 	}
 	if snap.Transports.Clearnet {
 		ts = append(ts, transport.NewClearnet(snap.Transports.ClearnetListen, snap.Transports.ClearnetAdvertise))
@@ -653,7 +666,8 @@ func (n *Node) closeConns(match func(connInfo) bool) {
 // peerInfo is what we tell peer p about ourselves: our name and the
 // services we share with it.
 func (n *Node) peerInfo(p config.Peer) protocol.PeerInfo {
-	pi := protocol.PeerInfo{NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), PeerID: p.ID, Services: []protocol.ServiceInfo{}}
+	pi := protocol.PeerInfo{NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), PeerID: p.ID, Services: []protocol.ServiceInfo{},
+		Direct: n.ownAddrs()["direct"]}
 	for _, name := range p.Shares {
 		switch name {
 		case peers.Inbox, peers.Files:
@@ -685,21 +699,22 @@ func (n *Node) publishService(svc config.Service) {
 		target, stop = ln.Addr().String(), func() { srv.Close() }
 	}
 	only := svc.Transports
-	if svc.Visibility == config.VisibilityAnonymousPublic {
-		// Never expose an anonymous service on clearnet.
-		if len(only) == 0 {
-			for _, t := range n.reg.List() {
-				only = append(only, t.Name())
-			}
+	if len(only) == 0 {
+		for _, t := range n.reg.List() {
+			only = append(only, t.Name())
 		}
-		only = slices.DeleteFunc(slices.Clone(only), func(s string) bool { return s == "clearnet" })
-		if len(only) == 0 {
-			n.log.Add(events.KindService, svc.Name+": no anonymous transport available, not published")
-			if stop != nil {
-				stop()
-			}
-			return
+	}
+	// Direct mode carries only the node itself (transport/direct.go), and an
+	// anonymous service is never exposed on clearnet.
+	only = slices.DeleteFunc(slices.Clone(only), func(s string) bool {
+		return s == "direct" || (s == "clearnet" && svc.Visibility == config.VisibilityAnonymousPublic)
+	})
+	if len(only) == 0 { // PublishAll would read an empty list as "all"
+		n.log.Add(events.KindService, svc.Name+": no suitable transport for a public service, not published")
+		if stop != nil {
+			stop()
 		}
+		return
 	}
 	addrs, err := n.reg.PublishAll(n.ctx, transport.Publication{ID: "svc-" + svc.Name, Target: target}, only)
 	if err != nil {

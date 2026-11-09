@@ -106,6 +106,14 @@ stay running in a terminal:
 - Unpairing closes and forgets the peer's tunnels. If the peer stops sharing the service, the
   tunnel stays but every connection is refused; close it with **Close** or `sol close`.
 
+## Direct mode
+
+Set `"direct": true` under `transports` in `config.json` (and allow TCP port 7701 on your
+firewall), then restart Sol. Peers then connect straight to this machine whenever they can
+(same Wi-Fi, IPv6, a shared tailnet), which is much faster than Tor, and use Tor when they
+can't. The panel shows which path each connection uses ("direct" or "via Tor"). Your peers see
+your IP addresses, so it's opt-in. Details: [PROTOCOL.md](PROTOCOL.md#direct-mode-transport).
+
 ## Unpairing
 
 `unpair` removes the peer locally first (its connections close, its Tor key leaves our onion),

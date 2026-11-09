@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,10 +23,13 @@ import (
 // perAddrDialTimeout bounds one transport-level dial (Tor can be slow).
 const perAddrDialTimeout = 2 * time.Minute
 
-// transportPreference orders a peer's addresses: anonymous transports first,
-// clearnet (LAN) last. Unknown future transports go in between.
+// transportPreference orders a peer's addresses: direct first (opt-in, and
+// it gives up within DirectDialTimeout), then anonymous transports, clearnet
+// (LAN) last. Unknown future transports go in between.
 func transportPreference(name string) int {
 	switch name {
+	case "direct":
+		return -1 // fastest when it works; fails within seconds when it doesn't
 	case "tor":
 		return 0
 	case "i2p":
@@ -36,8 +40,14 @@ func transportPreference(name string) int {
 	return 5
 }
 
-// addrsInOrder lists p's addresses, the one that last worked first, then
-// the ones whose transport is ready right now (e.g. LAN while tor is still
+// directBackoff is how long a failed direct address is tried last instead
+// of first, so a dead direct path doesn't add DirectDialTimeout to every
+// connection.
+var directBackoff = time.Minute
+
+// addrsInOrder lists p's addresses: its direct address first (unless it
+// failed within directBackoff), then the one that last worked, then the
+// ones whose transport is ready right now (e.g. LAN while tor is still
 // bootstrapping), then by transport preference.
 func (n *Node) addrsInOrder(p config.Peer) []string {
 	type cand struct {
@@ -62,13 +72,20 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	})
 	n.mu.Lock()
 	last := n.lastGood[p.ID]
+	df := n.directFail[p.ID]
 	n.mu.Unlock()
+	direct := p.Addrs["direct"]
+	if _, ok := n.reg.Get("direct"); !ok || (df.addr == direct && time.Since(df.at) < directBackoff) {
+		direct = "" // not now: tried in the normal order below
+	}
 	out := make([]string, 0, len(cs)+1)
-	if last != "" {
-		out = append(out, last)
+	for _, a := range []string{direct, last} {
+		if a != "" && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
 	}
 	for _, c := range cs {
-		if c.addr != last {
+		if !slices.Contains(out, c.addr) {
 			out = append(out, c.addr)
 		}
 	}
@@ -94,6 +111,11 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
+			if t.Name() == "direct" {
+				n.mu.Lock()
+				n.directFail[p.ID] = directFailure{addr, time.Now()}
+				n.mu.Unlock()
+			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
@@ -107,7 +129,18 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		if p.ID != "" {
 			n.mu.Lock()
 			n.lastGood[p.ID] = addr
+			if t.Name() == "direct" {
+				delete(n.directFail, p.ID)
+			}
 			n.mu.Unlock()
+			// Reached it, but not directly although it has a direct address (it
+			// failed just now, or is backing off): the address may be stale, so
+			// ask for the current one over this working path. Rate-limited.
+			if t.Name() != "direct" && p.Addrs["direct"] != "" && req.Op != protocol.OpList {
+				if _, ok := n.reg.Get("direct"); ok {
+					go n.refreshDirect(p.ID)
+				}
+			}
 		}
 		return &pathConn{Conn: conn, via: t.Name()}, nil
 	}
@@ -280,6 +313,7 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 	}
 	inviter.AccessIn = accessIn
 	inviter.Services = remoteServices(info.Services)
+	setDirect(&inviter, info.Direct)
 	p, err := n.peers.Add(inviter, pub)
 	if err != nil {
 		return config.Peer{}, err
@@ -287,6 +321,24 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 	n.installAccess(p) // Add replaced any old record, whose removal forgot the key
 	n.log.Add(events.KindPair, "paired with "+peers.Describe(p))
 	return p, nil
+}
+
+// setDirect records a peer's current direct-mode address, or forgets it
+// when the peer has direct mode off. A malformed address is ignored.
+func setDirect(p *config.Peer, addr string) {
+	if addr != "" {
+		if _, _, err := transport.ParseDirectAddr(addr); err != nil {
+			return
+		}
+	}
+	if p.Addrs == nil {
+		p.Addrs = map[string]string{}
+	}
+	if addr == "" {
+		delete(p.Addrs, "direct")
+	} else {
+		p.Addrs["direct"] = addr
+	}
 }
 
 func remoteServices(in []protocol.ServiceInfo) []config.RemoteService {
@@ -318,6 +370,7 @@ func (n *Node) RefreshPeer(ctx context.Context, id string) (config.Peer, error) 
 	}
 	return n.peers.Update(id, func(rec *config.Peer) error {
 		rec.Services = remoteServices(info.Services)
+		setDirect(rec, info.Direct)
 		if config.ValidateName(info.Name) == nil {
 			rec.Name = info.Name
 		}
@@ -343,4 +396,29 @@ func (n *Node) Unpair(ctx context.Context, id string) (p config.Peer, notified b
 		return p, notified, err
 	}
 	return p, notified, nil
+}
+
+// directFailure remembers a direct address that just failed.
+type directFailure struct {
+	addr string
+	at   time.Time
+}
+
+// refreshDirectEvery rate-limits refreshDirect per peer.
+const refreshDirectEvery = 5 * time.Minute
+
+// refreshDirect asks a peer for its current addresses after a direct
+// attempt failed (it moved networks, or got a new DHCP lease), at most once
+// per refreshDirectEvery.
+func (n *Node) refreshDirect(id string) {
+	n.mu.Lock()
+	if time.Since(n.lastDirectRefresh[id]) < refreshDirectEvery {
+		n.mu.Unlock()
+		return
+	}
+	n.lastDirectRefresh[id] = time.Now()
+	n.mu.Unlock()
+	ctx, cancel := context.WithTimeout(n.ctx, 2*time.Minute)
+	defer cancel()
+	n.RefreshPeer(ctx, id)
 }
