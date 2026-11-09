@@ -271,3 +271,32 @@ func TestUDPResetIsNotFatal(t *testing.T) {
 		t.Fatal("a closed socket must stay fatal")
 	}
 }
+
+// Stopping while punch packets arrive must not deadlock (Stop used to hold
+// the lock that the receive path needs, while waiting for that path) or
+// crash the background loop. Seen on macOS CI.
+func TestWireGuardStopUnderPunches(t *testing.T) {
+	for range 5 {
+		a, aAddr := startWG(t)
+		b, bAddr := startWG(t)
+		a.SetPeer(bAddr) // a knows b but has no tunnel, so b's punches reach onPunch
+		b.SetPeer(aAddr)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p := b.peers[func() [32]byte { k, _, _ := ParseWGAddr(aAddr); return k }()]
+			for i := 0; i < 200; i++ {
+				b.punch(p)
+			}
+		}()
+		stopped := make(chan struct{})
+		go func() { a.Stop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Stop deadlocked while punch packets arrived")
+		}
+		<-done
+		time.Sleep(600 * time.Millisecond) // let a's loop tick after Stop
+	}
+}

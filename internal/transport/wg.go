@@ -452,6 +452,9 @@ func (w *WG) RemovePeer(addr string) {
 // tunnel is up: without a session a keepalive starts a handshake, and only
 // the initiator may do that (see the file comment).
 func (w *WG) configureLocked(p *wgPeer) {
+	if w.dev == nil {
+		return // stopped meanwhile
+	}
 	keepalive := 0
 	if p.up {
 		keepalive = wgKeepalive
@@ -674,6 +677,10 @@ func (w *WG) loop(stopped chan struct{}) {
 		now := time.Now()
 		var punch, poke []*wgPeer
 		w.mu.Lock()
+		if w.stopped != stopped { // Stop ran while we read the handshakes
+			w.mu.Unlock()
+			return
+		}
 		for _, p := range w.peers {
 			live := now.Sub(hs[p.pub]) < wgFresh
 			if live {
@@ -765,22 +772,27 @@ func (w *WG) Status() Status {
 }
 
 // Stop closes the device and every tunnel.
+//
+// The device is closed without holding w.mu: closing waits for
+// wireguard-go's receive goroutine, which may itself be waiting for w.mu
+// (a punch packet arriving now calls onPunch), so holding it would
+// deadlock shutdown.
 func (w *WG) Stop() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.stopped != nil {
 		close(w.stopped)
 		w.stopped = nil
 	}
-	if w.ln != nil {
-		w.ln.Close()
-		w.ln = nil
-	}
-	if w.dev != nil {
-		w.dev.Close()
-		w.dev, w.tnet, w.bind = nil, nil, nil
-	}
+	ln, dev := w.ln, w.dev
+	w.ln, w.dev, w.tnet, w.bind = nil, nil, nil, nil
 	w.state = StateStopped
+	w.mu.Unlock()
+	if ln != nil {
+		ln.Close()
+	}
+	if dev != nil {
+		dev.Close()
+	}
 	return nil
 }
 
