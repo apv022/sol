@@ -101,11 +101,9 @@ func preambleFor(pub ed25519.PublicKey) []byte {
 // NewDirect constructs the transport for the node key (identity.Signer).
 func NewDirect(listenAddr string, key crypto.Signer, advertise ...string) *Direct {
 	pub := key.Public().(ed25519.PublicKey)
-	host, _, _ := net.SplitHostPort(listenAddr)
-	ip := net.ParseIP(host)
 	return &Direct{ListenAddr: listenAddr, Advertise: advertise, key: key,
 		nodeID: identity.NodeID(pub), preamble: preambleFor(pub), state: StateStopped,
-		allowLoopback: host == "localhost" || (ip != nil && ip.IsLoopback()), retryEvery: retryListenEvery}
+		allowLoopback: netutil.IsLoopbackListen(listenAddr), retryEvery: retryListenEvery}
 }
 
 // SetAdvertise replaces the advertised candidates (nil: this machine's
@@ -121,7 +119,14 @@ func (d *Direct) SetAdvertise(cands []string) {
 func (d *Direct) Name() string { return "direct" }
 
 // Start makes the certificate; the listener opens on Publish("node").
+// Starting a started transport is a no-op (a running retry loop keeps going).
 func (d *Direct) Start(ctx context.Context) error {
+	d.mu.Lock()
+	running := d.stopped != nil
+	d.mu.Unlock()
+	if running {
+		return nil
+	}
 	cert, err := selfSigned(d.key)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -130,10 +135,7 @@ func (d *Direct) Start(ctx context.Context) error {
 		return err
 	}
 	d.srvTLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
-	if d.stopped != nil && d.state != StateStopped {
-		close(d.stopped) // Start without Stop: end the old retry loop
-	}
-	d.stopped = make(chan struct{})
+	d.stopped = make(chan struct{}) // non-nil exactly while started
 	d.state, d.retrying = StateReady, false
 	return nil
 }
@@ -166,7 +168,7 @@ func (d *Direct) Publish(ctx context.Context, p Publication) (string, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.srvTLS == nil || d.state == StateStopped {
+	if d.stopped == nil {
 		return "", errors.New("direct: not started")
 	}
 	d.target = p.Target // also while the port is still being retried
@@ -514,8 +516,9 @@ func (d *Direct) Stop() error {
 		d.ln.Close()
 		d.ln = nil
 	}
-	if d.stopped != nil && d.state != StateStopped {
+	if d.stopped != nil {
 		close(d.stopped)
+		d.stopped = nil
 	}
 	d.state, d.retrying = StateStopped, false
 	return nil

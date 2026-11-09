@@ -95,3 +95,15 @@ func DirectCandidate(hostport string, allowLoopback bool) error {
 	}
 	return nil
 }
+
+// IsLoopbackListen reports whether a listen address ("127.0.0.1:7701",
+// "localhost:0") is loopback-only. A direct-mode node listening there may
+// advertise and dial loopback candidates (two nodes on one machine).
+func IsLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
+}

@@ -84,9 +84,13 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	backingOff := direct != "" && df.addr == direct && time.Since(df.at) < df.wait
 	out := make([]string, 0, len(cs)+1)
 	add := func(a string) {
-		if a != "" && !slices.Contains(out, a) && !(backingOff && a == direct) {
-			out = append(out, a)
+		if a == "" || slices.Contains(out, a) || (backingOff && a == direct) {
+			return
 		}
+		if _, err := n.reg.For(a); err != nil {
+			return // no enabled transport (e.g. direct mode is off here)
+		}
+		out = append(out, a)
 	}
 	_, haveDirect := n.reg.Get("direct")
 	if haveDirect {
@@ -99,7 +103,7 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	for _, c := range cs {
 		add(c.addr)
 	}
-	if backingOff {
+	if backingOff && haveDirect {
 		out = append(out, direct) // last resort only
 	}
 	return out
@@ -120,21 +124,19 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 			continue
 		}
 		dctx, cancel := context.WithTimeout(ctx, perAddrDialTimeout)
+		attempt := time.Now()
 		conn, err := t.Dial(dctx, addr)
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
-			// Blame the path only when the caller's own context is still live:
-			// a cancel or an expired caller deadline says nothing about it (the
-			// direct transport times itself out in DirectDialTimeout).
-			if t.Name() == "direct" && ctx.Err() == nil {
+			if t.Name() == "direct" && blameDirect(ctx, attempt) {
 				n.noteDirectFailure(p.ID, addr)
 			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
 			conn.Close()
-			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && ctx.Err() == nil {
+			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && blameDirect(ctx, attempt) {
 				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
@@ -416,6 +418,21 @@ func (n *Node) Unpair(ctx context.Context, id string) (p config.Peer, notified b
 		return p, notified, err
 	}
 	return p, notified, nil
+}
+
+// blameDirect decides whether a failed direct attempt counts against the
+// path. Not when the caller cancelled, nor when its deadline had (nearly)
+// run out before the attempt could really run; yes when the context is live
+// or the caller's deadline expired during a real attempt (a black hole that
+// ate it).
+func blameDirect(ctx context.Context, attempt time.Time) bool {
+	switch {
+	case ctx.Err() == nil:
+		return true
+	case errors.Is(ctx.Err(), context.Canceled):
+		return false
+	}
+	return time.Since(attempt) >= time.Second
 }
 
 // directFailure remembers a direct address that just failed.

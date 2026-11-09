@@ -207,12 +207,7 @@ func (m Manager) Enable(startNow bool) error {
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return fmt.Errorf("checking %s: %w", m.unitPath(), err)
 		}
-		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
-			return err
-		}
-		if err := config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600); err != nil {
-			return err
-		}
+
 		_, existed := os.Stat(m.unitPath())
 		if err := writeFile(m.unitPath(), SystemdUnit(m.Exe, m.DataDir, m.Path)); err != nil {
 			return err
@@ -220,8 +215,15 @@ func (m Manager) Enable(startNow bool) error {
 		if err := m.run("systemctl", "--user", "daemon-reload"); err != nil {
 			if existed != nil { // don't leave a half-set-up entry behind
 				os.Remove(m.unitPath())
-				os.Remove(filepath.Join(m.DataDir, pointerName))
 			}
+			return err
+		}
+		// Record where the unit is only once it is in place, so a failure
+		// never leaves the record pointing at nothing (or loses an old one).
+		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
+			return err
+		}
+		if err := config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600); err != nil {
 			return err
 		}
 		// Clears a start-limit hit from earlier failures, or --now can't start it.

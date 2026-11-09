@@ -205,3 +205,21 @@ func TestLoadDropsBadDirectAdvertise(t *testing.T) {
 		t.Fatalf("direct_advertise after load: %v", da)
 	}
 }
+
+// If every direct_advertise entry is unusable, direct mode turns off rather
+// than advertising every local address (fail closed).
+func TestNoUsableDirectAdvertiseTurnsDirectOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	c.Transports.Direct = true
+	b, _ := json.Marshal(c)
+	b = []byte(strings.Replace(string(b), `"direct":true`, `"direct":true,"direct_advertise":["myhost.example:7701"]`, 1))
+	os.WriteFile(path, b, 0o600)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Snapshot().Transports.Direct {
+		t.Fatal("direct mode stayed on with no usable advertised address")
+	}
+}

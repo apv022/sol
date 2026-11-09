@@ -110,7 +110,9 @@ stay running in a terminal:
 
 Set `"direct": true` under `transports` in `config.json` (and allow TCP port 7701 on your
 firewall), then restart Sol. Behind a router you can forward the port and list it in
-`direct_advertise` (IP:port only). Two nodes on one machine: set both `direct_listen` to
+`direct_advertise`: IP:port only (no names; peers never dial names), no loopback, link-local or
+multicast addresses. An unusable entry is ignored with a warning, and if none is left, direct
+mode stays off rather than advertising all your addresses. Two nodes on one machine: set both `direct_listen` to
 `127.0.0.1:<port>`. Peers then connect straight to this machine whenever they can
 (same Wi-Fi, IPv6, a shared tailnet), which is much faster than Tor, and use Tor when they
 can't. The panel shows which path each connection uses ("direct" or "via Tor"). Your peers see

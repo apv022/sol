@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -69,11 +70,19 @@ func (f fakeTransport) Stop() error                 { return nil }
 func (f fakeTransport) Status() transport.Status {
 	return transport.Status{Name: f.name, State: transport.StateReady}
 }
-func (f fakeTransport) Handles(a string) bool { return strings.HasPrefix(a, f.name+":") }
+func (f fakeTransport) Handles(a string) bool {
+	if f.name == "direct" {
+		return transport.IsDirect(a)
+	}
+	return strings.HasPrefix(a, f.name+":")
+}
 func (f fakeTransport) Publish(context.Context, transport.Publication) (string, error) {
 	return "", transport.ErrNotImplemented
 }
 func (f fakeTransport) Dial(ctx context.Context, _ string) (net.Conn, error) {
+	if f.name == "direct" {
+		return nil, errors.New("connection refused") // a dead direct path, at once
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -102,20 +111,34 @@ func TestStaleDirectLastGoodIsSkipped(t *testing.T) {
 	}
 }
 
-func TestCancelledDialStartsNoBackoff(t *testing.T) {
-	n := testNode()
+func TestDirectBlameRules(t *testing.T) {
 	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": "sol-direct:a@10.0.0.2:7701"}}
+
+	n := testNode()
+	n.dialOnce(context.Background(), p, protocol.Request{Op: protocol.OpConnect})
+	if n.directFail["p"].addr != p.Addrs["direct"] {
+		t.Fatal("a failed direct attempt with a live context wasn't recorded")
+	}
+
+	n = testNode()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	n.dialOnce(ctx, p, protocol.Request{Op: protocol.OpConnect})
 	if len(n.directFail) != 0 {
 		t.Fatal("our own cancel was blamed on the direct path")
 	}
-	// Nor does the caller's own deadline running out.
-	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer dcancel()
-	n.dialOnce(dctx, p, protocol.Request{Op: protocol.OpConnect})
-	if len(n.directFail) != 0 {
-		t.Fatal("the caller's deadline was blamed on the direct path")
+
+	if blameDirect(expired(t), time.Now()) {
+		t.Fatal("a deadline that was already gone was blamed on the path")
 	}
+	if !blameDirect(expired(t), time.Now().Add(-2*time.Second)) {
+		t.Fatal("a black hole that ate the caller's deadline wasn't blamed")
+	}
+}
+
+func expired(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	t.Cleanup(cancel)
+	<-ctx.Done()
+	return ctx
 }

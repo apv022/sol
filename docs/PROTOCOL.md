@@ -128,7 +128,8 @@ Direct addresses change with the network, so `PeerInfo` carries the callee's cur
 (`"direct": "sol-direct:..."`, or `""` when off), and the caller replaces its record. When a
 dialer reaches a peer over another transport although the peer has a direct address, it asks
 for the current one (`list`, at most every 5 minutes). A direct address that just failed is
-tried last for a minute, doubling with each failure up to an hour, so a dead path doesn't slow
+tried last for a minute, doubling with each failure up to an hour (a cancelled dial, or one whose
+deadline was already spent, doesn't count), so a dead path doesn't slow
 every connection. A peer may only announce a direct address for its own node key; anything else
 is dropped. Only the node
 publication is carried: public and anonymous services are never reachable directly.

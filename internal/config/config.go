@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -329,16 +328,17 @@ func (c *Config) applyDefaults() {
 
 // directOnLoopback reports whether direct_listen is on loopback, the only
 // case where loopback candidates make sense.
-func (c *Config) directOnLoopback() bool {
-	host, _, _ := net.SplitHostPort(c.Transports.DirectListen)
-	ip := net.ParseIP(host)
-	return host == "localhost" || (ip != nil && ip.IsLoopback())
-}
+func (c *Config) directOnLoopback() bool { return netutil.IsLoopbackListen(c.Transports.DirectListen) }
 
 // dropBadDirectAdvertise removes direct_advertise entries that peers would
 // never dial (say, a hostname from an older build), with a warning, rather
-// than refusing to start over an optional setting.
+// than refusing to start over an optional setting. If none is left, direct
+// mode is turned off: falling back to advertising every local address
+// would show peers more than the user chose to (fail closed).
 func (c *Config) dropBadDirectAdvertise() {
+	if len(c.Transports.DirectAdvertise) == 0 {
+		return
+	}
 	c.Transports.DirectAdvertise = slices.DeleteFunc(c.Transports.DirectAdvertise, func(a string) bool {
 		err := netutil.DirectCandidate(a, c.directOnLoopback())
 		if err != nil {
@@ -346,6 +346,10 @@ func (c *Config) dropBadDirectAdvertise() {
 		}
 		return err != nil
 	})
+	if len(c.Transports.DirectAdvertise) == 0 && c.Transports.Direct {
+		slog.Warn("no usable direct_advertise entry left; direct mode is off until it is fixed")
+		c.Transports.Direct = false
+	}
 }
 
 // Path returns the file this config is bound to ("" for in-memory configs).

@@ -150,7 +150,7 @@ func TestUnregisteredOtherEntryIsProtected(t *testing.T) {
 
 func TestXDGConfigHome(t *testing.T) {
 	m := Manager{GOOS: "linux", SystemdRunning: true, Home: "/home/a", ConfigHome: "/home/a/.xdg"}
-	if m.unitPath() != "/home/a/.xdg/systemd/user/sol.service" {
+	if m.unitPath() != filepath.Join("/home/a/.xdg", "systemd", "user", "sol.service") {
 		t.Fatal(m.unitPath())
 	}
 }
@@ -232,7 +232,7 @@ func TestManagerConfigHomeIsRecorded(t *testing.T) {
 	}
 	os.MkdirAll(mgr+"/systemd/user/default.target.wants", 0o755)
 	os.Symlink("../sol.service", mgr+"/systemd/user/default.target.wants/sol.service")
-	if st := m.Status(); !st.Enabled || st.Path != mgr+"/systemd/user/sol.service" {
+	if st := m.Status(); !st.Enabled || st.Path != filepath.Join(mgr, "systemd", "user", "sol.service") {
 		t.Fatalf("status from an environment without the manager's XDG: %+v", st)
 	}
 	if err := m.Disable(); err != nil {
@@ -268,12 +268,14 @@ func TestEnableRefusesOtherUnitInManagerHome(t *testing.T) {
 	if err := a.Enable(false); err != nil {
 		t.Fatal(err)
 	}
+	unit := filepath.Join(mgr, "systemd", "user", "sol.service")
+	before, _ := os.ReadFile(unit)
 	b := a
 	b.DataDir = home + "/b" // has no record of where a's unit is
 	if err := b.Enable(false); err != ErrOther {
 		t.Fatalf("b overwrote a's unit: %v", err)
 	}
-	if u, _ := os.ReadFile(mgr + "/systemd/user/sol.service"); !strings.Contains(string(u), home+"/a") {
+	if after, _ := os.ReadFile(unit); string(after) != string(before) {
 		t.Fatal("a's unit changed")
 	}
 }
@@ -294,8 +296,9 @@ func TestDisableCleansARecordWithoutUnit(t *testing.T) {
 }
 
 func TestGoCacheBinaryIsGoRun(t *testing.T) {
-	t.Setenv("GOCACHE", "/home/a/.cache/go-build")
-	if !isGoRunBinary("/home/a/.cache/go-build/33/333e-d/sol") {
+	cache := filepath.Join(t.TempDir(), "go-build")
+	t.Setenv("GOCACHE", cache)
+	if !isGoRunBinary(filepath.Join(cache, "33", "333e-d", "sol")) {
 		t.Fatal("cached go run binary not detected")
 	}
 }
