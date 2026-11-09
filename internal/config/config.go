@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -143,8 +144,11 @@ type TransportsConfig struct {
 	Direct bool `json:"direct"`
 	// DirectListen is the direct-mode listen address (default ":7701").
 	DirectListen string `json:"direct_listen,omitempty"`
-	// DirectAdvertise replaces the advertised host:port list, e.g. with a
-	// port forwarded on the router ("203.0.113.7:7701").
+	// DirectAdvertise replaces the advertised IP:port list, e.g. with a
+	// port forwarded on the router ("203.0.113.7:7701"). IP addresses only:
+	// peers never dial names an address list gives them. Loopback
+	// candidates are dialled only by a node whose own direct_listen is on
+	// loopback (two nodes on one machine: put both on 127.0.0.1).
 	DirectAdvertise []string `json:"direct_advertise,omitempty"`
 }
 
@@ -408,6 +412,12 @@ func (c *Config) validateLocked() error {
 			errs = append(errs, fmt.Errorf("peer %q: %w", p.ID, ErrDuplicate))
 		}
 		ids[p.ID] = true
+	}
+	for _, a := range c.Transports.DirectAdvertise {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil || net.ParseIP(host) == nil {
+			errs = append(errs, fmt.Errorf("direct_advertise %q: must be IP:port (peers dial only IP addresses, not names)", a))
+		}
 	}
 	ports := map[int]bool{}
 	for _, t := range c.Tunnels {

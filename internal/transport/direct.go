@@ -73,6 +73,7 @@ type Direct struct {
 	// allowLoopback lets candidates be loopback addresses; only for a node
 	// whose own direct listener is on loopback (tests, single machine).
 	allowLoopback bool
+	retryEvery    time.Duration // retryListenEvery at construction
 
 	mu       sync.Mutex
 	state    State
@@ -104,7 +105,7 @@ func NewDirect(listenAddr string, key crypto.Signer, advertise ...string) *Direc
 	ip := net.ParseIP(host)
 	return &Direct{ListenAddr: listenAddr, Advertise: advertise, key: key,
 		nodeID: identity.NodeID(pub), preamble: preambleFor(pub), state: StateStopped,
-		allowLoopback: host == "localhost" || (ip != nil && ip.IsLoopback())}
+		allowLoopback: host == "localhost" || (ip != nil && ip.IsLoopback()), retryEvery: retryListenEvery}
 }
 
 // SetAdvertise replaces the advertised candidates (nil: this machine's
@@ -166,9 +167,11 @@ func (d *Direct) Publish(ctx context.Context, p Publication) (string, error) {
 		return "", errors.New("direct: not started")
 	}
 	d.target = p.Target
-	if d.ln == nil && !d.listenLocked() && !d.retrying {
-		d.retrying = true
-		go d.retryListen()
+	if d.ln == nil && !d.listenLocked() {
+		if !d.retrying {
+			d.retrying = true
+			go d.retryListen(d.stopped)
+		}
 		return "", errors.New("direct: " + d.detail)
 	}
 	return d.addressLocked(), nil
@@ -186,23 +189,27 @@ func (d *Direct) listenLocked() bool {
 }
 
 // retryListen keeps trying the port until it opens or the transport stops.
+// stopped is the channel of the Start it belongs to: after a Stop/Start
+// cycle an old loop exits and can't touch the new one's state.
 // Peers learn the new address at their next refresh.
-func (d *Direct) retryListen() {
-	tick := time.NewTicker(retryListenEvery)
+func (d *Direct) retryListen(stopped chan struct{}) {
+	tick := time.NewTicker(d.retryEvery)
 	defer tick.Stop()
-	defer func() {
-		d.mu.Lock()
-		d.retrying = false
-		d.mu.Unlock()
-	}()
 	for {
 		select {
-		case <-d.stopped:
+		case <-stopped:
 			return
 		case <-tick.C:
 		}
 		d.mu.Lock()
-		done := d.ln != nil || d.state == StateStopped || d.listenLocked()
+		if d.stopped != stopped { // stopped and started again meanwhile
+			d.mu.Unlock()
+			return
+		}
+		done := d.ln != nil || d.listenLocked()
+		if done {
+			d.retrying = false
+		}
 		d.mu.Unlock()
 		if done {
 			return

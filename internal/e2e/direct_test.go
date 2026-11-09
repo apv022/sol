@@ -7,6 +7,7 @@ import (
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/node"
+	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/transport"
 )
 
@@ -148,4 +149,26 @@ func TestPublicServiceNeverDirect(t *testing.T) {
 		return
 	}
 	t.Fatal("blog not listed")
+}
+
+// A pairing link may only carry a direct address for the inviter's own key.
+func TestLinkWithForeignDirectAddressIsCleaned(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	inv, err := a.Invite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := pairing.ParseLink(inv.Link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := identity.Generate()
+	l.Addrs["direct"] = "sol-direct:" + other.NodeID() + "@10.0.0.9:22"
+	aOnB, err := b.Pair(b.ctx, l.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aOnB.Addrs["direct"]; got != "" {
+		t.Fatalf("stored a direct address for another node: %q", got)
+	}
 }

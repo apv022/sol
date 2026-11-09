@@ -218,3 +218,30 @@ func TestDirectRejectsAnImpostorCertificate(t *testing.T) {
 		t.Fatalf("impostor accepted: %v", err)
 	}
 }
+
+func TestDirectRetryAfterRestart(t *testing.T) {
+	old := retryListenEvery
+	retryListenEvery = 20 * time.Millisecond
+	t.Cleanup(func() { retryListenEvery = old })
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(busy.Addr().String(), priv)
+	target := echoTarget(t)
+	for range 2 { // a Stop/Start cycle must leave a working retry loop
+		d.Start(context.Background())
+		d.Publish(context.Background(), Publication{ID: "node", Target: target})
+		d.Stop()
+	}
+	d.Start(context.Background())
+	t.Cleanup(func() { d.Stop() })
+	if _, err := d.Publish(context.Background(), Publication{ID: "node", Target: target}); err == nil {
+		t.Fatal("busy port not reported")
+	}
+	busy.Close()
+	for i := 0; i < 200 && d.Status().Addresses["node"] == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d.Status().Addresses["node"] == "" {
+		t.Fatal("no retry after a Stop/Start cycle")
+	}
+}

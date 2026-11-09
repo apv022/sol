@@ -157,6 +157,7 @@ anonymous-public). Anonymous-public services are never published on clearnet.
 ├── node.key                ed25519 seed (0600). Back this up: it is the node's identity
 ├── config.json             name, services, peers (incl. access keys), tunnels, ports, transports (0600, atomic)
 ├── control.sock            local CLI socket (0600; only while the node runs)
+├── autostart-unit          where `sol autostart on` wrote the systemd unit (Linux, if enabled)
 ├── blobs/<sha256>          (+ .names.json: display name and sender per file)
 ├── bin/                    extracted bundled binaries
 └── tor/                    torrc, tor.log, data/, onions/<id>.key

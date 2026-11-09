@@ -199,6 +199,16 @@ func (m Manager) Enable(startNow bool) error {
 		if home == "" {
 			home = filepath.Join(m.Home, ".config")
 		}
+		// The data directory that owns a unit there may have no record here.
+		if b, err := os.ReadFile(m.unitPath()); err == nil && !strings.Contains(string(b), " --data "+systemdQuote(m.DataDir)+"\n") {
+			return ErrOther
+		}
+		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
+			return err
+		}
+		if err := config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600); err != nil {
+			return err
+		}
 		_, existed := os.Stat(m.unitPath())
 		if err := writeFile(m.unitPath(), SystemdUnit(m.Exe, m.DataDir, m.Path)); err != nil {
 			return err
@@ -211,8 +221,6 @@ func (m Manager) Enable(startNow bool) error {
 		}
 		// Clears a start-limit hit from earlier failures, or --now can't start it.
 		m.run("systemctl", "--user", "reset-failed", unitName)
-		os.MkdirAll(m.DataDir, 0o700)
-		config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600)
 		args := []string{"--user", "enable", unitName}
 		if startNow {
 			args = []string{"--user", "enable", "--now", unitName}
@@ -277,6 +285,7 @@ func (m Manager) Disable() error {
 	case "linux":
 		m = m.located()
 		if _, err := os.Stat(m.unitPath()); errors.Is(err, os.ErrNotExist) {
+			os.Remove(filepath.Join(m.DataDir, pointerName))
 			return nil
 		}
 		if err := m.run("systemctl", "--user", "disable", "--now", unitName); err != nil {
@@ -452,20 +461,11 @@ func Lingering() bool {
 	return err == nil
 }
 
-var goBuildDir = regexp.MustCompile(`^go-build[0-9]+$`)
+// goRunPath matches the layout `go run` builds into, wherever $GOTMPDIR
+// puts it: .../go-build<digits>/b<digits>/exe/<name>.
+var goRunPath = regexp.MustCompile(`(^|/)go-build[0-9]+/b[0-9]+/exe/[^/]+$`)
 
-// isGoRunBinary: `go run` builds into <tmp>/go-build<digits>/.../exe.
-func isGoRunBinary(exe string) bool {
-	if !strings.HasPrefix(exe, filepath.Clean(os.TempDir())+string(filepath.Separator)) {
-		return false
-	}
-	for _, part := range strings.Split(exe, string(filepath.Separator)) {
-		if goBuildDir.MatchString(part) {
-			return true
-		}
-	}
-	return false
-}
+func isGoRunBinary(exe string) bool { return goRunPath.MatchString(filepath.ToSlash(exe)) }
 
 func invokedPath() (string, error) {
 	if len(os.Args) > 0 && os.Args[0] != "" {

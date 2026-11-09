@@ -26,7 +26,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - **Direct mode** (opt-in, `"direct": true` under `transports`): peers connect straight to each
   other's IP addresses when they can (same LAN, IPv6, a shared tailnet) over TLS 1.3 pinned to the
   node key, and over Tor when they can't. Addresses refresh themselves after a network change;
-  the panel shows "direct" or "via Tor" per connection. Public services are never direct.
+  the panel shows "direct" or "via Tor" per connection. Public services are never direct. Peers
+  may announce direct addresses only for their own key, as plain IPs; the port stays silent to
+  anyone who doesn't already know the node's ID.
 - `sol autostart on|off|status`: the node starts when you log in (systemd user unit on Linux,
   LaunchAgent on macOS; Windows not yet). The panel shows whether it's on.
 - Send files between peers, both ways: `sol send <peer> <file>` or the panel's Send a file. The
