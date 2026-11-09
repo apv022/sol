@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -131,10 +132,24 @@ func (m Manager) managerConfigHome() string {
 	return ""
 }
 
-// atAnyConfigHome is m for whichever config home (this process's or the
-// default ~/.config) already holds the unit, so status agrees no matter
-// which environment asks.
-func (m Manager) atAnyConfigHome() Manager {
+// pointerName is a file in the data directory recording where Enable
+// wrote the unit. Enable asks the systemd user manager for its config home,
+// which may differ from this process's XDG_CONFIG_HOME; the record lets
+// Status (files only) and Disable find the same file from any environment.
+const pointerName = "autostart-unit"
+
+// located returns m set up for the unit file that exists: the recorded
+// one, else whichever of this process's config home and ~/.config has it.
+func (m Manager) located() Manager {
+	if b, err := os.ReadFile(filepath.Join(m.DataDir, pointerName)); err == nil {
+		if dir := strings.TrimSpace(string(b)); dir != "" {
+			if _, err := os.Stat(filepath.Join(dir, "systemd", "user", unitName)); err == nil {
+				d := m
+				d.ConfigHome = dir
+				return d
+			}
+		}
+	}
 	if m.ConfigHome == "" {
 		return m
 	}
@@ -157,7 +172,7 @@ func (m Manager) Status() State {
 		if !m.SystemdRunning {
 			return State{}
 		}
-		m = m.atAnyConfigHome()
+		m = m.located()
 		_, err := os.Lstat(m.wantsPath())
 		return m.state(m.unitPath(), err == nil, " --data "+systemdQuote(m.DataDir)+"\n")
 	case "darwin":
@@ -180,6 +195,10 @@ func (m Manager) Enable(startNow bool) error {
 			return ErrNotImplemented
 		}
 		m.ConfigHome = m.managerConfigHome()
+		home := m.ConfigHome
+		if home == "" {
+			home = filepath.Join(m.Home, ".config")
+		}
 		_, existed := os.Stat(m.unitPath())
 		if err := writeFile(m.unitPath(), SystemdUnit(m.Exe, m.DataDir, m.Path)); err != nil {
 			return err
@@ -192,12 +211,18 @@ func (m Manager) Enable(startNow bool) error {
 		}
 		// Clears a start-limit hit from earlier failures, or --now can't start it.
 		m.run("systemctl", "--user", "reset-failed", unitName)
+		os.MkdirAll(m.DataDir, 0o700)
+		config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600)
 		args := []string{"--user", "enable", unitName}
 		if startNow {
 			args = []string{"--user", "enable", "--now", unitName}
 		}
 		return m.run("systemctl", args...)
 	case "darwin":
+		// launchd won't start the job if the log file's directory is missing.
+		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
+			return err
+		}
 		if err := writeFile(m.plistPath(), LaunchAgentPlist(m.Exe, m.DataDir, m.Path)); err != nil {
 			return err
 		}
@@ -250,7 +275,7 @@ func (m Manager) Disable() error {
 	}
 	switch m.GOOS {
 	case "linux":
-		m = m.atAnyConfigHome()
+		m = m.located()
 		if _, err := os.Stat(m.unitPath()); errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
@@ -260,6 +285,7 @@ func (m Manager) Disable() error {
 		if err := os.Remove(m.unitPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		os.Remove(filepath.Join(m.DataDir, pointerName))
 		return m.run("systemctl", "--user", "daemon-reload")
 	case "darwin":
 		m.bootout()
@@ -408,7 +434,7 @@ func ForThisProcess(goos, dataDir string) (Manager, error) {
 	if fi, err := os.Stat("/run/systemd/system"); err == nil && fi.IsDir() {
 		m.SystemdRunning = true
 	}
-	if strings.Contains(exe, string(filepath.Separator)+"go-build") {
+	if isGoRunBinary(exe) {
 		return m, ErrGoRun
 	}
 	return m, nil
@@ -424,6 +450,21 @@ func Lingering() bool {
 	}
 	_, err = os.Stat(filepath.Join("/var/lib/systemd/linger", u.Username))
 	return err == nil
+}
+
+var goBuildDir = regexp.MustCompile(`^go-build[0-9]+$`)
+
+// isGoRunBinary: `go run` builds into <tmp>/go-build<digits>/.../exe.
+func isGoRunBinary(exe string) bool {
+	if !strings.HasPrefix(exe, filepath.Clean(os.TempDir())+string(filepath.Separator)) {
+		return false
+	}
+	for _, part := range strings.Split(exe, string(filepath.Separator)) {
+		if goBuildDir.MatchString(part) {
+			return true
+		}
+	}
+	return false
 }
 
 func invokedPath() (string, error) {

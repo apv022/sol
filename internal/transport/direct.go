@@ -70,6 +70,10 @@ type Direct struct {
 	preamble []byte      // what dialers must send first (see the file comment)
 	srvTLS   *tls.Config // built once in Start
 
+	// allowLoopback lets candidates be loopback addresses; only for a node
+	// whose own direct listener is on loopback (tests, single machine).
+	allowLoopback bool
+
 	mu       sync.Mutex
 	state    State
 	detail   string
@@ -96,8 +100,11 @@ func preambleFor(pub ed25519.PublicKey) []byte {
 // NewDirect constructs the transport for the node key (identity.Signer).
 func NewDirect(listenAddr string, key crypto.Signer, advertise ...string) *Direct {
 	pub := key.Public().(ed25519.PublicKey)
+	host, _, _ := net.SplitHostPort(listenAddr)
+	ip := net.ParseIP(host)
 	return &Direct{ListenAddr: listenAddr, Advertise: advertise, key: key,
-		nodeID: identity.NodeID(pub), preamble: preambleFor(pub), state: StateStopped}
+		nodeID: identity.NodeID(pub), preamble: preambleFor(pub), state: StateStopped,
+		allowLoopback: host == "localhost" || (ip != nil && ip.IsLoopback())}
 }
 
 // SetAdvertise replaces the advertised candidates (nil: this machine's
@@ -183,6 +190,11 @@ func (d *Direct) listenLocked() bool {
 func (d *Direct) retryListen() {
 	tick := time.NewTicker(retryListenEvery)
 	defer tick.Stop()
+	defer func() {
+		d.mu.Lock()
+		d.retrying = false
+		d.mu.Unlock()
+	}()
 	for {
 		select {
 		case <-d.stopped:
@@ -191,9 +203,6 @@ func (d *Direct) retryListen() {
 		}
 		d.mu.Lock()
 		done := d.ln != nil || d.state == StateStopped || d.listenLocked()
-		if done {
-			d.retrying = false
-		}
 		d.mu.Unlock()
 		if done {
 			return
@@ -214,7 +223,7 @@ func (d *Direct) addressLocked() string {
 		cands = []string{la.String()}
 	default:
 		if time.Since(d.candsAt) > candidateTTL {
-			d.cands, d.candsAt = candidates(la.Port), time.Now()
+			d.cands, d.candsAt = candidates(la, d.ListenAddr), time.Now()
 		}
 		cands = d.cands
 	}
@@ -239,7 +248,16 @@ func skipIface(name string) bool {
 // loopback, no link-local), most useful first: private IPv4 (same LAN),
 // then global IPv6, then other IPv4 (tailnet, public), so the cap doesn't
 // push out a working IPv6 address.
-func candidates(port int) []string {
+//
+// Only addresses the listener actually accepts are listed: a specific bind
+// IP is advertised alone, and "0.0.0.0" means IPv4 only.
+func candidates(la *net.TCPAddr, listen string) []string {
+	port := la.Port
+	if !la.IP.IsUnspecified() {
+		return []string{la.String()}
+	}
+	host, _, _ := net.SplitHostPort(listen)
+	v4only := host == "0.0.0.0"
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
@@ -265,7 +283,7 @@ func candidates(port int) []string {
 				lan = append(lan, hp)
 			case ip.To4() != nil:
 				v4 = append(v4, hp)
-			case ip.IsGlobalUnicast():
+			case ip.IsGlobalUnicast() && !v4only:
 				v6 = append(v6, hp)
 			}
 		}
@@ -365,10 +383,26 @@ func ParseDirectAddr(addr string) (ed25519.PublicKey, []string, error) {
 
 // Dial tries every candidate at once and returns the first TLS connection
 // whose certificate key is the expected node key.
+//
+// Candidates come from a peer, so only plain IP addresses that could be
+// another machine are dialled: no hostnames, loopback (unless this node is
+// itself on loopback), unspecified, multicast or link-local addresses.
 func (d *Direct) Dial(ctx context.Context, addr string) (net.Conn, error) {
-	pub, cands, err := ParseDirectAddr(addr)
+	pub, all, err := ParseDirectAddr(addr)
 	if err != nil {
 		return nil, err
+	}
+	var cands []string
+	for _, c := range all {
+		host, _, _ := net.SplitHostPort(c)
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || (ip.IsLoopback() && !d.allowLoopback) {
+			continue
+		}
+		cands = append(cands, c)
+	}
+	if len(cands) == 0 {
+		return nil, errors.New("no direct path: no usable address")
 	}
 	ctx, cancel := context.WithTimeout(ctx, DirectDialTimeout)
 	defer cancel()
@@ -473,6 +507,6 @@ func (d *Direct) Stop() error {
 	if d.stopped != nil && d.state != StateStopped {
 		close(d.stopped)
 	}
-	d.state = StateStopped
+	d.state, d.retrying = StateStopped, false
 	return nil
 }

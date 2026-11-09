@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
 	"sort"
@@ -90,7 +91,9 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	if _, ok := n.reg.Get("direct"); ok {
 		add(direct)
 	}
-	add(last)
+	if !strings.HasPrefix(last, "sol-direct:") || last == direct { // an old direct address is stale
+		add(last)
+	}
 	for _, c := range cs {
 		add(c.addr)
 	}
@@ -119,14 +122,14 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
-			if t.Name() == "direct" {
+			if t.Name() == "direct" && ctx.Err() == nil { // our own cancel says nothing about the path
 				n.noteDirectFailure(p.ID, addr)
 			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
 			conn.Close()
-			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) {
+			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && ctx.Err() == nil {
 				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
@@ -283,7 +286,8 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 	if err != nil {
 		return config.Peer{}, err
 	}
-	inviter := config.Peer{NodeID: l.NodeID, Name: l.Name, Addrs: l.Addrs, AccessOut: l.Access}
+	inviter := config.Peer{NodeID: l.NodeID, Name: l.Name, Addrs: maps.Clone(l.Addrs), AccessOut: l.Access}
+	setDirect(&inviter, inviter.Addrs["direct"]) // only the inviter's own key
 	if inviter.Name == "" || config.ValidateName(inviter.Name) != nil {
 		inviter.Name = "peer"
 	}

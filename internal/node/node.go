@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -404,7 +405,6 @@ func (n *Node) refreshNodePublication(force bool) {
 	}
 }
 
-// ownAddrs returns the node's public addresses, per transport.
 // directAddr is this node's current direct-mode address ("" when off).
 func (n *Node) directAddr() string {
 	if t, ok := n.reg.Get("direct"); ok {
@@ -413,6 +413,7 @@ func (n *Node) directAddr() string {
 	return ""
 }
 
+// ownAddrs returns the node's public addresses, per transport.
 func (n *Node) ownAddrs() map[string]string {
 	addrs := map[string]string{}
 	for _, st := range n.reg.Statuses() {
@@ -552,7 +553,9 @@ func (n *Node) handlePair(c net.Conn, req *protocol.Request) {
 	for t, a := range tok.Access {
 		accessIn[t] = a.Authorize
 	}
-	p, err := n.peers.Add(config.Peer{Name: name, Addrs: req.Card.Addrs, AccessIn: accessIn, AccessOut: req.Card.Access}, req.Key)
+	joiner := config.Peer{NodeID: identity.NodeID(req.Key), Name: name, Addrs: maps.Clone(req.Card.Addrs), AccessIn: accessIn, AccessOut: req.Card.Access}
+	setDirect(&joiner, joiner.Addrs["direct"]) // a joiner may only announce its own key
+	p, err := n.peers.Add(joiner, req.Key)
 	if err != nil {
 		n.reject(c, "pairing failed: "+err.Error())
 		return

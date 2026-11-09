@@ -126,6 +126,28 @@ func TestDirectFallsThroughDeadCandidates(t *testing.T) {
 	}
 }
 
+func TestDirectSkipsUnsafeCandidates(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(":0", priv) // not on loopback
+	id := identity.NodeID(priv.Public().(ed25519.PublicKey))
+	for _, cand := range []string{"127.0.0.1:22", "localhost:80", "intranet.local:80", "[::1]:22", "0.0.0.0:1", "[fe80::1]:7701", "224.0.0.1:1"} {
+		if _, err := d.Dial(context.Background(), "sol-direct:"+id+"@"+cand); err == nil || !strings.Contains(err.Error(), "no usable address") {
+			t.Errorf("%s: dialled (%v)", cand, err)
+		}
+	}
+}
+
+func TestCandidatesMatchTheListener(t *testing.T) {
+	if c := candidates(&net.TCPAddr{IP: net.ParseIP("192.168.1.5"), Port: 7701}, "192.168.1.5:7701"); len(c) != 1 || c[0] != "192.168.1.5:7701" {
+		t.Fatalf("specific bind: %v", c)
+	}
+	for _, c := range candidates(&net.TCPAddr{IP: net.IPv4zero, Port: 7701}, "0.0.0.0:7701") {
+		if strings.HasPrefix(c, "[") {
+			t.Fatalf("0.0.0.0 listener advertised IPv6 %s", c)
+		}
+	}
+}
+
 func TestParseDirectAddr(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	id := identity.NodeID(priv.Public().(ed25519.PublicKey))
