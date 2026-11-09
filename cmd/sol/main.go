@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -37,6 +38,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/internal/audit"
+	"github.com/apv022/sol/internal/autostart"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/gateway"
@@ -82,6 +84,8 @@ Use your peers:
 Other:
   sol name [NEW]              show or change this node's name, as peers see it
   sol status                  this node's id, name and addresses
+  sol autostart on|off|status start the node when you log in (systemd user unit on Linux,
+                              LaunchAgent on macOS)
   sol audit [--service NAME]  leak checks for anonymous-public services
   sol version
 
@@ -104,7 +108,7 @@ func main() {
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
 		"open": runOpen, "tunnels": runTunnels, "close": runClose, "send": runSend, "unpair": runUnpair, "name": runName,
 		"services": runServices, "service": runService,
-		"status": runStatus, "audit": runAudit,
+		"status": runStatus, "audit": runAudit, "autostart": runAutostart,
 		"gateway": func(ctx context.Context, _ []string) error { return gateway.Run(ctx) },
 	}
 	var err error
@@ -174,15 +178,27 @@ func runNode(ctx context.Context, args []string) error {
 	data, _ := flags("run", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&panel, "panel", "", "panel listen address (default 127.0.0.1:<panel_port>)")
 	})
+	// Under `sol autostart`, a node that can't start exits 0 so the service
+	// manager doesn't restart it forever (internal/autostart package doc).
+	startupFailed := func(err error) error {
+		if os.Getenv(autostart.SupervisedEnv) != "" {
+			fmt.Fprintln(os.Stderr, "sol: not starting:", err)
+			os.Exit(0)
+		}
+		return err
+	}
 	n, err := node.New(node.Options{DataDir: data, Version: version, PanelAddr: panel})
 	if err != nil {
-		return err
+		return startupFailed(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- n.Run(ctx) }()
 	select {
 	case err := <-done:
-		return err
+		if err != nil {
+			return startupFailed(err)
+		}
+		return nil
 	case <-n.Ready():
 	}
 	fmt.Printf("Sol node %q (%s)\n", n.Name(), short(n.ID().NodeID()))
@@ -210,6 +226,70 @@ func printStatus(st control.Status) {
 	for _, t := range sortedKeys(st.Addrs) {
 		fmt.Printf("%-7s %s\n", t+":", st.Addrs[t])
 	}
+}
+
+func runAutostart(ctx context.Context, args []string) error {
+	data, pos := flags("autostart", args, nil)
+	if len(pos) != 1 || !slices.Contains([]string{"on", "off", "status"}, pos[0]) {
+		return errors.New("usage: sol autostart on|off|status")
+	}
+	m, err := autostart.ForThisProcess(goruntime.GOOS, data)
+	if err != nil && (pos[0] == "on" || !errors.Is(err, autostart.ErrGoRun)) {
+		return err
+	}
+	switch pos[0] {
+	case "status":
+		st := m.Status()
+		switch {
+		case !st.Supported:
+			fmt.Println("Not supported on this system yet.")
+		case st.Enabled:
+			fmt.Println("On: the node starts when you log in (" + st.Path + ").")
+		case st.Other:
+			fmt.Println("Off for this data directory: " + st.Path + " starts a node with another one.")
+		default:
+			fmt.Println("Off. Turn it on with: sol autostart on")
+		}
+		return nil
+	case "off":
+		if err := m.Disable(); err != nil {
+			return err
+		}
+		fmt.Println("Off. The node no longer starts at login (and the one it started was stopped).")
+		return nil
+	}
+	// A node already running for this data directory holds the control
+	// socket. If the service runs it, restart it (picks up a new binary);
+	// if a terminal does, the service can't start a second one now.
+	running := control.Call(ctx, sock(data), control.Request{Op: control.OpStatus}, nil) == nil
+	managed := running && m.Status().Enabled && m.Active()
+	if managed {
+		if err := m.Replace(); err != nil {
+			return err
+		}
+		fmt.Println("On. The node was already started at login; it was restarted with this binary.")
+		return nil
+	}
+	if err := m.Enable(!running); err != nil {
+		return err
+	}
+	if running {
+		fmt.Println("On. It starts at your next login. Sol is already running here; to hand it over now,")
+		fmt.Println("stop it (Ctrl+C in its terminal), then run: sol autostart on")
+	} else {
+		fmt.Println("On, and started. The panel is at the usual address; logs: " + logHint())
+	}
+	if goruntime.GOOS == "linux" && !autostart.Lingering() {
+		fmt.Println("Headless machine? To start it at boot without logging in: sudo loginctl enable-linger $USER")
+	}
+	return nil
+}
+
+func logHint() string {
+	if goruntime.GOOS == "darwin" {
+		return "<data dir>/sol.log"
+	}
+	return "journalctl --user -u sol"
 }
 
 func runName(ctx context.Context, args []string) error {

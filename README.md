@@ -129,6 +129,7 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 | `sol tunnels`, `sol close <peer> [service]` | List tunnels and whether the peer answers; close them |
 | `sol send <peer> <file>…` | Send files to a peer |
 | `sol unpair <peer>` | Remove a peer here and tell it to remove you |
+| `sol autostart on\|off\|status` | Start the node when you log in (systemd user unit on Linux, LaunchAgent on macOS) |
 | `sol name [NEW]`, `sol status` | Show or change this machine's name; show its id and addresses |
 | `sol audit` | Leak checks for anonymous-public services |
 
@@ -149,6 +150,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Public services on their own onion | ✅ |
 | Shared files page for peers, streaming, SHA-256 fingerprints | ✅ |
 | LAN / clearnet transport (testing) | ✅ |
+| Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |
 | I2P transport | 🗺️ stub in place ([how to add it](docs/EXTENDING.md)) |

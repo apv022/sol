@@ -11,6 +11,7 @@ import (
 
 	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/audit"
+	"github.com/apv022/sol/internal/autostart"
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/events"
@@ -32,7 +33,14 @@ func (n *Node) Status() api.StatusInfo {
 		StartedAt:  n.started,
 		Uptime:     time.Since(n.started).Round(time.Second).String(),
 		Transports: n.reg.Statuses(),
+		Autostart:  n.autostartState(),
 	}
+}
+
+// autostartState reports whether this node starts at login (files only;
+// the Manager is built once in New).
+func (n *Node) autostartState() autostart.State {
+	return n.autostart.Status() // a zero Manager (no GOOS) reports unsupported
 }
 
 // SetName implements api.Backend. Peers learn the new name the next time

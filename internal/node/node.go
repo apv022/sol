@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/internal/api"
+	"github.com/apv022/sol/internal/autostart"
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
@@ -109,6 +111,8 @@ type Node struct {
 
 	tmu     sync.Mutex
 	tunnels map[int]*tunnel // by local port (tunnels.go)
+
+	autostart autostart.Manager // for the panel's "starts at login"
 }
 
 // connInfo describes one live, handshake-verified connection with a peer.
@@ -173,6 +177,7 @@ func New(opts Options) (*Node, error) {
 		lastGood: map[string]string{},
 		tunnels:  map[int]*tunnel{},
 	}
+	n.autostart, _ = autostart.ForThisProcess(goruntime.GOOS, opts.DataDir) // a zero Manager reports "unsupported"
 	ts := opts.Transports
 	if ts == nil {
 		ts = buildTransports(cfg, opts.DataDir)

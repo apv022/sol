@@ -121,6 +121,11 @@ function renderHome() {
   $("node-name").textContent = s.name;
   $("version").textContent = s.version || "dev";
   $("uptime").textContent = s.uptime;
+  const as = s.autostart || {};
+  $("autostart").innerHTML = !as.supported ? `<span class="muted">not on this system yet</span>`
+    : as.enabled ? "Yes"
+    : as.other ? `No <span class="muted small">· set up for another Sol data folder</span>`
+    : `No <span class="muted small">· turn on with <code>sol autostart on</code></span>`;
 
   const t = torStatus();
   const pill = $("status-pill");

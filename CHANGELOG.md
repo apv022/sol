@@ -23,6 +23,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
   connection dials fresh), and show their status and transport. `sol tunnels` and
   `sol close <peer> [service]` manage them. `http` tunnels check the Host header against DNS
   rebinding.
+- `sol autostart on|off|status`: the node starts when you log in (systemd user unit on Linux,
+  LaunchAgent on macOS; Windows not yet). The panel shows whether it's on.
 - Send files between peers, both ways: `sol send <peer> <file>` or the panel's Send a file. The
   sender checks the receiver's SHA-256; per-file (4 GiB) and total (20 GiB) limits; received files
   are labelled with the sender and kept off your shared-files page.

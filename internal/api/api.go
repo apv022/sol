@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/internal/audit"
+	"github.com/apv022/sol/internal/autostart"
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/events"
@@ -91,6 +92,7 @@ type StatusInfo struct {
 	StartedAt  time.Time          `json:"started_at"`
 	Uptime     string             `json:"uptime"`
 	Transports []transport.Status `json:"transports"`
+	Autostart  autostart.State    `json:"autostart"` // starts at login? (sol autostart)
 	CSRF       string             `json:"csrf,omitempty"`
 }
 
