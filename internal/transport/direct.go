@@ -121,14 +121,20 @@ func (d *Direct) Name() string { return "direct" }
 // Start makes the certificate; the listener opens on Publish("node").
 // Starting a started transport is a no-op (a running retry loop keeps going).
 func (d *Direct) Start(ctx context.Context) error {
-	// Held throughout (making an ed25519 certificate takes microseconds),
-	// so Start, Stop and Publish never interleave.
+	d.mu.Lock()
+	running := d.stopped != nil
+	d.mu.Unlock()
+	if running {
+		return nil
+	}
+	// The certificate is made outside the lock (crypto/rand could block at
+	// early boot, and Status must stay responsive), then checked again.
+	cert, err := selfSigned(d.key)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stopped != nil {
-		return nil
+		return nil // a concurrent Start finished first
 	}
-	cert, err := selfSigned(d.key)
 	if err != nil {
 		d.state, d.detail = StateFailed, err.Error()
 		return err
@@ -360,7 +366,13 @@ func (d *Direct) Unpublish(id string) error {
 }
 
 // Handles implements Transport.
-func (d *Direct) Handles(addr string) bool { return IsDirect(addr) }
+// Only while started: a stopped direct transport can't dial anything.
+func (d *Direct) Handles(addr string) bool {
+	d.mu.Lock()
+	started := d.stopped != nil
+	d.mu.Unlock()
+	return started && IsDirect(addr)
+}
 
 // IsDirect reports whether addr is a direct-mode address.
 func IsDirect(addr string) bool { return strings.HasPrefix(addr, directScheme) }

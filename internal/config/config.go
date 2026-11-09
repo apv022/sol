@@ -671,6 +671,12 @@ func (c *Config) SetPeerLastSeen(id string, t time.Time, persist bool) error {
 	return nil
 }
 
+func (c *Config) cloneTransports() TransportsConfig {
+	t := c.Transports
+	t.DirectAdvertise = slices.Clone(t.DirectAdvertise)
+	return t
+}
+
 // Snapshot returns a deep copy of the exported settings (for read-only use
 // such as the audit package). The copy is not bound to a file.
 func (c *Config) Snapshot() *Config {
@@ -681,7 +687,7 @@ func (c *Config) Snapshot() *Config {
 		Name:       c.Name,
 		PanelPort:  c.PanelPort,
 		NodePort:   c.NodePort,
-		Transports: c.Transports,
+		Transports: c.cloneTransports(),
 		Runtime:    RuntimeConfig{ProviderOrder: slices.Clone(c.Runtime.ProviderOrder), ContainerRuntime: c.Runtime.ContainerRuntime},
 		Services:   slices.Clone(c.Services),
 		Peers:      make([]Peer, 0, len(c.Peers)),

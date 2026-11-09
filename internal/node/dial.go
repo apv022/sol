@@ -111,11 +111,12 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	return out
 }
 
-// directUsable reports whether this node can dial direct addresses now (direct
-// mode is on and didn't fail closed).
+// directUsable reports whether this node can dial direct addresses now
+// (direct mode is on, started, and didn't fail closed). It asks the
+// registry the same question dialOnce does.
 func (n *Node) directUsable() bool {
-	t, ok := n.reg.Get("direct")
-	return ok && transport.Usable(t)
+	_, err := n.reg.For("sol-direct:")
+	return err == nil
 }
 
 // dialOnce opens a stream to p and completes the handshake for req, trying

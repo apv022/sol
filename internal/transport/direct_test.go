@@ -284,3 +284,22 @@ func TestDirectBusyPortKeepsTargetAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("forwarded to the old target: %q %v", buf, err)
 	}
 }
+
+// A direct transport that isn't started (never, failed, or stopped) claims
+// no addresses, so the node never dials through it.
+func TestDirectHandlesOnlyWhileStarted(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect("127.0.0.1:0", priv)
+	a := "sol-direct:x@10.0.0.2:7701"
+	if d.Handles(a) {
+		t.Fatal("handles before Start")
+	}
+	d.Start(context.Background())
+	if !d.Handles(a) {
+		t.Fatal("doesn't handle once started")
+	}
+	d.Stop()
+	if d.Handles(a) {
+		t.Fatal("handles after Stop")
+	}
+}

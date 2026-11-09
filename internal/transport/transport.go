@@ -200,7 +200,8 @@ func (r *Registry) Statuses() []Status {
 	return out
 }
 
-// For returns the transport that can dial addr.
+// For returns the transport that can dial addr. (A stub still matches its
+// addresses, so dialing one gives its honest ErrNotImplemented.)
 func (r *Registry) For(addr string) (Transport, error) {
 	for _, t := range r.List() {
 		if t.Handles(addr) {

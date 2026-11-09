@@ -158,15 +158,22 @@ func TestBadDirectAdvertiseFailsClosed(t *testing.T) {
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701"}
 	id, _ := identity.Generate()
 	ts, warnings := buildTransports(cfg, t.TempDir(), id)
-	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" || len(warnings) != 1 {
+	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" || len(warnings) != 2 {
 		t.Fatalf("transports: %+v, warnings %v", ts, warnings)
 	}
 	// A failed-closed direct transport doesn't make the node chase direct
 	// addresses it can never dial.
-	n := &Node{reg: transport.NewRegistry()}
+	n := &Node{reg: transport.NewRegistry(), lastGood: map[string]string{}, directFail: map[string]directFailure{}}
 	n.reg.Add(ts[0])
+	n.reg.Add(fakeTransport{"tor"})
 	if n.directUsable() {
 		t.Fatal("unavailable direct transport counted as usable")
+	}
+	da := "sol-direct:" + id.NodeID() + "@10.0.0.2:7701"
+	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": da, "tor": "tor:x"}}
+	n.directFail["p"] = directFailure{addr: da, at: time.Now(), wait: time.Hour} // also as last resort
+	if got := n.addrsInOrder(p); strings.Join(got, ",") != "tor:x" {
+		t.Fatalf("failed-closed direct still dialled: %v", got)
 	}
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701", "203.0.113.7:7701"}
 	ts, _ = buildTransports(cfg, t.TempDir(), id)

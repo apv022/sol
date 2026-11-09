@@ -194,7 +194,8 @@ func New(opts Options) (*Node, error) {
 		var warnings []string
 		ts, warnings = buildTransports(cfg, opts.DataDir, id)
 		for _, w := range warnings {
-			n.log.Add(events.KindTransport, w) // shown in the panel, not only on stderr
+			slog.Warn(w)
+			n.log.Add(events.KindTransport, w) // also in the panel's activity log
 		}
 	}
 	for _, t := range ts {
@@ -243,7 +244,9 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 		if len(snap.Transports.DirectAdvertise) > 0 && len(usable) == 0 {
 			// Fail closed: falling back to every local address would show
 			// peers more than the user chose to advertise.
-			ts = append(ts, transport.NewUnavailable("direct", errors.New("no usable direct_advertise entry (IP:port only); direct mode is off until config.json is fixed")))
+			why := "no usable direct_advertise entry (IP:port only); direct mode is off until config.json is fixed"
+			warnings = append(warnings, "direct: "+why)
+			ts = append(ts, transport.NewUnavailable("direct", errors.New(why)))
 		} else {
 			ts = append(ts, transport.NewDirect(snap.Transports.DirectListen, id.Signer(), usable...))
 		}
