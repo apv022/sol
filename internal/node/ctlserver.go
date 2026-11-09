@@ -58,7 +58,9 @@ func (n *Node) serveControl(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		go n.handleControl(c)
+		if !n.goBG(func() { n.handleControl(c) }) {
+			c.Close()
+		}
 	}
 }
 

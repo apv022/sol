@@ -167,7 +167,7 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 			// over this working path (rate-limited per peer).
 			if t.Name() != "direct" && req.Op != protocol.OpList {
 				if n.directUsable() {
-					go n.refreshDirect(p.ID)
+					n.goBG(func() { n.refreshDirect(p.ID) })
 				}
 			}
 		}

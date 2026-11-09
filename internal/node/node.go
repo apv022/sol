@@ -117,6 +117,45 @@ type Node struct {
 	tunnels map[int]*tunnel // by local port (tunnels.go)
 
 	autostart autostart.Manager // for the panel's "starts at login"
+
+	// Background work (connection handlers, refreshes) that may touch the
+	// data directory; Run waits for it before returning (see goBG).
+	bgMu     sync.Mutex
+	bgClosed bool
+	bg       sync.WaitGroup
+}
+
+// goBG runs f in the background unless the node is shutting down, and
+// reports whether it did. Run waits for these before it returns, so nothing
+// writes to the data directory after Run is over.
+func (n *Node) goBG(f func()) bool {
+	n.bgMu.Lock()
+	defer n.bgMu.Unlock()
+	if n.bgClosed {
+		return false
+	}
+	n.bg.Add(1)
+	go func() {
+		defer n.bg.Done()
+		f()
+	}()
+	return true
+}
+
+// bgWait is how long Run waits for background work at shutdown.
+const bgWait = 5 * time.Second
+
+func (n *Node) waitBG() {
+	n.bgMu.Lock()
+	n.bgClosed = true
+	n.bgMu.Unlock()
+	done := make(chan struct{})
+	go func() { n.bg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(bgWait):
+		slog.Warn("shutdown: background work still running")
+	}
 }
 
 // connInfo describes one live, handshake-verified connection with a peer.
@@ -381,6 +420,7 @@ func (n *Node) shutdown(panelSrv *http.Server) {
 	if err := n.reg.StopAll(); err != nil {
 		slog.Warn("stopping transports", "err", err)
 	}
+	n.waitBG()
 }
 
 // refreshNodePublication (re)publishes the node listener on every usable
@@ -495,7 +535,9 @@ func (n *Node) acceptLoop(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		go n.handleConn(c)
+		if !n.goBG(func() { n.handleConn(c) }) {
+			c.Close() // shutting down
+		}
 	}
 }
 
@@ -582,7 +624,7 @@ func (n *Node) handlePair(c net.Conn, req *protocol.Request) {
 		return
 	}
 	n.log.Add(events.KindPair, "paired with "+peers.Describe(p))
-	go n.learnShares(p.ID)
+	n.goBG(func() { n.learnShares(p.ID) })
 }
 
 // learnShares asks a just-paired joiner what it shares with us, so the

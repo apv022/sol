@@ -290,7 +290,7 @@ func (n *Node) startSavedTunnels() {
 		n.tunnels[cfg.Port] = t
 		if !n.tryListen(t) {
 			n.log.Add(events.KindService, fmt.Sprintf("tunnel %s: port %d is taken; retrying", cfg.Service, cfg.Port))
-			go n.retryTunnel(t)
+			n.goBG(func() { n.retryTunnel(t) })
 		}
 	}
 }
