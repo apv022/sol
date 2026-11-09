@@ -88,11 +88,12 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 			out = append(out, a)
 		}
 	}
-	dt, haveDirect := n.reg.Get("direct")
+	_, haveDirect := n.reg.Get("direct")
 	if haveDirect {
 		add(direct)
 	}
-	if !haveDirect || !dt.Handles(last) || last == direct { // an old direct address is stale
+	// An old direct address is stale, and with direct off nothing can dial it.
+	if !transport.IsDirect(last) || (haveDirect && last == direct) {
 		add(last)
 	}
 	for _, c := range cs {
@@ -123,16 +124,17 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
-			// A cancelled caller says nothing about the path; a deadline that ran
-			// out during the attempt does (a black hole), so that still counts.
-			if t.Name() == "direct" && !errors.Is(ctx.Err(), context.Canceled) {
+			// Blame the path only when the caller's own context is still live:
+			// a cancel or an expired caller deadline says nothing about it (the
+			// direct transport times itself out in DirectDialTimeout).
+			if t.Name() == "direct" && ctx.Err() == nil {
 				n.noteDirectFailure(p.ID, addr)
 			}
 			continue
 		}
 		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
 			conn.Close()
-			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && !errors.Is(ctx.Err(), context.Canceled) {
+			if t.Name() == "direct" && !errors.Is(err, protocol.ErrRejected) && ctx.Err() == nil {
 				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {

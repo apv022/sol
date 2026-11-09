@@ -88,28 +88,34 @@ func testNode() *Node {
 
 func TestStaleDirectLastGoodIsSkipped(t *testing.T) {
 	n := testNode()
-	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": "direct:new", "tor": "tor:x"}}
-	n.lastGood["p"] = "direct:old" // worked before the peer moved
-	got := n.addrsInOrder(p)
-	if strings.Join(got, ",") != "direct:new,tor:x" {
+	newA, oldA := "sol-direct:new@10.0.0.2:7701", "sol-direct:old@10.0.0.1:7701"
+	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": newA, "tor": "tor:x"}}
+	n.lastGood["p"] = oldA // worked before the peer moved
+	if got := n.addrsInOrder(p); strings.Join(got, ",") != newA+",tor:x" {
 		t.Fatalf("order %v", got)
+	}
+	// With direct mode off here, a direct last-good address isn't tried at all.
+	off := &Node{reg: transport.NewRegistry(), lastGood: map[string]string{"p": oldA}, directFail: map[string]directFailure{}}
+	off.reg.Add(fakeTransport{"tor"})
+	if got := off.addrsInOrder(config.Peer{ID: "p", Addrs: map[string]string{"tor": "tor:x"}}); strings.Join(got, ",") != "tor:x" {
+		t.Fatalf("direct off: %v", got)
 	}
 }
 
 func TestCancelledDialStartsNoBackoff(t *testing.T) {
 	n := testNode()
-	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": "direct:a"}}
+	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": "sol-direct:a@10.0.0.2:7701"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	n.dialOnce(ctx, p, protocol.Request{Op: protocol.OpConnect})
 	if len(n.directFail) != 0 {
 		t.Fatal("our own cancel was blamed on the direct path")
 	}
-	// A deadline that runs out during the attempt does count (a black hole).
+	// Nor does the caller's own deadline running out.
 	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer dcancel()
 	n.dialOnce(dctx, p, protocol.Request{Op: protocol.OpConnect})
-	if n.directFail["p"].addr != "direct:a" {
-		t.Fatal("a timed-out direct attempt wasn't recorded")
+	if len(n.directFail) != 0 {
+		t.Fatal("the caller's deadline was blamed on the direct path")
 	}
 }

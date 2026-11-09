@@ -254,3 +254,48 @@ func TestGoRunDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestEnableRefusesOtherUnitInManagerHome(t *testing.T) {
+	home := t.TempDir()
+	mgr := home + "/mgr"
+	run := func(name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "--user show-environment" {
+			return []byte("XDG_CONFIG_HOME=" + mgr + "\n"), nil
+		}
+		return nil, nil
+	}
+	a := Manager{GOOS: "linux", SystemdRunning: true, Home: home, DataDir: home + "/a", Run: run}
+	if err := a.Enable(false); err != nil {
+		t.Fatal(err)
+	}
+	b := a
+	b.DataDir = home + "/b" // has no record of where a's unit is
+	if err := b.Enable(false); err != ErrOther {
+		t.Fatalf("b overwrote a's unit: %v", err)
+	}
+	if u, _ := os.ReadFile(mgr + "/systemd/user/sol.service"); !strings.Contains(string(u), home+"/a") {
+		t.Fatal("a's unit changed")
+	}
+}
+
+func TestDisableCleansARecordWithoutUnit(t *testing.T) {
+	home := t.TempDir()
+	m := Manager{GOOS: "linux", SystemdRunning: true, Home: home, DataDir: home + "/d", Run: (&recorder{}).run}
+	if err := m.Enable(false); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(m.unitPath()) // removed by hand
+	if err := m.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(home + "/d/" + pointerName); !os.IsNotExist(err) {
+		t.Fatal("stale record left behind")
+	}
+}
+
+func TestGoCacheBinaryIsGoRun(t *testing.T) {
+	t.Setenv("GOCACHE", "/home/a/.cache/go-build")
+	if !isGoRunBinary("/home/a/.cache/go-build/33/333e-d/sol") {
+		t.Fatal("cached go run binary not detected")
+	}
+}

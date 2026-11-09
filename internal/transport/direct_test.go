@@ -245,3 +245,42 @@ func TestDirectRetryAfterRestart(t *testing.T) {
 		t.Fatal("no retry after a Stop/Start cycle")
 	}
 }
+
+// A busy port: Publish keeps the latest target, and a second Start (no
+// Stop) still leaves a retry loop that opens the port.
+func TestDirectBusyPortKeepsTargetAndSurvivesRestart(t *testing.T) {
+	old := retryListenEvery
+	retryListenEvery = 20 * time.Millisecond
+	t.Cleanup(func() { retryListenEvery = old })
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(busy.Addr().String(), priv)
+	d.Start(context.Background())
+	d.Publish(context.Background(), Publication{ID: "node", Target: "127.0.0.1:1"})
+	d.Start(context.Background()) // again, without Stop
+	t.Cleanup(func() { d.Stop() })
+	target := echoTarget(t)
+	if _, err := d.Publish(context.Background(), Publication{ID: "node", Target: target}); err == nil || strings.Contains(err.Error(), "not started") {
+		t.Fatalf("busy port: %v", err)
+	}
+	busy.Close()
+	var addr string
+	for i := 0; i < 200 && addr == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		addr = d.Status().Addresses["node"]
+	}
+	if addr == "" {
+		t.Fatal("port never retried")
+	}
+	c, err := d.Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("hi"))
+	buf := make([]byte, 2)
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "hi" {
+		t.Fatalf("forwarded to the old target: %q %v", buf, err)
+	}
+}

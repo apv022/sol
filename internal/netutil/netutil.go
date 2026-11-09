@@ -4,8 +4,10 @@ package netutil
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 )
 
@@ -67,4 +69,29 @@ func LANIP() (net.IP, error) {
 		return nil, errors.New("no LAN address")
 	}
 	return ip, nil
+}
+
+// DirectCandidate checks one direct-mode candidate (docs/PROTOCOL.md,
+// "Direct mode transport"): an IP:port that could be another machine. No
+// names, unspecified, multicast or link-local addresses, and loopback only
+// if allowLoopback. Config validation and the dialer share it, so an entry
+// the config accepts is one peers will dial.
+func DirectCandidate(hostport string, allowLoopback bool) error {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return err
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return fmt.Errorf("bad port %q", port)
+	}
+	ip := net.ParseIP(host)
+	switch {
+	case ip == nil:
+		return fmt.Errorf("%q is not an IP address (names aren't dialled)", host)
+	case ip.IsUnspecified(), ip.IsMulticast(), ip.IsLinkLocalUnicast():
+		return fmt.Errorf("%s can't reach another machine", ip)
+	case ip.IsLoopback() && !allowLoopback:
+		return fmt.Errorf("%s is this machine", ip)
+	}
+	return nil
 }

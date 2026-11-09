@@ -130,8 +130,11 @@ func (d *Direct) Start(ctx context.Context) error {
 		return err
 	}
 	d.srvTLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
+	if d.stopped != nil && d.state != StateStopped {
+		close(d.stopped) // Start without Stop: end the old retry loop
+	}
 	d.stopped = make(chan struct{})
-	d.state = StateReady
+	d.state, d.retrying = StateReady, false
 	return nil
 }
 
@@ -163,10 +166,10 @@ func (d *Direct) Publish(ctx context.Context, p Publication) (string, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.state != StateReady {
+	if d.srvTLS == nil || d.state == StateStopped {
 		return "", errors.New("direct: not started")
 	}
-	d.target = p.Target
+	d.target = p.Target // also while the port is still being retried
 	if d.ln == nil && !d.listenLocked() {
 		if !d.retrying {
 			d.retrying = true
@@ -356,7 +359,10 @@ func (d *Direct) Unpublish(id string) error {
 }
 
 // Handles implements Transport.
-func (d *Direct) Handles(addr string) bool { return strings.HasPrefix(addr, directScheme) }
+func (d *Direct) Handles(addr string) bool { return IsDirect(addr) }
+
+// IsDirect reports whether addr is a direct-mode address.
+func IsDirect(addr string) bool { return strings.HasPrefix(addr, directScheme) }
 
 // ParseDirectAddr splits "sol-direct:<node id>@a,b" into the node key and
 // the candidates.
@@ -401,12 +407,9 @@ func (d *Direct) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	var cands []string
 	for _, c := range all {
-		host, _, _ := net.SplitHostPort(c)
-		ip := net.ParseIP(host)
-		if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || (ip.IsLoopback() && !d.allowLoopback) {
-			continue
+		if netutil.DirectCandidate(c, d.allowLoopback) == nil {
+			cands = append(cands, c)
 		}
-		cands = append(cands, c)
 	}
 	if len(cands) == 0 {
 		return nil, errors.New("no direct path: no usable address")

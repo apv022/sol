@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -29,6 +30,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/apv022/sol/internal/netutil"
 )
 
 // CurrentVersion is the config schema version written by this build.
@@ -246,6 +249,7 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
+	c.dropBadDirectAdvertise()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", path, err)
 	}
@@ -321,6 +325,27 @@ func (c *Config) applyDefaults() {
 			c.Peers[i].Services = []RemoteService{}
 		}
 	}
+}
+
+// directOnLoopback reports whether direct_listen is on loopback, the only
+// case where loopback candidates make sense.
+func (c *Config) directOnLoopback() bool {
+	host, _, _ := net.SplitHostPort(c.Transports.DirectListen)
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
+}
+
+// dropBadDirectAdvertise removes direct_advertise entries that peers would
+// never dial (say, a hostname from an older build), with a warning, rather
+// than refusing to start over an optional setting.
+func (c *Config) dropBadDirectAdvertise() {
+	c.Transports.DirectAdvertise = slices.DeleteFunc(c.Transports.DirectAdvertise, func(a string) bool {
+		err := netutil.DirectCandidate(a, c.directOnLoopback())
+		if err != nil {
+			slog.Warn("ignoring direct_advertise entry", "entry", a, "why", err)
+		}
+		return err != nil
+	})
 }
 
 // Path returns the file this config is bound to ("" for in-memory configs).
@@ -414,9 +439,8 @@ func (c *Config) validateLocked() error {
 		ids[p.ID] = true
 	}
 	for _, a := range c.Transports.DirectAdvertise {
-		host, _, err := net.SplitHostPort(a)
-		if err != nil || net.ParseIP(host) == nil {
-			errs = append(errs, fmt.Errorf("direct_advertise %q: must be IP:port (peers dial only IP addresses, not names)", a))
+		if err := netutil.DirectCandidate(a, c.directOnLoopback()); err != nil {
+			errs = append(errs, fmt.Errorf("direct_advertise %q: %v", a, err))
 		}
 	}
 	ports := map[int]bool{}

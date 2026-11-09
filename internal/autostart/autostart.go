@@ -200,8 +200,12 @@ func (m Manager) Enable(startNow bool) error {
 			home = filepath.Join(m.Home, ".config")
 		}
 		// The data directory that owns a unit there may have no record here.
-		if b, err := os.ReadFile(m.unitPath()); err == nil && !strings.Contains(string(b), " --data "+systemdQuote(m.DataDir)+"\n") {
+		b, err := os.ReadFile(m.unitPath())
+		switch {
+		case err == nil && !strings.Contains(string(b), " --data "+systemdQuote(m.DataDir)+"\n"):
 			return ErrOther
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("checking %s: %w", m.unitPath(), err)
 		}
 		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
 			return err
@@ -214,8 +218,9 @@ func (m Manager) Enable(startNow bool) error {
 			return err
 		}
 		if err := m.run("systemctl", "--user", "daemon-reload"); err != nil {
-			if existed != nil {
-				os.Remove(m.unitPath()) // don't leave a half-set-up entry behind
+			if existed != nil { // don't leave a half-set-up entry behind
+				os.Remove(m.unitPath())
+				os.Remove(filepath.Join(m.DataDir, pointerName))
 			}
 			return err
 		}
@@ -465,7 +470,21 @@ func Lingering() bool {
 // puts it: .../go-build<digits>/b<digits>/exe/<name>.
 var goRunPath = regexp.MustCompile(`(^|/)go-build[0-9]+/b[0-9]+/exe/[^/]+$`)
 
-func isGoRunBinary(exe string) bool { return goRunPath.MatchString(filepath.ToSlash(exe)) }
+// isGoRunBinary: a temporary `go run` build, either in a go-build temp
+// directory or (Go 1.24+) cached in the build cache, which `go clean` and
+// cache trimming delete.
+func isGoRunBinary(exe string) bool {
+	if goRunPath.MatchString(filepath.ToSlash(exe)) {
+		return true
+	}
+	cache := os.Getenv("GOCACHE")
+	if cache == "" {
+		if dir, err := os.UserCacheDir(); err == nil {
+			cache = filepath.Join(dir, "go-build")
+		}
+	}
+	return cache != "" && cache != "off" && strings.HasPrefix(exe, filepath.Clean(cache)+string(filepath.Separator))
+}
 
 func invokedPath() (string, error) {
 	if len(os.Args) > 0 && os.Args[0] != "" {
