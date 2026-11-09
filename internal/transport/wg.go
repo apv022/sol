@@ -230,8 +230,13 @@ func (w *WG) Start(ctx context.Context) error {
 		note = fmt.Sprintf("UDP %d was taken, so a random port is used (a forwarded port won't work until it's free and Sol restarts)", port)
 	}
 	if err := dev.Up(); err != nil {
-		dev.Close()
-		return fail(err)
+		// Depending on the platform the port clash shows up here, when the
+		// socket is opened, rather than when the port is set.
+		if note != "" || dev.IpcSet("listen_port=0\n") != nil || dev.Up() != nil {
+			dev.Close()
+			return fail(fmt.Errorf("wireguard: %w", err))
+		}
+		note = fmt.Sprintf("UDP %d was taken, so a random port is used (a forwarded port won't work until it's free and Sol restarts)", port)
 	}
 	w.priv, w.pub, w.ip, w.dev, w.tnet, w.bind = priv, pub, ip, dev, tnet, bind
 	w.port = uint16(port)
