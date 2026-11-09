@@ -232,7 +232,17 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 		ts = append(ts, transport.NewI2P(filepath.Join(dataDir, "i2pd"), prov))
 	}
 	if snap.Transports.Direct {
-		ts = append(ts, transport.NewDirect(snap.Transports.DirectListen, id.Signer(), snap.Transports.DirectAdvertise...))
+		usable, problems := cfg.UsableDirectAdvertise()
+		for _, p := range problems {
+			slog.Warn("ignoring an unusable entry", "why", p)
+		}
+		if len(snap.Transports.DirectAdvertise) > 0 && len(usable) == 0 {
+			// Fail closed: falling back to every local address would show
+			// peers more than the user chose to advertise.
+			ts = append(ts, transport.NewUnavailable("direct", errors.New("no usable direct_advertise entry (IP:port only); direct mode is off until config.json is fixed")))
+		} else {
+			ts = append(ts, transport.NewDirect(snap.Transports.DirectListen, id.Signer(), usable...))
+		}
 	}
 	if snap.Transports.Clearnet {
 		ts = append(ts, transport.NewClearnet(snap.Transports.ClearnetListen, snap.Transports.ClearnetAdvertise))

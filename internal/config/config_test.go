@@ -177,49 +177,33 @@ func TestMigrateDropsDevices(t *testing.T) {
 
 func TestDirectAdvertiseValidation(t *testing.T) {
 	c := Default()
-	for _, bad := range []string{"home.example:7701", "0.0.0.0:7701", "[fe80::1]:7701", "224.0.0.1:7701", "127.0.0.1:7701", "1.2.3.4:0", "1.2.3.4:abc"} {
-		c.Transports.DirectAdvertise = []string{bad}
-		if err := c.Validate(); err == nil {
-			t.Errorf("%s accepted", bad)
-		}
-	}
-	c.Transports.DirectAdvertise = []string{"203.0.113.7:7701", "[2001:db8::1]:7701"}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
+	c.Transports.DirectAdvertise = []string{"home.example:7701", "0.0.0.0:7701", "[fe80::1]:7701", "224.0.0.1:7701",
+		"127.0.0.1:7701", "1.2.3.4:0", "1.2.3.4:abc", "203.0.113.7:7701", "[2001:db8::1]:7701"}
+	usable, problems := c.UsableDirectAdvertise()
+	if len(usable) != 2 || usable[0] != "203.0.113.7:7701" || len(problems) != 7 {
+		t.Fatalf("usable %v, problems %v", usable, problems)
 	}
 }
 
-// An entry an older build accepted is dropped with a warning, not fatal.
-func TestLoadDropsBadDirectAdvertise(t *testing.T) {
+// Unusable entries never stop the config loading, and loading never
+// rewrites them (the user's file stays as written until they fix it).
+func TestLoadKeepsDirectAdvertiseAsWritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c := Default()
-	c.Transports.DirectAdvertise = []string{"203.0.113.7:7701"}
+	c.Transports.Direct = true
+	c.Transports.DirectAdvertise = []string{"myhost.example:7701"}
 	b, _ := json.Marshal(c)
-	b = []byte(strings.Replace(string(b), `"203.0.113.7:7701"`, `"203.0.113.7:7701","myhost.example:7701"`, 1))
 	os.WriteFile(path, b, 0o600)
 	got, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if da := got.Snapshot().Transports.DirectAdvertise; len(da) != 1 || da[0] != "203.0.113.7:7701" {
-		t.Fatalf("direct_advertise after load: %v", da)
-	}
-}
-
-// If every direct_advertise entry is unusable, direct mode turns off rather
-// than advertising every local address (fail closed).
-func TestNoUsableDirectAdvertiseTurnsDirectOff(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	c := Default()
-	c.Transports.Direct = true
-	b, _ := json.Marshal(c)
-	b = []byte(strings.Replace(string(b), `"direct":true`, `"direct":true,"direct_advertise":["myhost.example:7701"]`, 1))
-	os.WriteFile(path, b, 0o600)
-	got, err := Load(path)
-	if err != nil {
+	if err := got.SetName("renamed"); err != nil { // any save
 		t.Fatal(err)
 	}
-	if got.Snapshot().Transports.Direct {
-		t.Fatal("direct mode stayed on with no usable advertised address")
+	again, _ := Load(path)
+	tc := again.Snapshot().Transports
+	if !tc.Direct || len(tc.DirectAdvertise) != 1 {
+		t.Fatalf("stored direct settings changed: %+v", tc)
 	}
 }

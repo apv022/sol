@@ -103,8 +103,9 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	for _, c := range cs {
 		add(c.addr)
 	}
-	if backingOff && haveDirect {
-		out = append(out, direct) // last resort only
+	if backingOff {
+		backingOff = false
+		add(direct) // last resort only, through the same checks
 	}
 	return out
 }
@@ -421,10 +422,9 @@ func (n *Node) Unpair(ctx context.Context, id string) (p config.Peer, notified b
 }
 
 // blameDirect decides whether a failed direct attempt counts against the
-// path. Not when the caller cancelled, nor when its deadline had (nearly)
-// run out before the attempt could really run; yes when the context is live
-// or the caller's deadline expired during a real attempt (a black hole that
-// ate it).
+// path. Yes when the caller's context is still live. Not when the caller
+// cancelled, nor when its deadline cut the attempt short: only an attempt
+// that had its full DirectDialTimeout and still failed proves the path bad.
 func blameDirect(ctx context.Context, attempt time.Time) bool {
 	switch {
 	case ctx.Err() == nil:
@@ -432,7 +432,7 @@ func blameDirect(ctx context.Context, attempt time.Time) bool {
 	case errors.Is(ctx.Err(), context.Canceled):
 		return false
 	}
-	return time.Since(attempt) >= time.Second
+	return time.Since(attempt) >= transport.DirectDialTimeout
 }
 
 // directFailure remembers a direct address that just failed.

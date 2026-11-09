@@ -132,6 +132,13 @@ func (m Manager) managerConfigHome() string {
 	return ""
 }
 
+func (m Manager) writePointer(home string) error {
+	if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
+		return err
+	}
+	return config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600)
+}
+
 // pointerName is a file in the data directory recording where Enable
 // wrote the unit. Enable asks the systemd user manager for its config home,
 // which may differ from this process's XDG_CONFIG_HOME; the record lets
@@ -220,10 +227,13 @@ func (m Manager) Enable(startNow bool) error {
 		}
 		// Record where the unit is only once it is in place, so a failure
 		// never leaves the record pointing at nothing (or loses an old one).
-		if err := os.MkdirAll(m.DataDir, 0o700); err != nil {
-			return err
-		}
-		if err := config.WriteFileAtomic(filepath.Join(m.DataDir, pointerName), []byte(home+"\n"), 0o600); err != nil {
+		// If the record can't be written, undo a unit we just created: an
+		// unrecorded unit could be impossible to find from other environments.
+		if err := m.writePointer(home); err != nil {
+			if existed != nil {
+				os.Remove(m.unitPath())
+				m.run("systemctl", "--user", "daemon-reload")
+			}
 			return err
 		}
 		// Clears a start-limit hit from earlier failures, or --now can't start it.

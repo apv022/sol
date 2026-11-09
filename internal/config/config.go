@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -248,7 +247,6 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	c.applyDefaults()
-	c.dropBadDirectAdvertise()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", path, err)
 	}
@@ -330,26 +328,21 @@ func (c *Config) applyDefaults() {
 // case where loopback candidates make sense.
 func (c *Config) directOnLoopback() bool { return netutil.IsLoopbackListen(c.Transports.DirectListen) }
 
-// dropBadDirectAdvertise removes direct_advertise entries that peers would
-// never dial (say, a hostname from an older build), with a warning, rather
-// than refusing to start over an optional setting. If none is left, direct
-// mode is turned off: falling back to advertising every local address
-// would show peers more than the user chose to (fail closed).
-func (c *Config) dropBadDirectAdvertise() {
-	if len(c.Transports.DirectAdvertise) == 0 {
-		return
-	}
-	c.Transports.DirectAdvertise = slices.DeleteFunc(c.Transports.DirectAdvertise, func(a string) bool {
-		err := netutil.DirectCandidate(a, c.directOnLoopback())
-		if err != nil {
-			slog.Warn("ignoring direct_advertise entry", "entry", a, "why", err)
+// UsableDirectAdvertise splits direct_advertise into the entries peers
+// will dial and the reasons the others won't be. It never changes the
+// stored config: the node decides at start-up what to do with them
+// (node.buildTransports), so fixing the file is all a user has to do.
+func (c *Config) UsableDirectAdvertise() (usable []string, problems []error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, a := range c.Transports.DirectAdvertise {
+		if err := netutil.DirectCandidate(a, c.directOnLoopback()); err != nil {
+			problems = append(problems, fmt.Errorf("direct_advertise %q: %v", a, err))
+		} else {
+			usable = append(usable, a)
 		}
-		return err != nil
-	})
-	if len(c.Transports.DirectAdvertise) == 0 && c.Transports.Direct {
-		slog.Warn("no usable direct_advertise entry left; direct mode is off until it is fixed")
-		c.Transports.Direct = false
 	}
+	return usable, problems
 }
 
 // Path returns the file this config is bound to ("" for in-memory configs).
@@ -441,11 +434,6 @@ func (c *Config) validateLocked() error {
 			errs = append(errs, fmt.Errorf("peer %q: %w", p.ID, ErrDuplicate))
 		}
 		ids[p.ID] = true
-	}
-	for _, a := range c.Transports.DirectAdvertise {
-		if err := netutil.DirectCandidate(a, c.directOnLoopback()); err != nil {
-			errs = append(errs, fmt.Errorf("direct_advertise %q: %v", a, err))
-		}
 	}
 	ports := map[int]bool{}
 	for _, t := range c.Tunnels {

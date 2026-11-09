@@ -130,6 +130,9 @@ func (d *Direct) Start(ctx context.Context) error {
 	cert, err := selfSigned(d.key)
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.stopped != nil {
+		return nil // another Start won the race while we made the certificate
+	}
 	if err != nil {
 		d.state, d.detail = StateFailed, err.Error()
 		return err

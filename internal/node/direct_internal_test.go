@@ -128,11 +128,17 @@ func TestDirectBlameRules(t *testing.T) {
 		t.Fatal("our own cancel was blamed on the direct path")
 	}
 
-	if blameDirect(expired(t), time.Now()) {
-		t.Fatal("a deadline that was already gone was blamed on the path")
+	// Through dialOnce: a caller deadline that is already spent blames nothing.
+	n = testNode()
+	n.dialOnce(expired(t), p, protocol.Request{Op: protocol.OpConnect})
+	if len(n.directFail) != 0 {
+		t.Fatal("the caller's spent deadline was blamed on the direct path")
 	}
-	if !blameDirect(expired(t), time.Now().Add(-2*time.Second)) {
-		t.Fatal("a black hole that ate the caller's deadline wasn't blamed")
+	if blameDirect(expired(t), time.Now().Add(-time.Second)) {
+		t.Fatal("an attempt cut short by the caller was blamed")
+	}
+	if !blameDirect(expired(t), time.Now().Add(-transport.DirectDialTimeout)) {
+		t.Fatal("an attempt that had its full time and failed wasn't blamed")
 	}
 }
 
@@ -141,4 +147,24 @@ func expired(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	<-ctx.Done()
 	return ctx
+}
+
+// Only unusable direct_advertise entries: direct mode is unavailable rather
+// than advertising every local address (fail closed), and config is untouched.
+func TestBadDirectAdvertiseFailsClosed(t *testing.T) {
+	cfg := config.Default()
+	cfg.Transports.Tor = false
+	cfg.Transports.Direct = true
+	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701"}
+	id, _ := identity.Generate()
+	ts := buildTransports(cfg, t.TempDir(), id)
+	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" {
+		t.Fatalf("transports: %+v", ts)
+	}
+	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701", "203.0.113.7:7701"}
+	ts = buildTransports(cfg, t.TempDir(), id)
+	d, ok := ts[0].(*transport.Direct)
+	if !ok || len(d.Advertise) != 1 || d.Advertise[0] != "203.0.113.7:7701" {
+		t.Fatalf("mixed entries: %+v", ts[0])
+	}
 }
