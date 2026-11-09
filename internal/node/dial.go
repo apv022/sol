@@ -83,8 +83,10 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 	direct := p.Addrs["direct"]
 	backingOff := direct != "" && df.addr == direct && time.Since(df.at) < df.wait
 	out := make([]string, 0, len(cs)+1)
-	add := func(a string) {
-		if a == "" || slices.Contains(out, a) || (backingOff && a == direct) {
+	// add appends a if an enabled transport handles it. A direct address
+	// that is backing off is held back unless lastResort is set.
+	add := func(a string, lastResort bool) {
+		if a == "" || slices.Contains(out, a) || (backingOff && a == direct && !lastResort) {
 			return
 		}
 		if _, err := n.reg.For(a); err != nil {
@@ -92,22 +94,28 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 		}
 		out = append(out, a)
 	}
-	_, haveDirect := n.reg.Get("direct")
+	haveDirect := n.directUsable()
 	if haveDirect {
-		add(direct)
+		add(direct, false)
 	}
 	// An old direct address is stale, and with direct off nothing can dial it.
 	if !transport.IsDirect(last) || (haveDirect && last == direct) {
-		add(last)
+		add(last, false)
 	}
 	for _, c := range cs {
-		add(c.addr)
+		add(c.addr, false)
 	}
-	if backingOff {
-		backingOff = false
-		add(direct) // last resort only, through the same checks
+	if backingOff && haveDirect {
+		add(direct, true)
 	}
 	return out
+}
+
+// directUsable reports whether this node can dial direct addresses now (direct
+// mode is on and didn't fail closed).
+func (n *Node) directUsable() bool {
+	t, ok := n.reg.Get("direct")
+	return ok && transport.Usable(t)
 }
 
 // dialOnce opens a stream to p and completes the handshake for req, trying
@@ -157,7 +165,7 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 			// failed just now, or is backing off): the address may be stale, so
 			// ask for the current one over this working path. Rate-limited.
 			if t.Name() != "direct" && p.Addrs["direct"] != "" && req.Op != protocol.OpList {
-				if _, ok := n.reg.Get("direct"); ok {
+				if n.directUsable() {
 					go n.refreshDirect(p.ID)
 				}
 			}

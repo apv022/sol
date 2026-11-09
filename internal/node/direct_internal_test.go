@@ -157,12 +157,19 @@ func TestBadDirectAdvertiseFailsClosed(t *testing.T) {
 	cfg.Transports.Direct = true
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701"}
 	id, _ := identity.Generate()
-	ts := buildTransports(cfg, t.TempDir(), id)
-	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" {
-		t.Fatalf("transports: %+v", ts)
+	ts, warnings := buildTransports(cfg, t.TempDir(), id)
+	if len(ts) != 1 || transport.Usable(ts[0]) || ts[0].Name() != "direct" || len(warnings) != 1 {
+		t.Fatalf("transports: %+v, warnings %v", ts, warnings)
+	}
+	// A failed-closed direct transport doesn't make the node chase direct
+	// addresses it can never dial.
+	n := &Node{reg: transport.NewRegistry()}
+	n.reg.Add(ts[0])
+	if n.directUsable() {
+		t.Fatal("unavailable direct transport counted as usable")
 	}
 	cfg.Transports.DirectAdvertise = []string{"myhost.example:7701", "203.0.113.7:7701"}
-	ts = buildTransports(cfg, t.TempDir(), id)
+	ts, _ = buildTransports(cfg, t.TempDir(), id)
 	d, ok := ts[0].(*transport.Direct)
 	if !ok || len(d.Advertise) != 1 || d.Advertise[0] != "203.0.113.7:7701" {
 		t.Fatalf("mixed entries: %+v", ts[0])

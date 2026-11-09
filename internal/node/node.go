@@ -191,7 +191,11 @@ func New(opts Options) (*Node, error) {
 	}
 	ts := opts.Transports
 	if ts == nil {
-		ts = buildTransports(cfg, opts.DataDir, id)
+		var warnings []string
+		ts, warnings = buildTransports(cfg, opts.DataDir, id)
+		for _, w := range warnings {
+			n.log.Add(events.KindTransport, w) // shown in the panel, not only on stderr
+		}
 	}
 	for _, t := range ts {
 		n.reg.Add(t)
@@ -216,10 +220,10 @@ func New(opts Options) (*Node, error) {
 }
 
 // buildTransports creates the transports enabled in config.
-func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) []transport.Transport {
+// The warnings describe config entries that were skipped.
+func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) (ts []transport.Transport, warnings []string) {
 	snap := cfg.Snapshot()
 	ropts := runtime.Options{BinDir: filepath.Join(dataDir, "bin"), ContainerRuntime: snap.Runtime.ContainerRuntime}
-	var ts []transport.Transport
 	if snap.Transports.Tor {
 		if prov, err := runtime.Select(snap.Runtime.ProviderOrder, "tor", ropts); err != nil {
 			ts = append(ts, transport.NewUnavailable("tor", err))
@@ -232,9 +236,9 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 		ts = append(ts, transport.NewI2P(filepath.Join(dataDir, "i2pd"), prov))
 	}
 	if snap.Transports.Direct {
-		usable, problems := cfg.UsableDirectAdvertise()
+		usable, problems := snap.UsableDirectAdvertise()
 		for _, p := range problems {
-			slog.Warn("ignoring an unusable entry", "why", p)
+			warnings = append(warnings, "direct: ignoring "+p.Error())
 		}
 		if len(snap.Transports.DirectAdvertise) > 0 && len(usable) == 0 {
 			// Fail closed: falling back to every local address would show
@@ -247,7 +251,7 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 	if snap.Transports.Clearnet {
 		ts = append(ts, transport.NewClearnet(snap.Transports.ClearnetListen, snap.Transports.ClearnetAdvertise))
 	}
-	return ts
+	return ts, warnings
 }
 
 // ID returns the node's identity.

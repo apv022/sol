@@ -180,7 +180,7 @@ func TestDirectAdvertiseValidation(t *testing.T) {
 	c.Transports.DirectAdvertise = []string{"home.example:7701", "0.0.0.0:7701", "[fe80::1]:7701", "224.0.0.1:7701",
 		"127.0.0.1:7701", "1.2.3.4:0", "1.2.3.4:abc", "203.0.113.7:7701", "[2001:db8::1]:7701"}
 	usable, problems := c.UsableDirectAdvertise()
-	if len(usable) != 2 || usable[0] != "203.0.113.7:7701" || len(problems) != 7 {
+	if len(usable) != 2 || usable[0] != "203.0.113.7:7701" || usable[1] != "[2001:db8::1]:7701" || len(problems) != 7 {
 		t.Fatalf("usable %v, problems %v", usable, problems)
 	}
 }

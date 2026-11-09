@@ -121,18 +121,14 @@ func (d *Direct) Name() string { return "direct" }
 // Start makes the certificate; the listener opens on Publish("node").
 // Starting a started transport is a no-op (a running retry loop keeps going).
 func (d *Direct) Start(ctx context.Context) error {
-	d.mu.Lock()
-	running := d.stopped != nil
-	d.mu.Unlock()
-	if running {
-		return nil
-	}
-	cert, err := selfSigned(d.key)
+	// Held throughout (making an ed25519 certificate takes microseconds),
+	// so Start, Stop and Publish never interleave.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stopped != nil {
-		return nil // another Start won the race while we made the certificate
+		return nil
 	}
+	cert, err := selfSigned(d.key)
 	if err != nil {
 		d.state, d.detail = StateFailed, err.Error()
 		return err

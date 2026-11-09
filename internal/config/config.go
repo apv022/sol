@@ -392,7 +392,11 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// Validate checks every field. It is called by Load and by every mutator.
+// Validate checks every field except direct_advertise. It is called by Load
+// and by every mutator. direct_advertise is hand-edited and optional, so a
+// bad entry must not stop the node: UsableDirectAdvertise reports it and
+// the node skips it. A future setter must check entries with
+// netutil.DirectCandidate itself.
 func (c *Config) Validate() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
