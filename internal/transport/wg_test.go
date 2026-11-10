@@ -300,3 +300,84 @@ func TestWireGuardStopUnderPunches(t *testing.T) {
 		time.Sleep(600 * time.Millisecond) // let a's loop tick after Stop
 	}
 }
+
+// Peer reflection: a paired peer tells us the address our packets come
+// from, so no STUN server is needed.
+func TestPeerReflectionLearnsPublicAddress(t *testing.T) {
+	a, aAddr := startWG(t)
+	b, bAddr := startWG(t)
+	a.SetPeer(bAddr)
+	b.SetPeer(aAddr)
+	a.askPeers()
+	want := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), a.port)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a.mu.Lock()
+		got, from := a.public, a.pubFrom
+		a.mu.Unlock()
+		if got == want && from == "a paired peer" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("public address %v (from %q), want %v from a paired peer", got, from, want)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st := a.Status(); !strings.Contains(st.Detail, "from a paired peer") {
+		t.Fatalf("status: %s", st.Detail)
+	}
+}
+
+// A node that doesn't know us gives no answer: the port stays silent to
+// strangers, and an unsolicited reply changes nothing.
+func TestPeerReflectionIgnoresStrangers(t *testing.T) {
+	a, _ := startWG(t)
+	_, bAddr := startWG(t) // b was never told about a
+	a.SetPeer(bAddr)
+	a.askPeers()
+
+	// Someone else sends a reply we never asked for.
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	pc.WriteTo(replyPacket(netip.MustParseAddrPort("203.0.113.9:4444")),
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(a.port)})
+
+	time.Sleep(time.Second)
+	a.mu.Lock()
+	got := a.public
+	a.mu.Unlock()
+	if got.IsValid() {
+		t.Fatalf("learned %v from a stranger", got)
+	}
+}
+
+func TestReflectionPackets(t *testing.T) {
+	for _, s := range []string{"198.51.100.7:7701", "[2001:db8::1]:7701"} {
+		ap := netip.MustParseAddrPort(s)
+		got, ok := parseReply(replyPacket(ap))
+		if !ok || got != ap {
+			t.Fatalf("%s round-tripped to %v %v", s, got, ok)
+		}
+	}
+	for _, bad := range [][]byte{nil, []byte("SOLR"), []byte("SOLRnot-an-address"), append([]byte("SOLR"), make([]byte, 80)...)} {
+		if _, ok := parseReply(bad); ok {
+			t.Fatalf("%q parsed", bad)
+		}
+	}
+	var pub [32]byte
+	if !isQuery(queryPacket(pub)) || isPunch(queryPacket(pub)) || isQuery(punchPacket(pub)) {
+		t.Fatal("query and punch packets confused")
+	}
+	if isSTUN(queryPacket(pub)) || isSTUN(replyPacket(netip.MustParseAddrPort("198.51.100.7:1"))) {
+		t.Fatal("a Sol packet taken for STUN")
+	}
+	for addr, public := range map[string]bool{"198.51.100.7": true, "2001:db8::1": true,
+		"192.168.1.5": false, "10.0.0.1": false, "100.101.1.2": false, "fd7a:115c::1": false, "127.0.0.1": false} {
+		if isPublicAddr(netip.MustParseAddr(addr)) != public {
+			t.Errorf("isPublicAddr(%s) != %v", addr, public)
+		}
+	}
+}

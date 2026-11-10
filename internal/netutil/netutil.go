@@ -107,3 +107,29 @@ func IsLoopbackListen(addr string) bool {
 	ip := net.ParseIP(host)
 	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
+
+// STUNPresets are public STUN servers a user can choose by name in config
+// ("stun": ["cloudflare"]). Sol never uses one unless the user lists it: a
+// STUN server learns this machine's public IP.
+var STUNPresets = map[string]string{
+	"cloudflare": "stun.cloudflare.com:3478",
+	"google":     "stun.l.google.com:19302",
+	"mozilla":    "stun.services.mozilla.com:3478",
+	"twilio":     "global.stun.twilio.com:3478",
+}
+
+// ExpandSTUN turns a config entry (a preset name or host:port) into
+// host:port, or reports why it is unusable.
+func ExpandSTUN(entry string) (string, error) {
+	if hp, ok := STUNPresets[entry]; ok {
+		return hp, nil
+	}
+	host, port, err := net.SplitHostPort(entry)
+	if err != nil || host == "" {
+		return "", fmt.Errorf("stun %q: want a preset (cloudflare, google, mozilla, twilio) or host:port", entry)
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return "", fmt.Errorf("stun %q: bad port", entry)
+	}
+	return entry, nil
+}

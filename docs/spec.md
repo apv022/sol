@@ -381,7 +381,7 @@ metadata: devices, public IPs, and when they're online.
 |---|---|
 | Account + coordination server (key distribution) | Pairing link. Add a WireGuard public key to the pairing exchange |
 | Coordination server (endpoint exchange) | The authenticated Tor connection from the existing `sol/1` handshake |
-| STUN | Public STUN servers (they learn only the public IP), or a peer reports the address it sees |
+| STUN | A paired peer reports the address it sees (peer reflection); public STUN servers only if the user chooses them |
 | DERP relays | Today's Tor tunnel, with no Sol-run servers |
 | ACLs | Existing per-device, per-service access and instant revocation |
 
@@ -438,8 +438,9 @@ ladder including fallback, and a panel indicator showing "direct" or "via Tor" p
 4. Licensing: AGPL (keeps forks open) or MIT/Apache (max adoption)?
 5. Directory governance: who curates, how listings are disputed, and which external directories to federate with.
 6. Project name: "Sol" is fine for now, but check for trademark collisions before publishing.
-7. Direct mode (Section 10.1): accept `wireguard-go` as a dependency, or build Noise over UDP on
-   stdlib crypto? Which STUN source is acceptable given it learns the node's public IP?
+7. Direct mode (Section 10.1): decided. `wireguard-go` is accepted as the one dependency, and the
+   public address comes from paired peers (peer reflection), with public STUN servers only when
+   the user chooses them.
 
 ## 13. Repo layout
 

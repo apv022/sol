@@ -292,13 +292,8 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 			warnings = append(warnings, "direct: "+why)
 			ts = append(ts, transport.NewUnavailable("wg", errors.New(why)), transport.NewUnavailable("direct", errors.New(why)))
 		} else {
+			// No STUN server unless the user chose one (config "stun").
 			stun := snap.Transports.STUN
-			if len(stun) == 0 {
-				stun = transport.DefaultSTUN
-			}
-			if snap.Transports.NoSTUN {
-				stun = nil
-			}
 			// WireGuard first (UDP, punches NATs); TLS over TCP on the same
 			// port number for networks that block UDP.
 			ts = append(ts,

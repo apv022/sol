@@ -9,7 +9,8 @@ package transport
 // coordination servers and relays):
 //
 //  1. Each node has a WireGuard key (wg.key) and learns its public UDP
-//     address from STUN, on the WireGuard socket itself.
+//     address on the WireGuard socket itself: from its paired peers (peer
+//     reflection, stun.go) and, only if the user chose one, a STUN server.
 //  2. Peers exchange "sol-wg:<key>@<endpoint>,..." addresses over the
 //     authenticated Tor channel (pairing, list requests, PeerInfo).
 //  3. Both sides send small punch packets ("SOLP" + their WireGuard key) to
@@ -76,11 +77,13 @@ const (
 	wgKeepalive = 25 // seconds; keeps NAT mappings open once a tunnel is up
 	// observedFor: a punch packet's source address is preferred for this long.
 	observedFor = 30 * time.Second
+	// publicEvery: how often the public address is re-learned; publicRetry
+	// while there is none yet (a peer to ask may have just been paired).
+	publicEvery = 2 * time.Minute
+	publicRetry = 15 * time.Second
+	// replyWithin: a reflection reply counts only this soon after our query.
+	replyWithin = 5 * time.Second
 )
-
-// DefaultSTUN are the public STUN servers asked for this node's public
-// address. They learn that address (not whom you talk to).
-var DefaultSTUN = []string{"stun.cloudflare.com:3478", "stun.l.google.com:19302"}
 
 // IsWG reports whether addr is a WireGuard direct address.
 func IsWG(addr string) bool { return strings.HasPrefix(addr, wgScheme) }
@@ -89,7 +92,7 @@ func IsWG(addr string) bool { return strings.HasPrefix(addr, wgScheme) }
 type WG struct {
 	ListenAddr string   // UDP, e.g. ":7701"
 	Advertise  []string // replaces the advertised candidates (a forwarded port)
-	STUN       []string // STUN servers; empty means none (LAN/IPv6 only)
+	STUN       []string // STUN servers the user chose (presets or host:port); empty means none
 	keyPath    string
 
 	allowLoopback bool
@@ -106,8 +109,10 @@ type WG struct {
 	port    uint16
 	target  string
 	ln      net.Listener
-	public  netip.AddrPort // from STUN
-	note    string         // shown in Status (e.g. a port fallback)
+	public  netip.AddrPort       // from a peer's reflection reply or STUN
+	pubFrom string               // "a paired peer" or "STUN", for Status
+	asked   map[string]time.Time // reflection queries sent: endpoint -> when
+	note    string               // shown in Status (e.g. a port fallback)
 	peers   map[[32]byte]*wgPeer
 	stopped chan struct{}
 }
@@ -125,6 +130,7 @@ type wgPeer struct {
 	obsAt    time.Time // when
 	lastAct  time.Time // last punch reply / handshake start caused by a punch
 	lastRst  time.Time // last session reset caused by a punch
+	lastRfl  time.Time // last reflection reply sent to it
 }
 
 // resetEvery limits session resets caused by punch packets (which anyone
@@ -217,7 +223,7 @@ func (w *WG) Start(ctx context.Context) error {
 		return fail(err)
 	}
 	bind := newSTUNBind(conn.NewDefaultBind())
-	bind.onPunch = w.onPunch
+	bind.onPunch, bind.onQuery, bind.onReply = w.onPunch, w.onQuery, w.onReply
 	dev := device.NewDevice(tun, bind, device.NewLogger(wgLogLevel(), "wg: "))
 	note := ""
 	if err := dev.IpcSet(fmt.Sprintf("private_key=%s\nlisten_port=%d\n", hex.EncodeToString(priv[:]), port)); err != nil {
@@ -670,8 +676,14 @@ func (w *WG) loop(stopped chan struct{}) {
 		case <-tick.C:
 		}
 		if time.Now().After(nextSTUN) {
-			go w.refreshSTUN()
-			nextSTUN = time.Now().Add(2 * time.Minute)
+			go w.refreshPublic()
+			w.mu.Lock()
+			known := w.public.IsValid()
+			w.mu.Unlock()
+			nextSTUN = time.Now().Add(publicRetry)
+			if known {
+				nextSTUN = time.Now().Add(publicEvery)
+			}
 		}
 		hs := w.handshakes()
 		now := time.Now()
@@ -723,9 +735,11 @@ func (w *WG) loop(stopped chan struct{}) {
 	}
 }
 
-// refreshSTUN learns the public address from the first STUN server that
-// answers.
-func (w *WG) refreshSTUN() {
+// refreshPublic re-learns the public address: it asks every paired peer
+// (their answers arrive in onReply) and, if the user chose any, the STUN
+// servers.
+func (w *WG) refreshPublic() {
+	w.askPeers()
 	w.mu.Lock()
 	bind, servers := w.bind, w.STUN
 	w.mu.Unlock()
@@ -738,10 +752,87 @@ func (w *WG) refreshSTUN() {
 			continue
 		}
 		w.mu.Lock()
-		w.public = ap
+		w.public, w.pubFrom = ap, "STUN"
 		w.mu.Unlock()
 		return
 	}
+}
+
+// askPeers sends a reflection query to each paired peer's candidates.
+func (w *WG) askPeers() {
+	w.mu.Lock()
+	bind := w.bind
+	if bind == nil {
+		w.mu.Unlock()
+		return
+	}
+	pkt := queryPacket(w.pub)
+	now := time.Now()
+	if w.asked == nil {
+		w.asked = map[string]time.Time{}
+	}
+	for k, t := range w.asked {
+		if now.Sub(t) > replyWithin {
+			delete(w.asked, k)
+		}
+	}
+	var to []string
+	for _, p := range w.peers {
+		for _, c := range p.cands {
+			w.asked[endpointKey(c)] = now
+			to = append(to, c)
+		}
+	}
+	w.mu.Unlock()
+	for _, c := range to {
+		bind.sendRaw(pkt, c)
+	}
+}
+
+// onQuery answers a paired peer's reflection query with the address its
+// packet came from. Unknown keys get nothing (the port stays silent), and
+// each peer gets at most one answer a second.
+func (w *WG) onQuery(from conn.Endpoint, pub [32]byte) {
+	src, err := netip.ParseAddrPort(from.DstToString())
+	if err != nil {
+		return
+	}
+	w.mu.Lock()
+	p := w.peers[pub]
+	if p == nil || w.bind == nil || time.Since(p.lastRfl) < time.Second {
+		w.mu.Unlock()
+		return
+	}
+	p.lastRfl = time.Now()
+	bind := w.bind
+	w.mu.Unlock()
+	bind.sendRaw(replyPacket(src), src.String())
+}
+
+// onReply takes a peer's report of our public address, if it answers a
+// query we just sent to that address and is a public address (on a
+// loopback test setup, any address).
+func (w *WG) onReply(from conn.Endpoint, ap netip.AddrPort) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	key := endpointKey(from.DstToString())
+	at, ok := w.asked[key]
+	if !ok || time.Since(at) > replyWithin {
+		return
+	}
+	delete(w.asked, key)
+	if !w.allowLoopback && !isPublicAddr(ap.Addr()) {
+		return // a peer on our own network sees our LAN address: no use to others
+	}
+	w.public, w.pubFrom = ap, "a paired peer"
+}
+
+// cgnat is the carrier-grade NAT range (RFC 6598): not reachable from
+// outside, so never a public address.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+func isPublicAddr(a netip.Addr) bool {
+	return a.IsGlobalUnicast() && !a.IsPrivate() && !cgnat.Contains(a)
 }
 
 // Status implements Transport. The address follows network changes.
@@ -759,9 +850,13 @@ func (w *WG) Status() Status {
 				up++
 			}
 		}
-		pub := "no public address (STUN unreachable): same network, IPv6 and tailnet peers only"
+		pub := "no public address yet (no paired peer has reported one"
+		if len(w.STUN) == 0 {
+			pub += ", and no STUN server is chosen"
+		}
+		pub += "): same network, IPv6 and tailnet peers only"
 		if w.public.IsValid() {
-			pub = "public " + w.public.String()
+			pub = "public " + w.public.String() + " (from " + w.pubFrom + ")"
 		}
 		s.Detail = fmt.Sprintf("WireGuard on UDP %d, %s; %d of %d peers connected directly", w.port, pub, up, len(w.peers))
 		if w.note != "" {

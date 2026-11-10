@@ -221,3 +221,19 @@ func TestDirectListenValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// No STUN server is used unless the user lists one; entries are checked.
+func TestSTUNIsOptInAndValidated(t *testing.T) {
+	c := Default()
+	if len(c.Transports.STUN) != 0 {
+		t.Fatalf("a STUN server is chosen by default: %v", c.Transports.STUN)
+	}
+	c.Transports.STUN = []string{"cloudflare", "mozilla", "stun.example.org:3478"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Transports.STUN = []string{"cloudflar"}
+	if c.Validate() == nil {
+		t.Fatal("unknown preset accepted")
+	}
+}

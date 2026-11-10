@@ -147,12 +147,14 @@ type TransportsConfig struct {
 	Direct bool `json:"direct"`
 	// DirectListen is the direct-mode listen address (default ":7701").
 	DirectListen string `json:"direct_listen,omitempty"`
-	// STUN lists the STUN servers asked for this machine's public address
-	// (they learn that address, not whom you talk to). Empty means the
-	// defaults (transport.DefaultSTUN); NoSTUN turns STUN off (then only
-	// peers on the same network, IPv6 or a tailnet can connect directly).
-	STUN   []string `json:"stun,omitempty"`
-	NoSTUN bool     `json:"no_stun,omitempty"`
+	// STUN lists public STUN servers to ask for this machine's public
+	// address, by preset name ("cloudflare", "google", "mozilla", "twilio")
+	// or host:port. Empty
+	// (the default) means none: Sol never contacts a third party unless the
+	// user lists one here. A STUN server learns the public IP, not whom you
+	// talk to. Without one, paired peers report the address they see
+	// (peer reflection, docs/PROTOCOL.md).
+	STUN []string `json:"stun,omitempty"`
 	// DirectAdvertise replaces the advertised IP:port list, e.g. with a
 	// port forwarded on the router ("203.0.113.7:7701"). IP addresses only:
 	// peers never dial names an address list gives them. Loopback
@@ -454,6 +456,11 @@ func (c *Config) validateLocked() error {
 			errs = append(errs, fmt.Errorf("direct_listen %q: bad port", c.Transports.DirectListen))
 		}
 	}
+	for _, e := range c.Transports.STUN {
+		if _, err := netutil.ExpandSTUN(e); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	ports := map[int]bool{}
 	for _, t := range c.Tunnels {
 		if t.Port < 1 || t.Port > 65535 {
@@ -689,6 +696,7 @@ func (c *Config) SetPeerLastSeen(id string, t time.Time, persist bool) error {
 func (c *Config) cloneTransports() TransportsConfig {
 	t := c.Transports
 	t.DirectAdvertise = slices.Clone(t.DirectAdvertise)
+	t.STUN = slices.Clone(t.STUN)
 	return t
 }
 

@@ -30,9 +30,14 @@ says plainly what is and isn't protected in the current build. The longer design
 
 ## What is NOT protected (yet, or ever)
 
-- **STUN servers learn your public IP.** With direct mode on, the node asks STUN servers
-  (Cloudflare and Google by default; `stun` in config, or `no_stun: true`) for its public
-  address. They learn that address and that you run something, not whom you talk to.
+- **Your paired peers, and a STUN server if you choose one, learn your public IP.** With direct
+  mode on, the node asks its paired peers which address its packets come from (peer
+  reflection). Sol contacts no third party for this unless you list a STUN server under `stun`
+  in config (presets `cloudflare`, `google`, `mozilla`, `twilio`, or any `host:port`). A STUN
+  server learns your public IP and that you run something, not whom you talk to. Reflection
+  replies are unauthenticated hints, accepted only from an address queried moments before; a
+  forged one can at worst make peers try a wrong address, and WireGuard rejects whatever is
+  there.
 - **Punch packets are unauthenticated hints.** Anyone who knows a peer's WireGuard key could
   forge one. At worst that makes your node send a WireGuard handshake to an address of their
   choosing, or briefly reset one session (at most every 10 s). WireGuard still authenticates

@@ -121,8 +121,19 @@ Each node has a WireGuard key (`wg.key`) and, inside the tunnel, the address
 sol-wg:<base64url WireGuard public key>@<host:port>,<host:port>,...
 ```
 
-The candidates are the STUN-mapped public address (asked on WireGuard's own socket, so it is
-the mapping WireGuard's packets use), then LAN IPv4, global IPv6 and other addresses (at most 8).
+The candidates are the public address (learned on WireGuard's own socket, so it is the mapping
+WireGuard's packets use), then LAN IPv4, global IPv6 and other addresses (at most 8).
+
+The public address comes from **peer reflection**: every 2 minutes (every 15 s while it has
+none) a node sends each paired peer's candidates a query, `SOLQ` + its 32-byte WireGuard public
+key. A node answers only keys of its paired peers, at most once a second each, with `SOLR` +
+the source address it saw, as text (`198.51.100.7:7701`, `[2001:db8::1]:7701`). The asker
+accepts a reply only from an address it queried in the last 5 s, and only a public address (not
+private, CGNAT or loopback). So a peer with a public IP or a forwarded port tells the others
+their mapping, and no server outside the user's own machines is involved. If, and only if, the
+user lists STUN servers in config (`stun`: presets `cloudflare`, `google`, `mozilla`,
+`twilio`, or `host:port`), the node also asks them (RFC 5389 Binding requests). With neither,
+direct paths form only on the same network, over IPv6 or a tailnet, or to forwarded ports.
 
 Making a path:
 

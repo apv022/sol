@@ -25,8 +25,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
   rebinding.
 - **Direct mode** (opt-in, `"direct": true` under `transports`): peers connect straight to each
   other over **WireGuard** (the official wireguard-go, in userspace: no root), with NAT hole
-  punching (STUN on the WireGuard socket, endpoints exchanged over Tor, punch packets, a single
-  handshake initiator), so two homes behind ordinary routers connect directly. TLS 1.3 pinned to
+  punching (public address learned on the WireGuard socket, endpoints exchanged over Tor, punch
+  packets, a single handshake initiator), so two homes behind ordinary routers connect directly.
+  The public address comes from your own paired peers (**peer reflection**): no third-party
+  server is contacted unless you choose one under `stun` (presets `cloudflare`, `google`,
+  `mozilla`, `twilio`, or any `host:port`). TLS 1.3 pinned to
   the node key covers networks that block UDP, and Tor everything else. Addresses refresh themselves after a network change;
   the panel shows "direct" or "via Tor" per connection. Public services are never direct. Peers
   may announce direct addresses only for their own key, as plain IPs; the port stays silent to

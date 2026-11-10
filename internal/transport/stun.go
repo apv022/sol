@@ -7,7 +7,9 @@ package transport
 //
 // STUN packets are told apart from WireGuard packets by their fixed magic
 // cookie (bytes 4..8); WireGuard messages start with a type byte 1..4 and
-// three zero bytes, so the two can never be confused.
+// three zero bytes, so the two can never be confused. Sol's own packets
+// (punch, reflection query and reply) start with "SOL": 'S' is 0x53, which
+// is neither a WireGuard type nor a valid STUN first byte.
 
 import (
 	"crypto/rand"
@@ -21,6 +23,8 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
+
+	"github.com/apv022/sol/internal/netutil"
 )
 
 const (
@@ -131,6 +135,8 @@ type stunBind struct {
 	mu      sync.Mutex
 	pending map[stunTxID]chan netip.AddrPort
 	onPunch func(from conn.Endpoint, pub [32]byte) // see wg.go, "punch packets"
+	onQuery func(from conn.Endpoint, pub [32]byte) // peer reflection, see below
+	onReply func(from conn.Endpoint, ap netip.AddrPort)
 
 	// natFilter (tests only) makes the socket behave like a NAT that drops
 	// inbound packets from any address it hasn't sent to.
@@ -156,6 +162,50 @@ const punchMagic = "SOLP"
 func punchPacket(pub [32]byte) []byte { return append([]byte(punchMagic), pub[:]...) }
 
 func isPunch(b []byte) bool { return len(b) == len(punchMagic)+32 && string(b[:4]) == punchMagic }
+
+// Peer reflection: STUN without a STUN server. A node asks its paired
+// peers "where do you see me from?" with a query ("SOLQ" + its WireGuard
+// key) on the WireGuard socket, and a peer that knows that key answers
+// with a reply ("SOLR" + the source address it saw, as text). A peer with
+// a public address (a VPS, a forwarded port) thus tells the others their
+// public mapping, so no third-party server is needed. Strangers get no
+// answer, so the port stays silent to scanners, as WireGuard keeps it.
+// Replies are hints like punch packets: one is accepted only from an
+// address queried moments ago, and WireGuard authenticates whatever
+// connection follows.
+const (
+	queryMagic = "SOLQ"
+	replyMagic = "SOLR"
+	maxReply   = len(replyMagic) + len("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535")
+)
+
+func queryPacket(pub [32]byte) []byte { return append([]byte(queryMagic), pub[:]...) }
+
+func isQuery(b []byte) bool { return len(b) == len(queryMagic)+32 && string(b[:4]) == queryMagic }
+
+func replyPacket(ap netip.AddrPort) []byte { return append([]byte(replyMagic), ap.String()...) }
+
+// parseReply returns the address in a reflection reply.
+func parseReply(b []byte) (netip.AddrPort, bool) {
+	if len(b) <= len(replyMagic) || len(b) > maxReply || string(b[:4]) != replyMagic {
+		return netip.AddrPort{}, false
+	}
+	ap, err := netip.ParseAddrPort(string(b[4:]))
+	if err != nil {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), true
+}
+
+// endpointKey normalises "ip:port" so that a candidate we sent to and the
+// source of the answer compare equal (IPv4-mapped IPv6, zones aside).
+func endpointKey(s string) string {
+	ap, err := netip.ParseAddrPort(s)
+	if err != nil {
+		return s
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap().WithZone(""), ap.Port()).String()
+}
 
 func newSTUNBind(inner conn.Bind) *stunBind {
 	return &stunBind{Bind: inner, pending: map[stunTxID]chan netip.AddrPort{}}
@@ -197,14 +247,26 @@ func (b *stunBind) filter(fn conn.ReceiveFunc) conn.ReceiveFunc {
 					b.deliver(p)
 					continue
 				}
-				if isPunch(p) {
+				if isPunch(p) || isQuery(p) {
 					b.mu.Lock()
 					f := b.onPunch
+					if isQuery(p) {
+						f = b.onQuery
+					}
 					b.mu.Unlock()
 					if f != nil {
 						var pub [32]byte
 						copy(pub[:], p[4:])
 						f(eps[i], pub)
+					}
+					continue
+				}
+				if ap, ok := parseReply(p); ok {
+					b.mu.Lock()
+					f := b.onReply
+					b.mu.Unlock()
+					if f != nil {
+						f(eps[i], ap)
 					}
 					continue
 				}
@@ -288,11 +350,16 @@ func (b *stunBind) Query(server netip.AddrPort, timeout time.Duration) (netip.Ad
 	}
 }
 
-// resolveSTUN turns "host:port" server names into addresses (our own
-// config, so names are fine here, unlike peer-supplied candidates).
+// resolveSTUN turns config entries (preset names or "host:port") into
+// addresses (our own config, so names are fine here, unlike peer-supplied
+// candidates).
 func resolveSTUN(servers []string) []netip.AddrPort {
 	var out []netip.AddrPort
-	for _, s := range servers {
+	for _, e := range servers {
+		s, err := netutil.ExpandSTUN(e)
+		if err != nil {
+			continue
+		}
 		host, port, err := net.SplitHostPort(s)
 		if err != nil {
 			continue
