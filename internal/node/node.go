@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apv022/sol/internal/api"
@@ -48,7 +49,9 @@ import (
 	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/protocol"
 	"github.com/apv022/sol/internal/proxy"
+	"github.com/apv022/sol/internal/record"
 	"github.com/apv022/sol/internal/runtime"
+	"github.com/apv022/sol/internal/snowflake"
 	"github.com/apv022/sol/internal/transport"
 	"github.com/apv022/sol/web"
 )
@@ -106,6 +109,7 @@ type Node struct {
 
 	mu       sync.Mutex
 	conns    map[net.Conn]connInfo
+	sites    map[string]*siteServer // by service name (sites.go)
 	public   map[string]*publicService
 	lastAuth map[string]string // transport -> client-auth key set last published for the node
 	lastGood map[string]string // peer id -> address that last worked
@@ -116,7 +120,14 @@ type Node struct {
 	tmu     sync.Mutex
 	tunnels map[int]*tunnel // by local port (tunnels.go)
 
+	// stop ends Run; restarting makes Run return ErrRestart (Stop, Restart).
+	stop       context.CancelFunc
+	restarting atomic.Bool
+	// restartNeeded: a setting was changed that only applies at start-up.
+	restartNeeded atomic.Bool
+
 	autostart autostart.Manager // for the panel's "starts at login"
+	helper    *snowflake.Helper // the opt-in Snowflake proxy ("help_tor")
 
 	// Background work (connection handlers, refreshes) that may touch the
 	// data directory; Run waits for it before returning (see goBG).
@@ -167,8 +178,9 @@ type connInfo struct {
 }
 
 type publicService struct {
-	addrs map[string]string
-	stop  func()
+	addrs  map[string]string
+	stop   func()
+	record []byte // signed service record, if the service publishes one
 }
 
 // New loads (or creates) the node's state in opts.DataDir. It does not open
@@ -215,6 +227,7 @@ func New(opts Options) (*Node, error) {
 		blobs:    blobs,
 		ready:    make(chan struct{}),
 		conns:    map[net.Conn]connInfo{},
+		sites:    map[string]*siteServer{},
 		public:   map[string]*publicService{},
 		lastAuth: map[string]string{},
 		lastGood: map[string]string{},
@@ -222,6 +235,13 @@ func New(opts Options) (*Node, error) {
 
 		lastDirectRefresh: map[string]time.Time{},
 		directFail:        map[string]directFailure{},
+	}
+	ropts := runtime.Options{BinDir: filepath.Join(opts.DataDir, "bin"), ContainerRuntime: cfg.Snapshot().Runtime.ContainerRuntime}
+	n.helper = &snowflake.Helper{
+		DataDir: filepath.Join(opts.DataDir, "snowflake"),
+		Provider: func() (runtime.Provider, error) {
+			return runtime.Select(cfg.Snapshot().Runtime.ProviderOrder, snowflake.Program, ropts)
+		},
 	}
 	// A temporary binary (go run, go test) reports autostart as unsupported
 	// rather than reading the real user's entry.
@@ -322,9 +342,31 @@ func (n *Node) PanelAddr() string { return n.panelAddr }
 // ControlPath returns the control socket path ("" if disabled; valid after Ready).
 func (n *Node) ControlPath() string { return n.controlPath }
 
+// ErrRestart is returned by Run after Restart: the caller should start the
+// node again (cmd/sol does; under systemd or launchd the service manager does).
+var ErrRestart = errors.New("node: restart requested")
+
+// Stop makes Run shut the node down and return. Safe before Run and more
+// than once.
+func (n *Node) Stop() {
+	if n.stop != nil {
+		n.stop()
+	}
+}
+
+// Restart is Stop, with Run returning ErrRestart. Settings that are read
+// at start-up (transports, ports) take effect this way.
+func (n *Node) Restart() {
+	n.restarting.Store(true)
+	n.Stop()
+}
+
 // Run opens the listeners, starts transports, publishes the node and public
 // services, and blocks until ctx is cancelled. It then shuts everything down.
 func (n *Node) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	n.stop = cancel
 	n.ctx = ctx
 	n.started = time.Now()
 	snap := n.cfg.Snapshot()
@@ -393,6 +435,10 @@ func (n *Node) Run(ctx context.Context) error {
 		n.syncWG(p)
 	}
 	n.refreshNodePublication(true)
+	if n.cfg.HelpsTor() {
+		n.helper.Start(ctx)
+	}
+	n.openSavedSites()
 	for _, svc := range n.cfg.ServiceList() {
 		if svc.Visibility != config.VisibilityPrivate {
 			n.publishService(svc)
@@ -406,6 +452,9 @@ func (n *Node) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			n.shutdown(panelSrv)
+			if n.restarting.Load() {
+				return ErrRestart
+			}
 			return nil
 		case <-tick.C:
 			// Drops the access keys of expired pairing tokens.
@@ -422,12 +471,17 @@ func (n *Node) shutdown(panelSrv *http.Server) {
 	}
 	n.stopTunnels(func(config.Tunnel) bool { return true })
 	n.closeConns(func(connInfo) bool { return true })
+	n.helper.Stop()
 	n.mu.Lock()
 	for _, p := range n.public {
 		if p.stop != nil {
 			p.stop()
 		}
 	}
+	for _, s := range n.sites {
+		s.close()
+	}
+	n.sites = map[string]*siteServer{}
 	n.mu.Unlock()
 	if err := n.reg.StopAll(); err != nil {
 		slog.Warn("stopping transports", "err", err)
@@ -707,7 +761,8 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 		n.reject(c, fmt.Sprintf("%s asked for %q, which isn't shared with it", peers.Describe(p), truncate(req.Service, 40)))
 		return
 	}
-	var out net.Conn
+	var out net.Conn      // an app: the connection to its local port
+	var site http.Handler // a site: the node serves it itself
 	switch req.Service {
 	case peers.Inbox, peers.Files:
 	default:
@@ -715,6 +770,13 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 		if !ok {
 			n.reject(c, fmt.Sprintf("%s asked for %q, which no longer exists", peers.Describe(p), truncate(req.Service, 40)))
 			return
+		}
+		if svc.Dir != "" {
+			if site = n.siteHandler(svc.Name); site == nil {
+				n.reject(c, fmt.Sprintf("site %q: its folder can't be read", req.Service))
+				return
+			}
+			break
 		}
 		target := fmt.Sprintf("127.0.0.1:%d", svc.LocalPort)
 		var err error
@@ -749,7 +811,11 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 	case peers.Files:
 		serveHTTPConn(c, n.blobs.Browser())
 	default:
-		netutil.Pipe(c, out)
+		if site != nil {
+			serveHTTPConn(c, site)
+		} else {
+			netutil.Pipe(c, out)
+		}
 	}
 }
 
@@ -816,19 +882,37 @@ func (n *Node) peerInfo(p config.Peer) protocol.PeerInfo {
 }
 
 // publishService gives a public or anonymous-public service its own
-// publication on the allowed transports.
+// publication on the allowed transports. An http service or a site is
+// served through a listener of its own, so headers can be stripped and the
+// signed record (internal/record) can be added.
 func (n *Node) publishService(svc config.Service) {
 	target := fmt.Sprintf("127.0.0.1:%d", svc.LocalPort)
+	ps := &publicService{}
+	var handler http.Handler
+	switch {
+	case svc.Dir != "":
+		if handler = n.siteHandler(svc.Name); handler == nil {
+			n.log.Add(events.KindService, "publishing "+svc.Name+": its folder can't be read")
+			return
+		}
+	case svc.Protocol == config.ProtocolHTTP:
+		handler = proxy.NewServiceProxy(svc.LocalPort, svc.Visibility == config.VisibilityAnonymousPublic)
+	}
 	var stop func()
-	if svc.Protocol == config.ProtocolHTTP {
-		// Put the HTTP proxy in front so headers can be stripped.
+	if handler != nil {
+		if svc.Record {
+			handler = record.Handler(handler, func() []byte {
+				n.mu.Lock()
+				defer n.mu.Unlock()
+				return ps.record
+			})
+		}
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			n.log.Add(events.KindService, "publishing "+svc.Name+": "+err.Error())
 			return
 		}
-		strip := svc.Visibility == config.VisibilityAnonymousPublic
-		srv := &http.Server{Handler: proxy.NewServiceProxy(svc.LocalPort, strip), ReadHeaderTimeout: 30 * time.Second}
+		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 30 * time.Second}
 		go srv.Serve(ln)
 		target, stop = ln.Addr().String(), func() { srv.Close() }
 	}
@@ -854,8 +938,16 @@ func (n *Node) publishService(svc config.Service) {
 	if err != nil {
 		n.log.Add(events.KindService, "publishing "+svc.Name+": "+err.Error())
 	}
+	// The record names the addresses, so it can only be signed now.
+	var rec []byte
+	if svc.Record && handler != nil && len(addrs) > 0 {
+		if rec, err = n.signRecord(svc.Name, addrs); err != nil {
+			n.log.Add(events.KindService, "signing the record of "+svc.Name+": "+err.Error())
+		}
+	}
 	n.mu.Lock()
-	n.public[svc.Name] = &publicService{addrs: addrs, stop: stop}
+	ps.addrs, ps.stop, ps.record = addrs, stop, rec
+	n.public[svc.Name] = ps
 	n.mu.Unlock()
 }
 

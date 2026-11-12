@@ -16,23 +16,35 @@ import (
 // online but nobody can reach it. Two loops fix that:
 //
 //   - watchNetwork restarts tor when the set of local IP addresses changes.
-//   - selfCheck periodically dials our own onion through our own tor. Only a
-//     successful dial counts as "reachable"; Status reports StateStarting
-//     with an explanation until then. Repeated failures restart tor.
+//   - selfCheck periodically dials our own onion through our own tor.
+//     Repeated failures mark the node unreachable and then restart tor.
+//
+// "Reachable" starts when tor reports that a directory accepted our
+// descriptor (noteDescEvent), or when a self-check succeeds, whichever comes
+// first. The self-check alone is not a good first signal: it fetches the
+// descriptor from one directory picked at random, tor asks only one at a
+// time, and a slow one stalls the fetch for two minutes. A node that was
+// published within seconds then reported "not reachable yet" for minutes.
+// For the same reason one failed check never marks a reachable node
+// unreachable; it takes failsBeforeUnreachable in a row.
 //
 // For onions with client authorization, the Tor transport adds its own
 // "self" key to every publication so the self-check can get in.
 
 var (
-	netPollEvery       = 5 * time.Second
-	netSettle          = 3 * time.Second
-	selfCheckFirst     = 20 * time.Second
-	selfCheckRetry     = 30 * time.Second
-	selfCheckEvery     = 3 * time.Minute
-	selfCheckTimeout   = 60 * time.Second
-	restartAfterFails  = 4 // consecutive failed self-checks (~2 minutes)
-	minAutoRestartGap  = 10 * time.Minute
-	ignoredIfacePrefix = []string{"lo", "veth", "docker", "br-", "virbr", "cni", "flannel"}
+	netPollEvery      = 5 * time.Second
+	netSettle         = 3 * time.Second
+	selfCheckFirst    = 20 * time.Second
+	selfCheckRetry    = 30 * time.Second
+	selfCheckEvery    = 3 * time.Minute
+	selfCheckTimeout  = 60 * time.Second
+	restartAfterFails = 4 // consecutive failed self-checks
+	// failsBeforeUnreachable is how many self-checks in a row must fail
+	// before a published node is reported unreachable. Two checks span more
+	// than the two minutes one stalled directory request can take.
+	failsBeforeUnreachable = 2
+	minAutoRestartGap      = 10 * time.Minute
+	ignoredIfacePrefix     = []string{"lo", "veth", "docker", "br-", "virbr", "cni", "flannel"}
 )
 
 // Restart stops the running tor; the supervisor starts a fresh one and
@@ -134,6 +146,35 @@ func (t *Tor) probeTarget() string {
 	return t.onions[ids[0]].serviceID + ".onion"
 }
 
+// stillReachable decides whether a node stays "reachable" after fails
+// self-checks in a row have failed.
+func stillReachable(was bool, fails int) bool { return was && fails < failsBeforeUnreachable }
+
+// noteDescEvent handles one HS_DESC event line from tor:
+//
+//	650 HS_DESC UPLOADED <onion address without .onion> <auth> <directory> ...
+//
+// UPLOADED means a directory accepted the descriptor of one of our onions.
+// Tor builds a descriptor only after the onion's introduction circuits are
+// up, so from then on peers can find and reach it. Events about other
+// onions (our own lookups of peers) and other actions are ignored.
+func (t *Tor) noteDescEvent(line string) {
+	f := strings.Fields(line)
+	if len(f) < 4 || f[1] != "HS_DESC" || f[2] != "UPLOADED" {
+		return
+	}
+	target := strings.TrimSuffix(t.probeTarget(), ".onion")
+	if target == "" || f[3] != target {
+		return
+	}
+	t.mu.Lock()
+	if !t.reachable {
+		t.reachable, t.reachDetail = true, ""
+		slog.Debug("tor: descriptor accepted by a directory; reachable")
+	}
+	t.mu.Unlock()
+}
+
 // selfCheck periodically verifies our onions are reachable from the Tor
 // network and restarts tor if they stay unreachable.
 func (t *Tor) selfCheck(runCtx context.Context) {
@@ -172,10 +213,13 @@ func (t *Tor) selfCheck(runCtx context.Context) {
 		slog.Debug("tor: self-check failed", "n", fails, "err", err)
 		t.mu.Lock()
 		was := t.reachable
-		t.reachable = false
-		if was {
+		t.reachable = stillReachable(was, fails)
+		switch {
+		case t.reachable:
+			// One slow directory; not evidence that we are offline.
+		case was:
 			t.reachDetail = "lost contact with the Tor network; checking again"
-		} else {
+		default:
 			t.reachDetail = fmt.Sprintf("connected to Tor, but your address isn't reachable yet (check %d)", fails)
 		}
 		canRestart := time.Since(t.lastRestart) > minAutoRestartGap

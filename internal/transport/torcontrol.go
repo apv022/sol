@@ -14,8 +14,9 @@ import (
 // torControl is a minimal client for Tor's control protocol
 // (https://spec.torproject.org/control-spec/). Only the commands Sol needs
 // are used: AUTHENTICATE, TAKEOWNERSHIP, GETINFO, ADD_ONION, DEL_ONION, and
-// ONION_CLIENT_AUTH_ADD. Asynchronous events are never subscribed to, so
-// every reply belongs to the command just sent.
+// ONION_CLIENT_AUTH_ADD. Asynchronous events are never subscribed to on this
+// connection, so every reply belongs to the command just sent. Events are
+// read on a connection of their own (watchTorEvents).
 type torControl struct {
 	mu   sync.Mutex
 	conn net.Conn
@@ -113,4 +114,45 @@ func replyValue(lines []string, key string) string {
 		}
 	}
 	return ""
+}
+
+// watchTorEvents subscribes to events (e.g. "HS_DESC") on a control
+// connection of its own and calls fn with each event line ("650 ...") until
+// tor exits or ctx ends. It does not take ownership, so closing this
+// connection never stops tor.
+func watchTorEvents(ctx context.Context, addr, cookiePath, events string, fn func(line string)) error {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	cookie, err := os.ReadFile(cookiePath)
+	if err != nil {
+		return fmt.Errorf("reading tor control cookie: %w", err)
+	}
+	tp := textproto.NewConn(conn)
+	for _, cmd := range []string{"AUTHENTICATE " + hex.EncodeToString(cookie), "SETEVENTS " + events} {
+		if err := tp.PrintfLine("%s", cmd); err != nil {
+			return err
+		}
+		line, err := tp.ReadLine()
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(line, "250") {
+			return fmt.Errorf("tor control: %s", line)
+		}
+	}
+	for {
+		line, err := tp.ReadLine()
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(line, "650") {
+			fn(line)
+		}
+	}
 }

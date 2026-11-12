@@ -38,6 +38,15 @@ The stub is [`internal/transport/i2p.go`](../internal/transport/i2p.go); its com
 
 Nothing in `protocol`, `peers`, `pairing`, `api`, or `cmd/sol` needs to change.
 
+## Using the signed service record (directory, Nostr)
+
+A public `http` service or site with `record: true` serves a signed record at
+`/.well-known/sol.json` (`internal/record`). A directory checker or a discovery channel should
+fetch it from one of the service's addresses, call `record.Verify`, and require
+`Record.Reaches(thatAddress)`. Anything that republishes records (a Nostr event, `hosts.json`)
+can carry the bytes as they are: the signature covers them. New fields go into `record.Record`
+with a new `Version`.
+
 ## Adding discovery (Nostr, a DHT)
 
 Peers' addresses are remembered values, not part of their identity (that's the ed25519 key). A
@@ -69,6 +78,12 @@ The CLI (`sol audit`) and the panel's Leak check card pick it up automatically.
 2. Register the route in `api.Handler`. State-changing methods are CSRF-checked automatically.
 3. Add the UI to `web/index.html` and `web/app.js`. **Always pass API values through `esc()`**
    before putting them in HTML.
+
+## Adding a setting users can change
+
+Add one entry to `optionDefs` in `internal/config/options.go` (key, label, help, kind, whether it
+needs a restart, and get/set functions). `sol config` and the panel's Settings screen pick it up.
+Never add a secret there.
 
 ## Adding a config field
 

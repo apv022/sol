@@ -7,5 +7,5 @@ import "embed"
 
 // FS holds the panel's static files.
 //
-//go:embed index.html app.js style.css vendor/qrcode.js
+//go:embed index.html app.js style.css manifest.json icon.svg vendor/qrcode.js
 var FS embed.FS

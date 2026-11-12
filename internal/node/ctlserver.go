@@ -174,13 +174,41 @@ func (n *Node) handleControl(c net.Conn) {
 		if vis == "" {
 			vis = config.VisibilityPrivate
 		}
-		err := n.AddService(config.Service{Name: req.Service, LocalPort: req.Port, Visibility: vis, Protocol: req.Protocol})
+		err := n.AddService(config.Service{Name: req.Service, LocalPort: req.Port, Visibility: vis, Protocol: req.Protocol,
+			Dir: req.Dir, Record: req.Record})
 		reply(n.controlServiceNamed(req.Service), err)
 	case control.OpServiceRemove:
 		reply(nil, n.RemoveService(req.Service))
 	case control.OpServiceVis:
 		err := n.SetServiceVisibility(req.Service, req.Visibility)
 		reply(n.controlServiceNamed(req.Service), err)
+	case control.OpConfig, control.OpConfigSet:
+		var err error
+		if req.Op == control.OpConfigSet {
+			_, err = n.SetOption(req.Key, req.Value)
+		}
+		out := control.Config{RestartNeeded: n.restartNeeded.Load()}
+		for _, o := range n.Options() {
+			out.Options = append(out.Options, control.Option{Key: o.Key, Value: o.Value, Help: o.Help, Restart: o.Restart})
+		}
+		reply(out, err)
+	case control.OpStop:
+		reply(nil, nil)
+		n.Stop()
+	case control.OpRestart:
+		reply(nil, nil)
+		n.Restart()
+	case control.OpHelpTor:
+		var err error
+		switch req.Set {
+		case "on", "off":
+			err = n.SetHelpTor(req.Set == "on")
+		case "":
+		default:
+			err = fmt.Errorf("help-tor: want on or off, got %q", req.Set)
+		}
+		st := n.helper.Status()
+		reply(control.HelpTor{Enabled: st.Enabled, State: string(st.State), Detail: st.Detail}, err)
 	case control.OpTunnels:
 		out := []control.Tunnel{}
 		for _, t := range n.Tunnels() {
@@ -235,8 +263,8 @@ func (n *Node) controlServiceNamed(name string) control.LocalService {
 }
 
 func (n *Node) controlService(s api.ServiceView) control.LocalService {
-	v := control.LocalService{Name: s.Name, Port: s.LocalPort, Visibility: s.Visibility, Protocol: s.Protocol,
-		Running: s.Running, Addrs: s.Addresses, SharedWith: []string{}}
+	v := control.LocalService{Name: s.Name, Port: s.LocalPort, Dir: s.Dir, Record: s.Record, Visibility: s.Visibility,
+		Protocol: s.Protocol, Running: s.Running, Addrs: s.Addresses, SharedWith: []string{}}
 	for _, p := range n.peers.List() {
 		if p.Shared(s.Name) {
 			v.SharedWith = append(v.SharedWith, p.Name)
@@ -246,7 +274,7 @@ func (n *Node) controlService(s api.ServiceView) control.LocalService {
 }
 
 func (n *Node) controlStatus() control.Status {
-	return control.Status{NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), Panel: n.panelAddr, Addrs: n.ownAddrs()}
+	return control.Status{PID: os.Getpid(), NodeID: n.id.NodeID(), Name: n.cfg.NodeName(), Panel: n.panelAddr, Addrs: n.ownAddrs()}
 }
 
 func (n *Node) controlView(p config.Peer, refreshErr error) control.PeerView {

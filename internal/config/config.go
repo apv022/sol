@@ -64,13 +64,21 @@ var (
 	ErrDuplicate = errors.New("already exists")
 )
 
-// Service is one local app the node exposes.
+// Service is one thing the node exposes: a local app (LocalPort), or a
+// folder served as a static website (Dir).
 type Service struct {
 	Name       string   `json:"name"`                 // unique, [a-z0-9-]{1,32}
-	LocalPort  int      `json:"local_port"`           // app listens on 127.0.0.1:<LocalPort>
+	LocalPort  int      `json:"local_port,omitempty"` // app listens on 127.0.0.1:<LocalPort>; 0 for a site
 	Visibility string   `json:"visibility"`           // one of the Visibility* constants
 	Protocol   string   `json:"protocol,omitempty"`   // ProtocolTCP (default) or ProtocolHTTP
 	Transports []string `json:"transports,omitempty"` // empty means every enabled transport
+	// Dir makes this a site: the node itself serves this folder (absolute
+	// path) over HTTP, and there is no app or port (internal/site).
+	Dir string `json:"dir,omitempty"`
+	// Record publishes a signed service record at /.well-known/sol.json on
+	// the service's public addresses (internal/record). Off by default: it
+	// tells visitors the site runs Sol. Needs Protocol http.
+	Record bool `json:"record,omitempty"`
 }
 
 // Tunnel is a peer's service that this node keeps reachable on
@@ -181,6 +189,10 @@ type Config struct {
 	Services   []Service        `json:"services"`
 	Peers      []Peer           `json:"peers"`
 	Tunnels    []Tunnel         `json:"tunnels"`
+	// HelpTor runs a Snowflake proxy to help censored users reach Tor
+	// (internal/snowflake). Off by default: while on, it contacts the Tor
+	// Project's broker and public STUN servers from this machine's IP.
+	HelpTor bool `json:"help_tor"`
 
 	mu   sync.Mutex
 	path string // empty for in-memory configs (tests); Save is then a no-op
@@ -486,8 +498,21 @@ func validateService(s Service) error {
 	if !serviceNameRE.MatchString(s.Name) {
 		return fmt.Errorf("service name %q must match [a-z0-9][a-z0-9-]{0,31}", s.Name)
 	}
-	if s.LocalPort < 1 || s.LocalPort > 65535 {
+	if s.Dir != "" {
+		if !filepath.IsAbs(s.Dir) {
+			return fmt.Errorf("service %q: dir %q must be an absolute path", s.Name, s.Dir)
+		}
+		if s.LocalPort != 0 {
+			return fmt.Errorf("service %q: set dir (a site) or local_port (an app), not both", s.Name)
+		}
+		if s.Protocol != ProtocolHTTP {
+			return fmt.Errorf("service %q: a site is always http", s.Name)
+		}
+	} else if s.LocalPort < 1 || s.LocalPort > 65535 {
 		return fmt.Errorf("service %q: local_port %d out of range", s.Name, s.LocalPort)
+	}
+	if s.Record && s.Protocol != ProtocolHTTP {
+		return fmt.Errorf("service %q: a signed record needs protocol http (it is served over HTTP)", s.Name)
 	}
 	switch s.Visibility {
 	case VisibilityPrivate, VisibilityPublic, VisibilityAnonymousPublic:
@@ -507,14 +532,14 @@ func validateService(s Service) error {
 func (c *Config) mutate(fn func() error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	name := c.Name
+	name, helpTor := c.Name, c.HelpTor
 	services := slices.Clone(c.Services)
 	peers := make([]Peer, len(c.Peers))
 	for i, p := range c.Peers {
 		peers[i] = p.Clone()
 	}
 	tunnels := slices.Clone(c.Tunnels)
-	rollback := func() { c.Name, c.Services, c.Peers, c.Tunnels = name, services, peers, tunnels }
+	rollback := func() { c.Name, c.HelpTor, c.Services, c.Peers, c.Tunnels = name, helpTor, services, peers, tunnels }
 	if err := fn(); err != nil {
 		rollback()
 		return err
@@ -542,10 +567,26 @@ func (c *Config) SetName(name string) error {
 	return c.mutate(func() error { c.Name = name; return nil })
 }
 
-// AddService appends a service (defaulting Protocol to tcp) and saves.
+// HelpsTor reports whether the Snowflake proxy is turned on.
+func (c *Config) HelpsTor() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.HelpTor
+}
+
+// SetHelpTor turns the Snowflake proxy setting on or off and saves.
+func (c *Config) SetHelpTor(on bool) error {
+	return c.mutate(func() error { c.HelpTor = on; return nil })
+}
+
+// AddService appends a service (defaulting Protocol to tcp, or http for a
+// site) and saves.
 func (c *Config) AddService(s Service) error {
 	if s.Protocol == "" {
 		s.Protocol = ProtocolTCP
+		if s.Dir != "" {
+			s.Protocol = ProtocolHTTP
+		}
 	}
 	return c.mutate(func() error {
 		if slices.ContainsFunc(c.Services, func(x Service) bool { return x.Name == s.Name }) {
@@ -715,6 +756,7 @@ func (c *Config) Snapshot() *Config {
 		Services:   slices.Clone(c.Services),
 		Peers:      make([]Peer, 0, len(c.Peers)),
 		Tunnels:    slices.Clone(c.Tunnels),
+		HelpTor:    c.HelpTor,
 	}
 	for _, p := range c.Peers {
 		cp.Peers = append(cp.Peers, p.Clone())

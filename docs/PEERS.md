@@ -71,11 +71,14 @@ that arrives is the file that was sent.
 
 ## Running it
 
-`sol` is one long-running process (the node). Other `sol` commands talk to it over a Unix socket
-in the data directory (`control.sock`, `0600`, so only your user can use it):
+The node is one long-running process. `sol` starts it in the background (`sol run` keeps it in
+the terminal). Other `sol` commands talk to it over a Unix socket in the data directory
+(`control.sock`, `0600`, so only your user can use it):
 
 ```
-sol                          run the node (panel on 127.0.0.1:8080)
+sol                          start the node in the background (panel on 127.0.0.1:8080)
+sol stop | restart | logs    stop it, restart it, read its log
+sol config [key [value]]     list or change settings (also in the panel)
 sol invite                   print a pairing link
 sol pair <link>              pair with the node that made the link
 sol peers                    list peers and what they share
@@ -108,8 +111,8 @@ stay running in a terminal:
 
 ## Direct mode
 
-Set `"direct": true` under `transports` in `config.json` (and allow UDP and TCP port 7701 on
-your firewall), then restart Sol. Peers then connect over WireGuard, punching through home
+Turn it on with `sol config direct on` and `sol restart`, or on the panel's Settings screen (and
+allow UDP and TCP port 7701 on your firewall). Peers then connect over WireGuard, punching through home
 routers when they can, or over TLS where UDP is blocked. Behind a router you can forward the port and list it in
 `direct_advertise`: IP:port only (no names; peers never dial names), no loopback, link-local or
 multicast addresses. An unusable entry is ignored with a warning, and if none is left, direct

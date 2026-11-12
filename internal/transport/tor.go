@@ -48,7 +48,7 @@ type Tor struct {
 
 	// Health (see torhealth.go).
 	self          identity.X25519Key // lets the self-check through client auth
-	reachable     bool               // a self-check succeeded since the last launch
+	reachable     bool               // published and not known to be unreachable (torhealth.go)
 	reachDetail   string             // why we are not (yet) reachable
 	restartReason string
 	lastRestart   time.Time
@@ -150,6 +150,23 @@ func (t *Tor) launch(ctx, runCtx context.Context) error {
 			return fmt.Errorf("tor control port never came up: %w", err)
 		}
 	}
+
+	// Tor tells us when a directory has accepted our descriptor: that is
+	// when peers can find us (torhealth.go). The watcher ends with this tor.
+	go func() {
+		wctx, cancel := context.WithCancel(runCtx)
+		defer cancel()
+		go func() {
+			select {
+			case <-proc.Done():
+				cancel()
+			case <-wctx.Done():
+			}
+		}()
+		if err := watchTorEvents(wctx, control, cookie, "HS_DESC", t.noteDescEvent); err != nil && wctx.Err() == nil {
+			slog.Debug("tor: event watcher stopped", "err", err)
+		}
+	}()
 
 	t.mu.Lock()
 	t.proc, t.ctrl, t.socksAddr = proc, ctrl, socks

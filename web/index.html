@@ -1,24 +1,42 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-layout="side">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d1117">
 <title>Sol</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/user.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="sun" aria-hidden="true"></span>Sol</div>
-  <div id="status-pill" class="pill"><span class="dot"></span><span id="status-pill-text">Starting…</span></div>
-</header>
+<div class="shell">
+<aside class="side">
+  <div class="brand"><svg class="sun" viewBox="0 0 64 64" aria-hidden="true" fill="currentColor"><circle cx="32" cy="32" r="8"/><g fill="none" stroke="currentColor" stroke-linecap="round">  <path stroke-width="5" d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/>  <path stroke-width="5" d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></svg><b>sol</b><span id="side-name" class="muted"></span></div>
+  <div class="side-status">
+    <div id="status-pill" class="pill"><span class="dot"></span><span id="status-pill-text">starting…</span></div>
+    <div id="side-transports" class="chips"></div>
+  </div>
 
-<nav class="tabs" aria-label="Sections">
-  <button data-screen="home" class="active">Home</button>
-  <button data-screen="services">Services</button>
-  <button data-screen="peers">Peers</button>
-  <button data-screen="files">Files</button>
-  <button data-screen="activity">Activity</button>
-</nav>
+  <nav class="nav" aria-label="Sections">
+    <button data-screen="home" class="active"><kbd>1</kbd>home</button>
+    <button data-screen="services"><kbd>2</kbd>services</button>
+    <button data-screen="peers"><kbd>3</kbd>peers</button>
+    <button data-screen="files"><kbd>4</kbd>files</button>
+    <button data-screen="activity"><kbd>5</kbd>log</button>
+    <button data-screen="settings"><kbd>6</kbd>settings</button>
+  </nav>
+
+  <div class="side-machines">
+    <h4>Machines</h4>
+    <div id="side-peers"></div>
+    <button class="ghost small" data-action="pair">+ pair a machine</button>
+  </div>
+
+  <div class="side-foot muted small"><span id="side-version"></span>
+    <button class="linkish" data-action="settings">appearance</button></div>
+</aside>
 
 <main>
   <!-- HOME -->
@@ -45,29 +63,42 @@
     </div>
 
     <div class="card">
-      <h2>Connected right now</h2>
-      <div id="live-list"></div>
+      <h2>Peers</h2>
+      <div id="live-list" class="tblwrap"></div>
     </div>
 
-    <details class="card advanced">
-      <summary>Advanced details</summary>
+    <div class="card" id="tunnels-card" hidden>
+      <h2>Tunnels</h2>
+      <div id="tunnel-list" class="tblwrap"></div>
+    </div>
+
+    <div class="card">
+      <h2>This machine</h2>
       <dl class="kv">
         <dt>Name</dt><dd><span id="node-name">-</span> <button class="ghost small" data-action="rename">Rename</button></dd>
         <dt>Node ID</dt><dd class="mono" id="node-id">-</dd>
         <dt>Version</dt><dd id="version">-</dd>
         <dt>Running for</dt><dd id="uptime">-</dd>
         <dt>Starts at login</dt><dd id="autostart">-</dd>
+        <dt>Help the Tor network</dt><dd>
+          <label class="share"><input type="checkbox" id="help-tor">
+            <span><b id="help-tor-state">off</b> <span id="help-tor-detail" class="muted small"></span></span></label>
+          <p class="muted small">Runs a Snowflake proxy so people in censored countries can reach Tor through this
+            machine. It needs no open port and is not a relay. While on, it contacts the Tor Project and public
+            STUN servers from your IP address, and uses some of your bandwidth.</p></dd>
       </dl>
       <h3>Networks</h3>
       <div id="transports"></div>
+      <div id="tor-reconnect" hidden>
       <button class="ghost small" data-action="restart-tor">Reconnect to Tor</button>
       <p class="muted small">Sol reconnects by itself when your network changes (for example turning a VPN on).
         Use this if your devices can't reach this computer.</p>
+      </div>
       <div id="audit-card" hidden>
         <h3>Leak check (anonymous services)</h3>
         <div id="audit-list"></div>
       </div>
-    </details>
+    </div>
   </section>
 
   <!-- SERVICES -->
@@ -118,19 +149,43 @@
     <p class="muted">Pairings, connections, files, and blocked attempts. Newest first.</p>
     <ul id="event-list" class="events"></ul>
   </section>
+
+  <!-- SETTINGS (the node's; how the panel looks is under "appearance") -->
+  <section id="settings" class="screen">
+    <h2>Settings</h2>
+    <p class="muted">How this node connects. The same settings as <code>sol config</code> in a terminal.</p>
+    <div id="restart-banner" class="hero warn" hidden>
+      <h1>Restart to apply your changes</h1>
+      <p class="muted">Connections drop for a few seconds while the node restarts.</p>
+      <button data-action="restart-node">Restart now</button>
+    </div>
+    <div id="settings-list"></div>
+    <div class="card">
+      <h2>This node</h2>
+      <button class="ghost small" data-action="restart-node">Restart the node</button>
+      <p class="muted small">Stop it from a terminal with <code>sol stop</code>, start it with <code>sol</code>.
+        How the panel looks (theme, colours, layout) is under <b>appearance</b>.</p>
+    </div>
+  </section>
 </main>
+</div>
 
 <!-- ADD SERVICE DIALOG -->
 <dialog id="dlg-service">
   <form id="service-form" method="dialog">
     <h2>Add a service</h2>
-    <p class="muted">Pick the app, or choose Custom. The app must already be running on this computer.</p>
+    <p class="muted">Pick the app, or choose Custom. An app must already be running on this computer;
+      a website is just a folder of files.</p>
     <div id="templates" class="templates"></div>
 
     <label>Name <span class="muted">(lowercase letters, numbers, dashes)</span>
       <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,31}" placeholder="music"></label>
-    <label>Port the app listens on
+    <label id="field-port">Port the app listens on
       <input name="local_port" type="number" min="1" max="65535" required placeholder="4533"></label>
+    <label id="field-dir" hidden>Folder to serve <span class="muted">(full path; needs an index.html)</span>
+      <input name="dir" placeholder="/home/you/site">
+      <span class="muted small">Sol serves the files itself: no web server needed. Folders are never listed, and
+        hidden files (.git, .env) and file dates are not shown.</span></label>
 
     <fieldset class="choices">
       <legend>Who can open it?</legend>
@@ -147,11 +202,15 @@
 
     <details>
       <summary>Advanced</summary>
-      <label>Protocol
+      <label id="field-protocol">Protocol
         <select name="protocol">
           <option value="tcp">Any (tcp): works for everything</option>
           <option value="http">Web (http): lets Sol hide server headers on public sites</option>
         </select></label>
+      <label class="share"><input type="checkbox" name="record">
+        <span><b>Publish a signed record</b> <span class="muted small">Public web services only. Adds
+          <code>/.well-known/sol.json</code>, which ties the site's addresses to one key so directories
+          and visitors can verify it. It also shows that the site runs Sol.</span></span></label>
     </details>
 
     <p id="service-error" class="error" hidden></p>
@@ -217,6 +276,40 @@
   <h2 id="qr-title">Open in Tor Browser</h2>
   <div id="qr-big"></div>
   <pre id="qr-text"></pre>
+  <div class="actions"><button data-close class="ghost">Close</button></div>
+</dialog>
+
+<!-- SETTINGS DIALOG (look of this panel; saved in this browser) -->
+<dialog id="dlg-settings">
+  <h2>Appearance</h2>
+  <p class="muted small">How this panel looks. Saved in this browser only.</p>
+  <div class="set">
+    <label for="set-theme">Theme</label>
+    <select id="set-theme" data-set="theme">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="system">Match the system</option>
+      <option value="green">Green phosphor</option>
+      <option value="amber">Amber</option>
+    </select>
+    <label for="set-accent">Accent colour</label>
+    <div class="inline-row"><input type="color" id="set-accent" data-set="accent">
+      <button class="ghost small" data-action="reset-accent">Use the theme's</button></div>
+    <label for="set-layout">Layout</label>
+    <select id="set-layout" data-set="layout">
+      <option value="side">Sidebar with machines</option>
+      <option value="top">Tabs on top</option>
+    </select>
+    <label for="set-size">Text size</label>
+    <select id="set-size" data-set="size">
+      <option value="12">Small</option>
+      <option value="14">Normal</option>
+      <option value="16">Large</option>
+      <option value="18">Larger</option>
+    </select>
+  </div>
+  <p class="muted small">For anything else, write your own CSS in <code>~/.sol/panel.css</code> (the Sol data
+    folder) and reload. It is loaded after the built-in styles, so it can replace any colour, font or spacing.</p>
   <div class="actions"><button data-close class="ghost">Close</button></div>
 </dialog>
 

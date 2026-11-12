@@ -1,6 +1,8 @@
 // Command sol runs a Sol node and talks to it.
 //
-//	sol                              run the node (panel on http://127.0.0.1:8080)
+//	sol                              start the node in the background (panel on http://127.0.0.1:8080)
+//	sol stop | restart | logs        manage the background node
+//	sol run                          run the node in the foreground (for service managers)
 //	sol invite                       print a pairing link for another machine
 //	sol pair <link>                  pair with the node that made the link
 //	sol peers [-r]                   list peers and what they share
@@ -11,6 +13,7 @@
 //	sol services                     list this node's services
 //	sol service add <name> <port>    add a service (--http, --public, --share PEER)
 //	sol service remove <name>        remove a service
+//	sol site add <name> <folder>     publish a folder as a website on its own .onion
 //	sol name [NEW]                   show or change this node's name
 //	sol audit, sol version
 //
@@ -44,6 +47,7 @@ import (
 	"github.com/apv022/sol/internal/gateway"
 	"github.com/apv022/sol/internal/node"
 	"github.com/apv022/sol/internal/peers"
+	"github.com/apv022/sol/internal/record"
 )
 
 // version is set at release time with -ldflags "-X main.version=v0.1.0".
@@ -52,9 +56,14 @@ var version = "dev"
 const usage = `Sol: share your apps and files between your own machines over Tor.
 No port forwarding, no accounts.
 
-Run the node (keep it running; everything else talks to it):
-  sol [run] [--data DIR] [--panel ADDR]
-        Panel at http://127.0.0.1:8080.
+Run the node (everything else talks to it):
+  sol                         start the node in the background and return. Panel at
+                              http://127.0.0.1:8080. Running it again shows where it is.
+  sol stop                    stop it
+  sol restart                 stop and start it (needed after some settings change)
+  sol logs [-f] [-n N]        what the background node has logged (-f keeps following)
+  sol run [--panel ADDR]      run the node in this terminal instead, until Ctrl+C
+                              (this is what systemd, launchd and containers should run)
 
 Pair two machines (once):
   sol invite                  on machine A: prints a link (works once, for 10 minutes)
@@ -68,6 +77,13 @@ Your services (apps on this machine):
   sol service remove <name>   remove it (the app itself isn't touched)
   sol service public <name>   give it its own .onion anyone can open in Tor Browser
   sol service private <name>  back to peers you share it with only
+  sol site add <name> <folder> [--private | --anonymous] [--record] [--share PEER ...]
+                              serve a folder as a website. Public by default: it gets its own
+                              .onion. Sol serves the files itself (no web server needed), never
+                              lists folders, and hides dotfiles and file dates.
+                              --record also publishes a signed record at /.well-known/sol.json
+                              that ties the site's addresses to one key (it shows the site runs Sol).
+  sol site remove <name>      stop serving it (the folder isn't touched)
 
 Use your peers:
   sol peers [-r]              list peers; -r asks each one what it shares now
@@ -81,11 +97,22 @@ Use your peers:
   sol send <peer> <file>...   send files to a peer (they land in its Files tab)
   sol unpair <peer>           remove a peer here and tell it to remove you
 
+Settings:
+  sol config                  list every setting with its value and what it does
+  sol config <key>            show one, for example: sol config direct
+  sol config <key> <value>    change one, for example: sol config direct on
+                              Some only take effect after: sol restart
+                              The panel's Settings screen changes the same ones.
+
 Other:
   sol name [NEW]              show or change this node's name, as peers see it
   sol status                  this node's id, name and addresses
   sol autostart on|off|status start the node when you log in (systemd user unit on Linux,
                               LaunchAgent on macOS)
+  sol snowflake on|off|status help the Tor network: run a Snowflake proxy so people in censored
+                              countries can reach Tor through this machine. Off by default. It
+                              needs no open port and is not a relay. While on, it contacts the Tor
+                              Project and public STUN servers from your IP address.
   sol audit [--service NAME]  leak checks for anonymous-public services
   sol version
 
@@ -99,16 +126,17 @@ func main() {
 	defer stop()
 
 	args := os.Args[1:]
-	cmd := "run"
+	cmd := "start" // plain `sol` starts the node in the background
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
 	commands := map[string]func(context.Context, []string) error{
-		"run": runNode, "node": runNode,
+		"start": runStart, "run": runNode, "node": runNode,
+		"stop": runStop, "restart": runRestart, "logs": runLogs, "config": runConfig,
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
 		"open": runOpen, "tunnels": runTunnels, "close": runClose, "send": runSend, "unpair": runUnpair, "name": runName,
-		"services": runServices, "service": runService,
-		"status": runStatus, "audit": runAudit, "autostart": runAutostart,
+		"services": runServices, "service": runService, "site": runSite,
+		"status": runStatus, "audit": runAudit, "autostart": runAutostart, "snowflake": runSnowflake,
 		"gateway": func(ctx context.Context, _ []string) error { return gateway.Run(ctx) },
 	}
 	var err error
@@ -194,6 +222,21 @@ func runNode(ctx context.Context, args []string) error {
 	if err != nil {
 		return startupFailed(err)
 	}
+	// restart handles `sol restart` and the panel's Restart: a node kept by
+	// systemd or launchd exits non-zero and is started again by it; any
+	// other node starts its own replacement in the background.
+	restart := func(err error) error {
+		if !errors.Is(err, node.ErrRestart) {
+			return err
+		}
+		if os.Getenv(autostart.SupervisedEnv) != "" {
+			os.Exit(75) // EX_TEMPFAIL: "try again", which the service manager does
+		}
+		if _, err := spawnNode(data, panel); err != nil {
+			return fmt.Errorf("restarting: %w", err)
+		}
+		return nil
+	}
 	done := make(chan error, 1)
 	go func() { done <- n.Run(ctx) }()
 	select {
@@ -208,7 +251,7 @@ func runNode(ctx context.Context, args []string) error {
 	fmt.Printf("Panel:  http://%s\n", n.PanelAddr())
 	fmt.Printf("Data:   %s (back up node.key: it is this node's identity)\n", data)
 	fmt.Println("Pair another machine with `sol invite`. Press Ctrl+C to stop.")
-	return <-done
+	return restart(<-done)
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -229,6 +272,32 @@ func printStatus(st control.Status) {
 	for _, t := range sortedKeys(st.Addrs) {
 		fmt.Printf("%-7s %s\n", t+":", st.Addrs[t])
 	}
+}
+
+// runSnowflake is `sol snowflake on|off|status`: the opt-in Snowflake proxy.
+func runSnowflake(ctx context.Context, args []string) error {
+	data, pos := flags("snowflake", args, nil)
+	if len(pos) != 1 || !slices.Contains([]string{"on", "off", "status"}, pos[0]) {
+		return errors.New("usage: sol snowflake on|off|status")
+	}
+	req := control.Request{Op: control.OpHelpTor}
+	if pos[0] != "status" {
+		req.Set = pos[0]
+	}
+	var st control.HelpTor
+	if err := control.Call(ctx, sock(data), req, &st); err != nil {
+		return err
+	}
+	switch st.State {
+	case "off":
+		fmt.Println("Off. Turn it on with `sol snowflake on` to help people in censored countries reach Tor.")
+	case "running":
+		fmt.Println("On: " + st.Detail + ".")
+		fmt.Println("It contacts the Tor Project's broker and public STUN servers from this machine's IP address.")
+	default:
+		fmt.Printf("On, but not running (%s): %s\n", st.State, st.Detail)
+	}
+	return nil
 }
 
 func runAutostart(ctx context.Context, args []string) error {
@@ -643,7 +712,15 @@ func printService(s control.LocalService) {
 	if !s.Running {
 		state = "NOT RUNNING: nothing listens on that port"
 	}
-	fmt.Printf("%s  (127.0.0.1:%d, %s, %s)\n", s.Name, s.Port, s.Protocol, state)
+	if s.Dir != "" {
+		state = "serving"
+		if !s.Running {
+			state = "NOT SERVING: the folder can't be read"
+		}
+		fmt.Printf("%s  (site: %s, %s)\n", s.Name, s.Dir, state)
+	} else {
+		fmt.Printf("%s  (127.0.0.1:%d, %s, %s)\n", s.Name, s.Port, s.Protocol, state)
+	}
 	switch s.Visibility {
 	case config.VisibilityPrivate:
 		who := "nobody yet"
@@ -660,10 +737,86 @@ func printService(s control.LocalService) {
 			}
 			fmt.Printf("  %-8s %s\n", t+":", addr)
 		}
+		if s.Record {
+			fmt.Printf("  signed record at %s on each address\n", record.Path)
+		}
 		if len(s.SharedWith) > 0 {
 			fmt.Printf("  also shared with peers: %s\n", strings.Join(s.SharedWith, ", "))
 		}
 	}
+}
+
+// shareWith shares service s with each named peer and records their names.
+func shareWith(ctx context.Context, path string, s *control.LocalService, share []string) error {
+	for _, peer := range share {
+		var p control.PeerView
+		if err := control.Call(ctx, path, control.Request{Op: control.OpShare, Peer: peer, Service: s.Name, Shared: true}, &p); err != nil {
+			return fmt.Errorf("added %s, but sharing it with %s failed: %w", s.Name, peer, err)
+		}
+		s.SharedWith = append(s.SharedWith, p.Name)
+	}
+	return nil
+}
+
+// runSite is `sol site add|remove`: a site is a service whose content is a
+// folder the node serves itself.
+func runSite(ctx context.Context, args []string) error {
+	const usageSite = "usage: sol site add <name> <folder> [--private | --anonymous] [--record] [--share PEER]\n" +
+		"       sol site remove <name>"
+	var private, anon, rec bool
+	var share shareFlags
+	data, pos := flags("site", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&private, "private", false, "only peers you share it with can open it (no .onion of its own)")
+		fs.BoolVar(&anon, "anonymous", false, "public, with extra leak protection (experimental)")
+		fs.BoolVar(&rec, "record", false, "publish a signed record at "+record.Path+" (shows the site runs Sol)")
+		fs.Var(&share, "share", "share it with this peer right away (repeatable)")
+	})
+	if len(pos) < 2 {
+		return errors.New(usageSite)
+	}
+	path := sock(data)
+	switch pos[0] {
+	case "add":
+		if len(pos) != 3 || (private && anon) {
+			return errors.New(usageSite)
+		}
+		// The node runs elsewhere, so it needs the full path.
+		dir, err := filepath.Abs(pos[2])
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%s isn't a folder", dir)
+		}
+		req := control.Request{Op: control.OpServiceAdd, Service: pos[1], Dir: dir, Record: rec,
+			Visibility: config.VisibilityPublic, Protocol: config.ProtocolHTTP}
+		if private {
+			req.Visibility = config.VisibilityPrivate
+		}
+		if anon {
+			req.Visibility = config.VisibilityAnonymousPublic
+		}
+		var s control.LocalService
+		if err := control.Call(ctx, path, req, &s); err != nil {
+			return err
+		}
+		if err := shareWith(ctx, path, &s, share); err != nil {
+			return err
+		}
+		fmt.Printf("Added the site %s.\n", s.Name)
+		printService(s)
+		if s.Visibility != config.VisibilityPrivate && len(s.Addrs) == 0 {
+			fmt.Println("Its address is still being published; `sol services` shows it.")
+		}
+		return nil
+	case "remove", "rm":
+		if err := control.Call(ctx, path, control.Request{Op: control.OpServiceRemove, Service: pos[1]}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Removed the site %s. The folder wasn't touched.\n", pos[1])
+		return nil
+	}
+	return errors.New(usageSite)
 }
 
 // shareFlags collects repeated --share PEER flags.
@@ -711,12 +864,8 @@ func runService(ctx context.Context, args []string) error {
 		if err := control.Call(ctx, path, req, &s); err != nil {
 			return err
 		}
-		for _, peer := range share {
-			var p control.PeerView
-			if err := control.Call(ctx, path, control.Request{Op: control.OpShare, Peer: peer, Service: s.Name, Shared: true}, &p); err != nil {
-				return fmt.Errorf("added %s, but sharing it with %s failed: %w", s.Name, peer, err)
-			}
-			s.SharedWith = append(s.SharedWith, p.Name)
+		if err := shareWith(ctx, path, &s, share); err != nil {
+			return err
 		}
 		fmt.Printf("Added %s.\n", s.Name)
 		printService(s)

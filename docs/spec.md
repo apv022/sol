@@ -31,7 +31,37 @@ Self-hosting means fighting ports, CGNAT, DNS, certificates, and VPN setup. Sol 
 
 - A new anonymity or routing network.
 - Hiding the user from a malicious gateway they chose to trust (the strict mode in Section 11 reduces this).
-- Replacing Tor Browser or I2P for general browsing.
+- A browser of our own. Tor Browser's fingerprinting defences are the product, and an embedded
+  web view can't match them. Sol finds, names and verifies services, then hands off to Tor Browser.
+- A new social network or identity system. Nostr already is one; Sol hosts relays and identities
+  rather than replacing them.
+- A rewrite in another language. The Go core runs on every target, phones included.
+
+## 3.1 Where Sol is going: four stages
+
+Each stage has to be useful by itself; none is a bet on the next.
+
+| Stage | Who it is for | What makes it true | State |
+|---|---|---|---|
+| 1. Self-hosting | People with a home server | Pairing, sharing, files, direct mode, one-download install | Works; onboarding (bundled tor, Windows autostart, a release) is the gap |
+| 2. Hosting on Tor and I2P | People who run onion sites and eepsites | `sol site add`, the signed service record, leak audit, key backup, one publish to both networks | Sites and records shipped; I2P and the audit checks are next |
+| 3. Using Tor and I2P | People who visit those sites | An opt-in, signed, curated directory with search over listed sites, names, and Tor+I2P mirrors of one site | Not started; depends on the record |
+| 4. A default way to reach things | Everyone | Direct when you trust the peer, relayed when you can't connect, anonymous when you need it, under one name | A direction, not a work item |
+
+Decisions that follow (recorded so they aren't reopened without a reason):
+
+- **Speed.** A direct WireGuard path already matches a VPN. The slow case is a symmetric NAT,
+  which falls back to Tor. Port mapping and relaying through one of your own reachable peers come
+  before any new network. Yggdrasil stays an optional later transport.
+- **I2P** is for stage 2 (publishing to both networks), not for speed.
+- **Nostr** carries signed service records for discovery. It is not used to find paired peers
+  (onions are stable) and not as a social layer.
+- **The directory** lists only services whose operators opted in and proved control with a
+  record, under published criteria and a report path (Section 9.5). It does not crawl.
+- **Apps.** The panel stays one web page, installable as an app window. Phones: Android through
+  the same Go core and panel, then the gateway for plain browsers. No Electron.
+- **Helping the Tor network** means an optional Snowflake proxy in its own process (shipped:
+  `sol snowflake on`), never a relay on the tor that serves this node's onions.
 
 ## 4. Use cases and solutions
 
@@ -326,6 +356,9 @@ Static HTML/CSS/JS plus `hosts.json`, no backend required. A small `checker` scr
 Listing criteria are published. Entries that serve illegal content are removed on report. The directory lists addresses, it does not host or mirror the content behind them.
 
 ## 10. Roadmap
+
+> The order below predates Section 3.1, which is the current sequence: finish stage 1 onboarding,
+> then stage 2 (I2P, audit checks, key backup), then the directory. The items remain the backlog.
 
 ### v0.2
 - **Gateway mode** (sessions, pairing page, HTTPS front door) so phones and plain browsers work with nothing installed.

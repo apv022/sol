@@ -19,7 +19,7 @@ Run two local nodes without touching your real `~/.sol` (give each its own ports
 `config.json`, or use `"tor": false, "clearnet": true` for a quick LAN test):
 
 ```sh
-SOL_DATA=/tmp/sol-a go run ./cmd/sol            # node A
+SOL_DATA=/tmp/sol-a go run ./cmd/sol run        # node A, in the foreground (plain `sol` backgrounds it)
 SOL_DATA=/tmp/sol-a go run ./cmd/sol invite     # talks to node A over /tmp/sol-a/control.sock
 SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 ```
@@ -35,7 +35,10 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 - `internal/protocol`: the handshake. Security-critical. Spec in `docs/PROTOCOL.md`.
 - `internal/transport`: `Transport` interface; `tor.go` (control port + SOCKS), `wg.go` + `stun.go` (WireGuard direct mode, hole punching), `direct.go` (TLS direct), `clearnet.go`, `i2p.go` (stub).
 - `internal/runtime`: running `tor` as a child process (native / bundled / docker stub).
-- `internal/api` + `web/`: the panel. Plain JS, no build step.
+- `internal/api` + `web/`: the panel. Plain JS, no build step. Colours, font and sizes are tokens
+  at the top of `web/style.css`; keep new styles on those tokens so themes and `panel.css` work.
+- `internal/site` (a folder served as a website) and `internal/record` (the signed service record).
+- `internal/snowflake`: the opt-in Snowflake proxy. Sol never runs a Tor relay.
 - `internal/e2e`: the tests that prove the product works. Extend them for any behaviour change.
 - Full table: `docs/ARCHITECTURE.md`. How to add features: `docs/EXTENDING.md`.
 
@@ -66,8 +69,13 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 - Changing an onion's client-auth keys means DEL_ONION + ADD_ONION with the same key
   (`Tor.addOnion`). `node.refreshNodePublication` skips this when the key set hasn't changed, so
   pairing doesn't bounce live connections.
-- Tor "ready" means *reachable*: `Tor.Status` stays `starting` until the self-check reaches our
-  own onion (`torhealth.go`). A network change restarts tor on purpose.
+- Tor "ready" means *reachable*: `Tor.Status` stays `starting` until tor reports that a directory
+  accepted our descriptor (`HS_DESC UPLOADED`, read on a second control connection) or the
+  self-check reaches our own onion (`torhealth.go`). Don't make the self-check the only signal
+  again: it fetches the descriptor from one random directory, and a slow one stalls it for two
+  minutes. A network change restarts tor on purpose.
+- Never send tor `SIGNAL NEWNYM`: it also drops the client-auth keys added over the control port,
+  which would cut this node off from its peers.
 - `config.Config` must only be touched through its methods (it holds a mutex). Use `Snapshot()`
   for read-only views. Peer maps are deep-copied (`Peer.Clone`); keep it that way.
 - Only one node may run per data directory: the control socket doubles as the lock.

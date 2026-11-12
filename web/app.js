@@ -9,7 +9,8 @@
 "use strict";
 
 let csrf = "";
-let state = { status: null, services: [], peers: [], tunnels: [], files: [], events: [], audit: [] };
+let state = { status: null, services: [], peers: [], tunnels: [], files: [], events: [], audit: [], settings: [] };
+let onlyPeer = ""; // peers screen: show just this peer (picked in the sidebar)
 
 // ---------- helpers ----------
 
@@ -71,16 +72,70 @@ const visibilityLabel = {
   "anonymous-public": "Anonymous public (experimental)",
 };
 
+// ---------- look (settings) ----------
+
+// The panel's look is a per-browser preference, so it lives in localStorage
+// and never touches the node. Values are applied as attributes and CSS
+// custom properties on <html>; style.css does the rest.
+const lookDefaults = { theme: "dark", accent: "", layout: "side", size: "14" };
+const lookAllowed = { theme: ["dark", "light", "system", "green", "amber"], layout: ["top", "side"], size: ["12", "14", "16", "18"] };
+let look = Object.assign({}, lookDefaults);
+try {
+  const saved = JSON.parse(localStorage.getItem("sol-look") || "{}");
+  for (const k of Object.keys(lookAllowed)) if (lookAllowed[k].includes(saved[k])) look[k] = saved[k];
+  if (/^#[0-9a-f]{6}$/i.test(saved.accent || "")) look.accent = saved.accent;
+} catch { /* storage blocked or corrupt: keep the defaults */ }
+
+function applyLook() {
+  const root = document.documentElement;
+  root.dataset.theme = look.theme;
+  root.dataset.layout = look.layout;
+  root.style.setProperty("--size", look.size + "px");
+  if (look.accent) root.style.setProperty("--accent", look.accent);
+  else root.style.removeProperty("--accent");
+}
+function saveLook() {
+  applyLook();
+  try { localStorage.setItem("sol-look", JSON.stringify(look)); } catch { /* not saved; still applied */ }
+}
+function openSettings() {
+  document.querySelectorAll("[data-set]").forEach(el => {
+    el.value = look[el.dataset.set] ||
+      (el.dataset.set === "accent" ? rgbToHex(getComputedStyle(document.documentElement).getPropertyValue("--accent")) : "");
+  });
+  $("dlg-settings").showModal();
+}
+// The colour input needs #rrggbb; the theme's accent is already written so.
+const rgbToHex = v => (/^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim() : "#ff8c2b");
+document.querySelectorAll("[data-set]").forEach(el => el.addEventListener("input", () => {
+  look[el.dataset.set] = el.value;
+  saveLook();
+}));
+applyLook();
+
 // ---------- navigation ----------
 
-function show(screen) {
-  if (!document.getElementById(screen)?.classList.contains("screen")) screen = "home";
+const screens = ["home", "services", "peers", "files", "activity", "settings"];
+
+function show(screen, peer = "") {
+  if (!screens.includes(screen)) screen = "home";
+  onlyPeer = screen === "peers" ? peer : "";
   if (location.hash.slice(1) !== screen) history.replaceState(null, "", "#" + screen);
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.screen === screen));
+  document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("active", b.dataset.screen === screen && !onlyPeer));
   document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === screen));
+  renderSidebar(); renderPeers();
   refresh();
 }
-document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => show(b.dataset.screen)));
+document.querySelectorAll(".nav button").forEach(b => b.addEventListener("click", () => show(b.dataset.screen)));
+window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+
+// Keys 1-6 switch screens, unless the user is typing or a dialog is open.
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const i = Number(e.key) - 1;
+  if (screens[i]) show(screens[i]);
+});
 
 // One delegated click handler for every [data-action], [data-copy], [data-close].
 document.addEventListener("click", e => {
@@ -104,8 +159,36 @@ document.addEventListener("click", e => {
     "show-qr": () => showQr(arg),
     "play": () => play(arg),
     "restart-tor": restartTor,
+    "show-peer": () => show("peers", arg),
+    "all-peers": () => show("peers"),
+    "settings": openSettings,
+    "reset-accent": () => { look.accent = ""; saveLook(); openSettings(); },
+    "restart-node": restartNode,
+    "save-setting": () => saveSetting(arg, document.querySelector(`[data-setting="${CSS.escape(arg)}"]`).value),
   })[a]?.();
 });
+
+// ---------- sidebar ----------
+
+// How we last reached a peer, in two or three letters.
+const pathShort = v => ({ "wg": "wg", "direct": "tls", "tor": "tor", "i2p": "i2p", "clearnet": "lan" })[v] || v;
+
+function renderSidebar() {
+  const s = state.status;
+  if (!s) return;
+  $("side-name").textContent = "~ " + s.name;
+  $("side-version").textContent = "sol " + (s.version || "dev");
+  const mark = { ready: "✓", starting: "…", failed: "✗", stopped: "-" };
+  $("side-transports").innerHTML = (s.transports || []).map(t =>
+    `<span class="chip ${esc(t.state)}" title="${esc(t.detail || t.state)}">[${esc(t.name)} ${mark[t.state] || "?"}]</span>`).join("");
+  $("side-peers").innerHTML = state.peers.length ? state.peers.map(p => {
+    const via = (p.connections.find(c => c.via) || {}).via;
+    const path = !p.online ? "idle" : via ? pathShort(via) : "online";
+    return `<button class="side-peer ${p.id === onlyPeer ? "active" : ""}" data-action="show-peer" data-arg="${esc(p.id)}"
+      title="${esc(p.name)}"><span class="dot ${p.online ? "ready" : "stopped"}"></span><span class="name">${esc(p.name)}</span>
+      <span class="path">${esc(path)}</span></button>`;
+  }).join("") : `<p class="muted small side-none">none paired yet</p>`;
+}
 
 // ---------- home ----------
 
@@ -126,6 +209,12 @@ function renderHome() {
     : as.enabled ? "Yes"
     : as.other ? `No <span class="muted small">· set up for another Sol data folder</span>`
     : `No <span class="muted small">· turn on with <code>sol autostart on</code></span>`;
+
+  const ht = s.help_tor || { state: "off" };
+  if (document.activeElement !== $("help-tor")) $("help-tor").checked = !!ht.enabled;
+  $("help-tor-state").textContent = ht.state === "running" ? "on" : ht.enabled ? "on, not running" : "off";
+  $("help-tor-state").className = ht.state === "running" ? "okline" : ht.enabled ? "warnline" : "";
+  $("help-tor-detail").textContent = ht.detail || "";
 
   const t = torStatus();
   const pill = $("status-pill");
@@ -161,12 +250,17 @@ function renderHome() {
     text = t.detail || "Tor stopped.";
   }
   pill.className = "pill " + cls;
-  $("status-pill-text").textContent = cls === "ok" ? "Online" : cls === "warn" ? "Connecting" + (pct ? " " + pct + "%" : "") : "Offline";
+  $("status-pill-text").textContent = cls === "ok" ? "online" + (t.name === "tor" ? " over tor" : "")
+    : cls === "warn" ? "connecting" + (pct ? " " + pct + "%" : "") : "offline";
   $("hero").className = "hero " + cls;
   $("hero-title").textContent = title;
   $("hero-text").textContent = text;
   $("hero-progress").hidden = pct === null;
-  $("hero-reconnect").hidden = cls === "ok" || pct !== null;
+  // Reconnecting only makes sense on a node that runs Tor (tor can be off in
+  // config.json, e.g. a LAN-only test node).
+  const hasTor = (s.transports || []).some(x => x.name === "tor");
+  $("hero-reconnect").hidden = !hasTor || cls === "ok" || pct !== null;
+  $("tor-reconnect").hidden = !hasTor;
   if (pct !== null) $("hero-progress-bar").className = "w" + Math.round(pct / 5) * 5;
 
   // Checklist: hide once everything is done.
@@ -178,17 +272,36 @@ function renderHome() {
   $("step-connect").classList.toggle("done", connected);
   $("checklist").hidden = hasSvc && hasDev && connected;
 
-  // Live connections.
-  const live = state.peers.filter(p => p.online);
-  $("live-list").innerHTML = live.length ? live.map(p => p.connections.map(c => `
-    <div class="live">
-      <span class="lock" title="Verified with this peer's key">🔒</span>
-      <div>${c.outbound
-          ? `You → <b>${esc(p.name)}</b>'s <b>${esc(svcLabel(c.service))}</b>`
-          : `<b>${esc(p.name)}</b> → your <b>${esc(svcLabel(c.service))}</b>`}
-        <div class="muted small">Verified · ${c.streams} open connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}</div></div>
-    </div>`).join("")).join("")
-    : `<p class="muted">No peers are connected right now.</p>`;
+  // Peers and tunnels, as tables.
+  const svcNames = p => p.services.filter(x => x.name !== "_inbox").map(x => svcLabel(x.name)).join(" ") || "-";
+  $("live-list").innerHTML = `<table class="tbl">
+    <tr><th>Name</th><th>State</th><th>Path</th><th>Shares with you</th><th>Last seen</th></tr>
+    <tr><td>${esc(s.name)}*</td><td class="self">self</td><td>-</td><td>-</td><td>now</td></tr>
+    ${state.peers.map(p => {
+      const via = (p.connections.find(c => c.via) || {}).via;
+      return `<tr class="click" data-action="show-peer" data-arg="${esc(p.id)}" title="Show ${esc(p.name)}">
+        <td>${esc(p.name)}</td>
+        <td class="${p.online ? "on" : "off"}">${p.online ? "connected ✓" : "idle"}</td>
+        <td>${p.online ? esc(via ? viaLabel(via) : "connected to you") : "-"}</td>
+        <td class="wrap">${esc(svcNames(p))}</td>
+        <td>${p.online ? "now" : esc(ago(p.last_seen))}</td></tr>`;
+    }).join("")}
+  </table>${state.peers.length ? "" : `<p class="muted small">No peers yet. <button class="linkish" data-action="pair">Invite a machine</button>
+    or <button class="linkish" data-action="join">join with a link</button>.</p>`}`;
+
+  $("tunnels-card").hidden = state.tunnels.length === 0;
+  $("tunnel-list").innerHTML = `<table class="tbl">
+    <tr><th>Local address</th><th>Peer / service</th><th>Proto</th><th>Via</th><th>State</th><th></th></tr>
+    ${state.tunnels.map(t => `<tr>
+      <td>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">${esc(t.addr)}</a>` : esc(t.addr)}</td>
+      <td>${esc(peerName(t.peer))}/${esc(svcLabel(t.service))}</td>
+      <td>${esc(t.protocol || "")}</td>
+      <td>${esc(t.via ? pathShort(t.via) : "-")}</td>
+      <td class="${!t.listening ? "" : t.last_error ? "off" : "on"}">${!t.listening ? `<span class="danger-text">port unavailable</span>`
+        : t.last_error ? "peer unreachable" : "ready"}</td>
+      <td><button class="linkish" data-action="copy-text" data-arg="${esc(t.addr)}">[copy]</button>
+        <button class="linkish danger-text" data-action="close-tunnel" data-arg="${esc(String(t.port))}">[close]</button></td></tr>`).join("")}
+  </table>`;
 
   $("transports").innerHTML = (s.transports || []).map(t => `
     <div class="row"><span class="dot ${esc(t.state)}"></span><b>${esc(t.name)}</b>
@@ -209,6 +322,15 @@ async function restartTor() {
   } catch (err) { fail(err); }
 }
 
+$("help-tor").addEventListener("change", async e => {
+  const on = e.target.checked;
+  try {
+    await api("/api/help-tor", json("PUT", { enabled: on }));
+    toast(on ? "Helping the Tor network: Snowflake proxy on" : "Snowflake proxy off");
+    refresh();
+  } catch (err) { e.target.checked = !on; fail(err); }
+});
+
 // ---------- services ----------
 
 function renderServices() {
@@ -218,13 +340,18 @@ function renderServices() {
     return `<div class="card service">
       <div class="card-head"><h3>${esc(s.name)}</h3>
         <button class="ghost small danger-text" data-action="remove-service" data-arg="${esc(s.name)}">Remove</button></div>
-      ${s.running
-        ? `<p class="okline">● Running on port ${esc(s.local_port)}</p>`
-        : `<p class="warnline">⚠ Nothing is running on port ${esc(s.local_port)}. Start the app, then check again.</p>`}
+      ${s.dir
+        ? (s.running
+          ? `<p class="okline">● serving the folder <code>${esc(s.dir)}</code></p>`
+          : `<p class="warnline">! The folder ${esc(s.dir)} can't be read.</p>`)
+        : s.running
+        ? `<p class="okline">● running on port ${esc(s.local_port)}</p>`
+        : `<p class="warnline">! Nothing is running on port ${esc(s.local_port)}. Start the app, then check again.</p>`}
+      ${s.record ? `<p class="muted small">Signed record at <code>/.well-known/sol.json</code> on each public address.</p>` : ""}
       <label class="inline">Who can open it
         <select data-vis="${esc(s.name)}">${Object.entries(visibilityLabel).map(([v, l]) =>
           `<option value="${v}" ${v === s.visibility ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      ${s.active_streams ? `<p class="muted small">🔒 ${s.active_streams} verified connection${s.active_streams === 1 ? "" : "s"} open</p>` : ""}
+      ${s.active_streams ? `<p class="muted small">✓ ${s.active_streams} verified connection${s.active_streams === 1 ? "" : "s"} open</p>` : ""}
       ${addrs.length ? addrs.map(([net, a]) => `
         <div class="addr"><span class="muted small">${esc(net)} address</span>
           <div class="copyrow"><code>${esc(a)}</code>
@@ -249,13 +376,22 @@ const templates = [
   { label: "Home Assistant", hint: "smart home", name: "home", port: 8123, protocol: "http" },
   { label: "Nextcloud", hint: "files", name: "cloud", port: 8080, protocol: "http" },
   { label: "SSH", hint: "terminal", name: "ssh", port: 22, protocol: "tcp" },
-  { label: "Website", hint: "any web app", name: "site", port: 8000, protocol: "http" },
+  { label: "Web app", hint: "on a port", name: "web", port: 8000, protocol: "http" },
+  { label: "Website", hint: "a folder", name: "site", port: "", protocol: "http", site: true },
   { label: "Custom", hint: "anything else", name: "", port: "", protocol: "tcp" },
 ];
+
+// The dialog adds an app (a port) or a site (a folder Sol serves itself).
+function setSiteMode(on) {
+  const f = $("service-form");
+  $("field-port").hidden = on; $("field-dir").hidden = !on; $("field-protocol").hidden = on;
+  f.local_port.required = !on; f.dir.required = on;
+}
 
 function openServiceDialog() {
   const f = $("service-form");
   f.reset();
+  setSiteMode(false);
   $("service-error").hidden = true;
   $("templates").innerHTML = templates.map((t, i) =>
     `<button type="button" class="tpl" data-tpl="${i}"><b>${esc(t.label)}</b><span class="muted small">${esc(t.hint)}</span></button>`).join("");
@@ -265,7 +401,9 @@ function openServiceDialog() {
     let name = t.name, n = 2;
     while (name && state.services.some(s => s.name === name)) name = t.name + "-" + n++;
     f.name.value = name; f.local_port.value = t.port; f.protocol.value = t.protocol;
-    (name ? f.local_port : f.name).focus();
+    setSiteMode(!!t.site);
+    if (t.site) f.visibility.value = "public";
+    (t.site ? f.dir : name ? f.local_port : f.name).focus();
   }));
   $("dlg-service").showModal();
 }
@@ -275,10 +413,11 @@ $("service-form").addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   try {
-    await api("/api/services", json("POST", {
-      name: f.name.value, local_port: Number(f.local_port.value),
-      visibility: f.visibility.value, protocol: f.protocol.value,
-    }));
+    const site = f.dir.required;
+    await api("/api/services", json("POST", site
+      ? { name: f.name.value, dir: f.dir.value.trim(), visibility: f.visibility.value, protocol: "http", record: f.record.checked }
+      : { name: f.name.value, local_port: Number(f.local_port.value), visibility: f.visibility.value,
+          protocol: f.protocol.value, record: f.protocol.value === "http" && f.record.checked }));
     $("dlg-service").close();
     toast(`Added ${f.name.value}`);
     show("services");
@@ -316,14 +455,16 @@ function shareBox(p, name, label, hint) {
 }
 
 function renderPeers() {
-  const list = state.peers;
-  $("peer-list").innerHTML = list.length ? list.map(p => {
+  if (onlyPeer && !state.peers.some(p => p.id === onlyPeer)) onlyPeer = ""; // unpaired meanwhile
+  const list = onlyPeer ? state.peers.filter(p => p.id === onlyPeer) : state.peers;
+  const filter = onlyPeer ? `<p class="peer-filter"><button class="ghost small" data-action="all-peers">← all peers</button></p>` : "";
+  $("peer-list").innerHTML = list.length ? filter + list.map(p => {
     const theirs = p.services.filter(s => s.name !== "_inbox");
     return `<div class="card device ${p.online ? "online" : ""}">
       <div class="card-head"><h3><span class="dot ${p.online ? "ready" : "stopped"}"></span>${esc(p.name)}</h3>
         <button class="ghost small danger-text" data-action="unpair" data-arg="${esc(p.id)}">Unpair</button></div>
       ${p.online
-        ? `<p class="okline">🔒 Connected and verified</p>
+        ? `<p class="okline">✓ connected and verified</p>
            ${p.connections.map(c => `<p class="small">${c.outbound ? "You →" : "→ your"} <b>${esc(svcLabel(c.service))}</b>
              <span class="muted">· ${c.streams} connection${c.streams === 1 ? "" : "s"} · since ${esc(clock(c.since))}${c.via ? " · " + esc(viaLabel(c.via)) : ""}</span></p>`).join("")}`
         : `<p class="muted">Not connected · last seen ${esc(ago(p.last_seen))}</p>`}
@@ -337,7 +478,7 @@ function renderPeers() {
       <h4>You share with it</h4>
       <div class="shares">
         ${builtinShares.map(([n, l, h]) => shareBox(p, n, l, h)).join("")}
-        ${state.services.map(s => shareBox(p, s.name, s.name, "port " + s.local_port)).join("")}
+        ${state.services.map(s => shareBox(p, s.name, s.name, s.dir ? "website" : "port " + s.local_port)).join("")}
       </div>
 
       <button class="small" data-action="send-file" data-arg="${esc(p.id)}">Send a file…</button>
@@ -584,17 +725,69 @@ const dz = $("dropzone");
 ["dragleave", "drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("over"); }));
 dz.addEventListener("drop", e => upload(e.dataTransfer.files));
 
+// ---------- settings (the node's) ----------
+
+function renderSettings() {
+  $("restart-banner").hidden = !(state.status && state.status.restart_needed);
+  // Don't redraw under someone who is typing a value.
+  if ($("settings-list").contains(document.activeElement)) return;
+  $("settings-list").innerHTML = state.settings.map(o => `
+    <div class="card setting">
+      <div class="card-head"><h3>${esc(o.label)}</h3>
+        ${o.restart ? `<span class="tag">needs restart</span>` : ""}</div>
+      ${o.kind === "bool"
+        ? `<label class="share"><input type="checkbox" data-setting-toggle="${esc(o.key)}" ${o.value === "on" ? "checked" : ""}>
+            <span><b>${o.value === "on" ? "on" : "off"}</b></span></label>`
+        : `<div class="copyrow"><input data-setting="${esc(o.key)}" value="${esc(o.value)}"
+              ${o.kind === "port" ? `type="number" min="1" max="65535"` : `placeholder="(none)"`}>
+            <button class="ghost small" data-action="save-setting" data-arg="${esc(o.key)}">Save</button></div>`}
+      <p class="muted small">${esc(o.help)} <code>sol config ${esc(o.key)}</code></p>
+    </div>`).join("");
+}
+
+async function saveSetting(key, value) {
+  try {
+    const r = await api("/api/settings/" + encodeURIComponent(key), json("PUT", { value }));
+    toast(r.restart ? "Saved. Restart the node to apply it." : "Saved");
+    document.activeElement && document.activeElement.blur();
+    refresh();
+  } catch (err) { fail(err); refresh(); }
+}
+document.addEventListener("change", e => {
+  const box = e.target.closest("[data-setting-toggle]");
+  if (box) saveSetting(box.dataset.settingToggle, box.checked ? "on" : "off");
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.matches("[data-setting]")) saveSetting(e.target.dataset.setting, e.target.value);
+});
+
+async function restartNode() {
+  if (!confirm("Restart the node now? Open connections drop for a few seconds.")) return;
+  try { await api("/api/restart", { method: "POST" }); } catch (err) { return fail(err); }
+  toast("Restarting…");
+  // The panel may come back on another port if panel_port was changed.
+  const port = (state.settings.find(o => o.key === "panel_port") || {}).value;
+  const next = port && port !== location.port ? `${location.protocol}//${location.hostname}:${port}/#settings` : "";
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    if (next) { location.href = next; return; }
+    try { await api("/api/status"); toast("The node is back"); return refresh(); } catch { /* still restarting */ }
+  }
+  toast("The node didn't come back. Start it with `sol` in a terminal.", "bad");
+}
+
 // ---------- activity ----------
 
 const eventStyle = {
-  pair: ["✓", "ok", "Paired"], connect: ["🔒", "ok", "Connected"], revoke: ["✕", "warn", "Removed"], file: ["📄", "ok", "File"],
-  reject: ["⛔", "bad", "Blocked"], service: ["●", "", "Service"], transport: ["⇄", "", "Network"], audit: ["!", "warn", "Audit"],
+  pair: ["ok", "paired"], connect: ["ok", "connected"], revoke: ["warn", "removed"], file: ["ok", "file"],
+  reject: ["bad", "blocked"], service: ["", "service"], transport: ["", "network"], audit: ["warn", "audit"],
 };
+const logTime = iso => new Date(iso).toLocaleTimeString([], { hour12: false });
 function renderEvents() {
   $("event-list").innerHTML = state.events.length ? state.events.map(e => {
-    const [icon, cls, label] = eventStyle[e.kind] || ["•", "", e.kind];
-    return `<li class="${cls}"><span class="ev-icon">${icon}</span>
-      <div><b>${esc(label)}</b> ${esc(e.message)}<div class="muted small">${esc(ago(e.time))}</div></div></li>`;
+    const [cls, label] = eventStyle[e.kind] || ["", e.kind];
+    return `<li class="${cls}"><span class="ev-time" title="${esc(new Date(e.time).toLocaleString())}">${esc(logTime(e.time))}</span>
+      <span class="ev-kind">${esc(label)}</span><span class="ev-msg">${esc(e.message)}</span></li>`;
   }).join("") : `<li class="muted">Nothing has happened yet.</li>`;
 }
 
@@ -607,14 +800,15 @@ async function refresh() {
   try {
     const s = await api("/api/status");
     csrf = s.csrf || csrf;
-    const [services, peers, tunnels, events, files, audit] = await Promise.all([
+    const [services, peers, tunnels, events, files, audit, settings] = await Promise.all([
       api("/api/services"), api("/api/peers"), api("/api/tunnels"), api("/api/events"), api("/api/files"), api("/api/audit"),
+      api("/api/settings"),
     ]);
-    state = { status: s, services, peers, tunnels, events, files, audit };
-    renderHome(); renderServices(); renderPeers(); renderFiles(); renderEvents();
+    state = { status: s, services, peers, tunnels, events, files, audit, settings };
+    renderSidebar(); renderHome(); renderServices(); renderPeers(); renderFiles(); renderEvents(); renderSettings();
   } catch (err) {
     $("status-pill").className = "pill bad";
-    $("status-pill-text").textContent = "Panel can't reach Sol";
+    $("status-pill-text").textContent = "panel can't reach sol";
   } finally {
     refreshing = false;
   }

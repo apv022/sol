@@ -44,9 +44,16 @@ const (
 	OpSend   = "send"   // Peer, Name; then the file bytes; then Sent
 
 	OpServices      = "services"       // -> []LocalService
-	OpServiceAdd    = "service-add"    // Service, Port, Visibility, Protocol -> LocalService
+	OpServiceAdd    = "service-add"    // Service, Port or Dir, Visibility, Protocol, Record -> LocalService
 	OpServiceRemove = "service-remove" // Service
 	OpServiceVis    = "service-vis"    // Service, Visibility -> LocalService
+
+	OpConfig    = "config"     // -> Config (every setting)
+	OpConfigSet = "config-set" // Key, Value -> Config
+
+	OpStop    = "stop"     // shut the node down
+	OpRestart = "restart"  // shut down and start again (settings that need it)
+	OpHelpTor = "help-tor" // Set ("on", "off", or empty to only ask) -> HelpTor
 
 	OpTunnels     = "tunnels"      // -> []Tunnel
 	OpTunnelOpen  = "tunnel-open"  // Peer, Service, Port (0: pick one) -> Tunnel
@@ -67,15 +74,22 @@ type Request struct {
 	Port       int    `json:"port,omitempty"`
 	Visibility string `json:"visibility,omitempty"`
 	Protocol   string `json:"protocol,omitempty"`
+	Key        string `json:"key,omitempty"`    // config-set: the setting
+	Value      string `json:"value,omitempty"`  // config-set: its new value
+	Set        string `json:"set,omitempty"`    // help-tor: "on" or "off"
+	Dir        string `json:"dir,omitempty"`    // a site: serve this folder (absolute path) instead of a port
+	Record     bool   `json:"record,omitempty"` // publish a signed service record
 }
 
 // LocalService is one of this node's services, as the CLI sees it.
 type LocalService struct {
 	Name       string            `json:"name"`
-	Port       int               `json:"port"`
+	Port       int               `json:"port"`             // 0 for a site
+	Dir        string            `json:"dir,omitempty"`    // a site: the folder served
+	Record     bool              `json:"record,omitempty"` // serves a signed service record
 	Visibility string            `json:"visibility"`
 	Protocol   string            `json:"protocol"`
-	Running    bool              `json:"running"`         // something listens on the port
+	Running    bool              `json:"running"`         // something listens on the port (a site: the folder is readable)
 	Addrs      map[string]string `json:"addrs,omitempty"` // public services: their own addresses
 	SharedWith []string          `json:"shared_with"`     // names of peers that may open it
 }
@@ -89,6 +103,7 @@ type Response struct {
 
 // Status is the answer to OpStatus.
 type Status struct {
+	PID    int               `json:"pid"` // the node's process; changes when it restarts
 	NodeID string            `json:"node_id"`
 	Name   string            `json:"name"`
 	Panel  string            `json:"panel"`
@@ -131,6 +146,27 @@ type Tunnel struct {
 	Via       string `json:"via,omitempty"`
 }
 
+// Option is one setting, as the CLI shows it.
+type Option struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Help    string `json:"help"`
+	Restart bool   `json:"restart"` // changing it needs a restart
+}
+
+// Config is the answer to OpConfig and OpConfigSet.
+type Config struct {
+	Options       []Option `json:"options"`
+	RestartNeeded bool     `json:"restart_needed"` // a change is waiting for a restart
+}
+
+// HelpTor is the answer to OpHelpTor: the opt-in Snowflake proxy.
+type HelpTor struct {
+	Enabled bool   `json:"enabled"`
+	State   string `json:"state"` // off, running, missing, failed
+	Detail  string `json:"detail,omitempty"`
+}
+
 // Unpaired is the answer to OpUnpair.
 type Unpaired struct {
 	Name     string `json:"name"`
@@ -144,7 +180,7 @@ type Sent struct {
 }
 
 // ErrNotRunning means nothing answers on the socket.
-var ErrNotRunning = errors.New("the Sol node isn't running; start it with `sol` (in another terminal or as a service)")
+var ErrNotRunning = errors.New("the Sol node isn't running; start it with `sol`")
 
 // Path returns the socket path for a data directory.
 func Path(dataDir string) string { return filepath.Join(dataDir, SocketName) }

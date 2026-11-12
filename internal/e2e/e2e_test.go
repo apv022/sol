@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/identity"
@@ -31,6 +32,8 @@ import (
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/protocol"
+	"github.com/apv022/sol/internal/record"
+	"github.com/apv022/sol/internal/snowflake"
 	"github.com/apv022/sol/internal/transport"
 )
 
@@ -557,6 +560,114 @@ func TestPublicServiceNeedsNoPairing(t *testing.T) {
 	}
 }
 
+// `sol site add`: a folder becomes a website with no app behind it. Public,
+// it gets its own address and (opt-in) a signed record tying that address
+// to a service key that is not the node key. Private, peers reach it over
+// their verified stream.
+func TestSiteWithSignedRecord(t *testing.T) {
+	a, b := newNode(t, "alpha"), newNode(t, "beta")
+	bOnA, aOnB := pair(t, a, b)
+	dir := t.TempDir()
+	for name, body := range map[string]string{"index.html": "hello from the site", ".env": "SECRET=1"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetch := func(url string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	// A folder that doesn't exist is refused, and nothing is saved.
+	if err := a.AddService(config.Service{Name: "ghost", Dir: filepath.Join(dir, "nope"), Visibility: config.VisibilityPublic}); err == nil {
+		t.Fatal("a site with a missing folder was accepted")
+	}
+	if len(a.Services()) != 0 {
+		t.Fatalf("the failed site was kept: %+v", a.Services())
+	}
+
+	if err := a.AddService(config.Service{Name: "blog", Dir: dir, Visibility: config.VisibilityPublic, Record: true}); err != nil {
+		t.Fatal(err)
+	}
+	var svc api.ServiceView
+	for _, s := range a.Services() {
+		if s.Name == "blog" {
+			svc = s
+		}
+	}
+	addr := svc.Addresses["clearnet"]
+	if addr == "" || !svc.Running || svc.Protocol != config.ProtocolHTTP || svc.LocalPort != 0 {
+		t.Fatalf("site: %+v", svc)
+	}
+	if code, body := fetch("http://" + addr + "/"); code != 200 || body != "hello from the site" {
+		t.Fatalf("GET / = %d %q", code, body)
+	}
+	if code, body := fetch("http://" + addr + "/.env"); code != 404 || strings.Contains(body, "SECRET") {
+		t.Fatalf("GET /.env = %d %q", code, body)
+	}
+
+	// The record verifies, names the address we fetched it from, and is
+	// signed by a key of its own.
+	code, body := fetch("http://" + addr + record.Path)
+	if code != 200 {
+		t.Fatalf("record: %d %q", code, body)
+	}
+	rec, err := record.Verify([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Name != "blog" || !rec.Reaches(addr) {
+		t.Fatalf("record %+v does not name %s", rec, addr)
+	}
+	if rec.PubKey == identity.EncodePublicKey(a.ID().Public()) {
+		t.Fatal("the record is signed with the node key: the site is linkable to the node")
+	}
+	if fi, err := os.Stat(filepath.Join(a.dir, "services", "blog.key")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("service key file: %v %v", fi, err)
+	}
+
+	// Without --record there is no such path.
+	if err := a.AddService(config.Service{Name: "plain", Dir: dir, Visibility: config.VisibilityPublic}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range a.Services() {
+		if s.Name == "plain" {
+			if code, _ := fetch("http://" + s.Addresses["clearnet"] + record.Path); code != 404 {
+				t.Fatalf("a site without a record serves one: %d", code)
+			}
+		}
+	}
+
+	// A peer it is shared with reaches the same site over its own stream.
+	if _, err := b.DialPeer(b.ctx, aOnB.ID, "blog"); err == nil {
+		t.Fatal("unshared site was reachable by a peer")
+	}
+	if _, err := a.SetShare(bOnA.ID, "blog", true); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := b.DialPeer(b.ctx, aOnB.ID, "blog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := httpOver(conn, "/"); err != nil || body != "hello from the site" {
+		t.Fatalf("site over a peer stream = %q, %v", body, err)
+	}
+
+	// Removing it takes it offline.
+	if err := a.RemoveService("blog"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := get("http://" + addr + "/"); err == nil {
+		t.Fatal("removed site still reachable")
+	}
+}
+
 func TestAnonymousServiceNeverOnClearnet(t *testing.T) {
 	a := newNode(t, "alpha")
 	if err := a.AddService(config.Service{Name: "hidden", LocalPort: 9, Visibility: config.VisibilityAnonymousPublic}); err != nil {
@@ -601,6 +712,140 @@ func TestPanelGuards(t *testing.T) {
 	}
 	if code := do("POST", "/api/peers/invite", "", "wrong"); code != 403 {
 		t.Fatalf("POST with wrong CSRF allowed: %d", code)
+	}
+}
+
+// `sol config`, `sol stop` and `sol restart` over the control socket: a
+// setting read at start-up marks the node as needing a restart, a bad
+// value is refused, and Run reports a restart so the caller starts it again.
+func TestConfigStopAndRestart(t *testing.T) {
+	ctx := context.Background()
+	run := func(op string) error {
+		t.Helper()
+		dir := t.TempDir()
+		n, err := node.New(node.Options{DataDir: dir, PanelAddr: "off", NodeAddr: "127.0.0.1:0", ControlPath: shortSocket(t),
+			Transports: []transport.Transport{transport.NewClearnet("127.0.0.1:0", "")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- n.Run(ctx) }()
+		<-n.Ready()
+		call := func(req control.Request, out any) error { return control.Call(ctx, n.ControlPath(), req, out) }
+
+		var st control.Status
+		if err := call(control.Request{Op: control.OpStatus}, &st); err != nil || st.PID != os.Getpid() {
+			t.Fatalf("status: %+v %v", st, err)
+		}
+		var cfg control.Config
+		if err := call(control.Request{Op: control.OpConfig}, &cfg); err != nil || cfg.RestartNeeded || len(cfg.Options) == 0 {
+			t.Fatalf("config: %+v %v", cfg, err)
+		}
+		if err := call(control.Request{Op: control.OpConfigSet, Key: "direct", Value: "sideways"}, nil); err == nil {
+			t.Fatal("a bad value was accepted")
+		}
+		if err := call(control.Request{Op: control.OpConfigSet, Key: "name", Value: "attic"}, &cfg); err != nil || cfg.RestartNeeded {
+			t.Fatalf("a name change must not need a restart: %+v %v", cfg, err)
+		}
+		if err := call(control.Request{Op: control.OpConfigSet, Key: "direct", Value: "on"}, &cfg); err != nil || !cfg.RestartNeeded {
+			t.Fatalf("direct on: %+v %v", cfg, err)
+		}
+		if !n.Status().RestartNeeded || n.Name() != "attic" {
+			t.Fatalf("status after changes: %+v", n.Status())
+		}
+		if err := call(control.Request{Op: op}, nil); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if cerr := call(control.Request{Op: control.OpStatus}, nil); !errors.Is(cerr, control.ErrNotRunning) {
+				t.Fatalf("the node still answers after %s: %v", op, cerr)
+			}
+			return err
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not end Run", op)
+			return nil
+		}
+	}
+	if err := run(control.OpStop); err != nil {
+		t.Fatalf("stop: Run returned %v", err)
+	}
+	if err := run(control.OpRestart); !errors.Is(err, node.ErrRestart) {
+		t.Fatalf("restart: Run returned %v, want ErrRestart", err)
+	}
+}
+
+// The Snowflake proxy is opt-in, the choice is saved, and a machine without
+// snowflake-proxy says so instead of pretending to run it.
+func TestHelpTorIsOptInAndHonest(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no snowflake-proxy here, whatever the machine has
+	a := newNode(t, "alpha")
+	if st := a.Status().HelpTor; st.Enabled || st.State != snowflake.StateOff {
+		t.Fatalf("on by default: %+v", st)
+	}
+	var st control.HelpTor
+	call := func(set string) {
+		t.Helper()
+		if err := control.Call(context.Background(), a.ControlPath(), control.Request{Op: control.OpHelpTor, Set: set}, &st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call("on")
+	waitFor(t, "the missing program to be reported", func() bool {
+		s := a.Status().HelpTor
+		return s.Enabled && s.State == snowflake.StateMissing && strings.Contains(s.Detail, "isn't installed")
+	})
+	if cfg, err := config.Load(filepath.Join(a.dir, "config.json")); err != nil || !cfg.HelpsTor() {
+		t.Fatalf("the choice was not saved: %v", err)
+	}
+	call("off")
+	if st.Enabled || st.State != "off" || a.Status().HelpTor.Enabled {
+		t.Fatalf("after off: %+v", st)
+	}
+	if err := control.Call(context.Background(), a.ControlPath(), control.Request{Op: control.OpHelpTor, Set: "maybe"}, nil); err == nil {
+		t.Fatal("a bad value was accepted")
+	}
+}
+
+// The panel serves its own files, plus the user's panel.css from the data
+// directory (empty when there is none, so the page never logs a 404).
+func TestPanelAssetsAndUserCSS(t *testing.T) {
+	a := newNode(t, "alpha")
+	fetch := func(path string) (int, string, string) {
+		t.Helper()
+		resp, err := http.Get("http://" + a.PanelAddr() + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), resp.Header.Get("Content-Type")
+	}
+	for _, path := range []string{"/", "/style.css", "/app.js", "/manifest.json", "/icon.svg"} {
+		if code, body, _ := fetch(path); code != 200 || body == "" {
+			t.Errorf("GET %s = %d, %d bytes", path, code, len(body))
+		}
+	}
+	if code, body, ct := fetch("/user.css"); code != 200 || body != "" || !strings.HasPrefix(ct, "text/css") {
+		t.Fatalf("no panel.css: %d %q %q", code, body, ct)
+	}
+	css := ":root { --accent: #ff00ff; }\n"
+	if err := os.WriteFile(filepath.Join(a.dir, "panel.css"), []byte(css), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, _ := fetch("/user.css"); code != 200 || body != css {
+		t.Fatalf("panel.css: %d %q", code, body)
+	}
+	// Still behind the Host check like the rest of the panel.
+	req, _ := http.NewRequest("GET", "http://"+a.PanelAddr()+"/user.css", nil)
+	req.Host = "evil.example"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("user.css with a foreign Host: %d", resp.StatusCode)
 	}
 }
 

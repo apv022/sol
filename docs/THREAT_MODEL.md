@@ -27,6 +27,11 @@ says plainly what is and isn't protected in the current build. The longer design
 | A man in the middle on a direct connection (hostile Wi-Fi, a stale address now used by someone else) | WireGuard authenticates the peer's key (exchanged over Tor). TLS direct accepts only a certificate for the node key named in the address. Either way the signed Sol handshake runs inside | `transport/wg.go`, `transport/direct.go` |
 | Strangers probing the direct port | WireGuard answers only paired peers' keys; the TLS port answers only dialers who know the node ID. Neither replies to scanners | `transport/wg.go`, `transport/direct.go` |
 | Tampered bundled tor binary | A pinned SHA-256 is checked before extraction | `runtime/bundled.go` |
+| A site leaking more than its pages | A site folder is opened as an `os.Root`: nothing outside it is reachable, also through symlinks. Dotfiles, folder listings and file dates are never served, and every failure is the same 404 | `internal/site` |
+| A private site read by another local program or web page | A site has no local port: peers get it over their verified stream | `node/sites.go` |
+| Someone claiming your public site's addresses, or tying it to your node | The signed record is made with a key that belongs to that service alone, and only proves control when fetched from an address it names | `internal/record` |
+| Someone changing your settings | Settings change only through the loopback panel (Host check, CSRF token) or the `0600` control socket, and every value is validated. No setting can publish the panel or the control socket | `api.guard`, `config.SetOption` |
+| A hostile `panel.css` | It is served under the panel's CSP, so it can restyle the panel but not run script or load anything from elsewhere. Only your own user can write it | `api.userCSS` |
 
 ## What is NOT protected (yet, or ever)
 
@@ -76,6 +81,16 @@ says plainly what is and isn't protected in the current build. The longer design
   is off. The egress lock (stopping the *service itself* from leaking your IP through its own
   outbound requests), EXIF stripping, and vanguards are **not implemented**, and `sol audit`
   reports them as `skip`. Don't rely on this mode for real anonymity yet.
+- **A signed record shows the site runs Sol.** It is off unless you ask for it (`--record`).
+  Leave it off for a site that should not stand out.
+- **What is in a site folder is published.** Sol hides dotfiles and file dates, not what your
+  pages say: metadata inside images and documents (EXIF, author fields) is served as it is.
+- **Helping the Tor network shows your IP to third parties.** With `help_tor` on, the Snowflake
+  proxy contacts the Tor Project's broker and relay and the STUN servers built into
+  `snowflake-proxy` (Google's and BlackBerry's at the time of writing), and the censored users it
+  serves connect to your IP. They can tell this address runs a Snowflake proxy, not that it runs
+  Sol or which onions it hosts. The traffic goes to a Tor bridge, so it is not exit traffic. It is
+  off by default; leave it off on a machine that hosts an anonymous service.
 - **Gateways** (v0.2) will see the traffic they proxy. Run your own.
 
 ## Reporting a vulnerability

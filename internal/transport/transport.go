@@ -3,7 +3,9 @@
 //
 // Implementations:
 //
-//	tor.go       Tor onion services (control port) and SOCKS5 dialing. MVP.
+//	tor.go       Tor onion services (control port) and SOCKS5 dialing.
+//	wg.go        Direct mode over WireGuard, with NAT hole punching (stun.go).
+//	direct.go    Direct mode over TLS, for networks that block UDP.
 //	clearnet.go  Plain TCP for LAN and testing. Not encrypted or anonymous.
 //	i2p.go       I2P via i2pd. Registered stub, see docs/EXTENDING.md.
 //
@@ -68,7 +70,7 @@ type Publication struct {
 
 // Transport is one pipe.
 type Transport interface {
-	// Name returns "tor", "i2p", or "clearnet".
+	// Name returns the transport's name: "tor", "wg", "direct", "i2p", or "clearnet".
 	Name() string
 	// Start launches the transport and returns once it can accept Publish
 	// calls. It may keep bootstrapping in the background (see Status).

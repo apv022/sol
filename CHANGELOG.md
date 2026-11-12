@@ -5,6 +5,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Slow "online" after starting.** A node could report "your address isn't reachable yet" for
+  five minutes or more although peers could already reach it: its self-check fetched the
+  descriptor from one directory picked at random, and a slow one stalled the check until tor was
+  restarted. The node is now online as soon as tor confirms a directory accepted the descriptor
+  (about ten seconds), and a single failed check no longer marks it unreachable.
+- Panel buttons marked hidden were still shown (for example "Reconnect to Tor" while online).
+- The directory page put values from `hosts.json` into the page unescaped.
+
 ### Changed
 - **Every machine is now a node, and nodes pair as peers** ([docs/PEERS.md](docs/PEERS.md)).
   Pairing is mutual: both sides can reach each other, each chooses what it shares with the other,
@@ -16,7 +25,34 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Pairing links and peer records keep addresses and access keys per transport, so I2P, a direct
   path, or a new protocol plug in without changing pairing or the handshake.
 
+### Changed
+- **`sol` now starts the node in the background and returns.** `sol stop`, `sol restart` and
+  `sol logs [-f]` manage it; `sol run` is the old foreground behaviour, and what `sol autostart`
+  uses. Running `sol` again shows where the running node is.
+
 ### Added
+- **Settings without editing config.json**: `sol config` lists every setting with what it does,
+  `sol config <key> <value>` changes one, and the panel has a Settings screen for the same list
+  (Tor, direct mode and its port, forwarded addresses, STUN servers, LAN transport, ports, helping
+  Tor) with a Restart button for the ones read at start-up. Bad values are refused and change
+  nothing.
+- **`sol site add <name> <folder>`**: serve a folder as a website on its own `.onion`, with no web
+  server behind it (also in the panel: Add a service → Website). Sol serves the files itself and
+  never lists folders, serves dotfiles (`.git`, `.env`), follows links out of the folder, or sends
+  file dates. `--private` shares it with chosen peers only, over their verified connection.
+- **Signed service records** (opt-in, `--record`): a public web service or site answers
+  `/.well-known/sol.json` with its addresses signed by a key of its own (never the node key), so
+  a directory or a visitor can check which addresses are the same site. It shows the site runs Sol.
+- **Help the Tor network** (opt-in): `sol snowflake on`, or the switch on the panel's home screen,
+  runs the official `snowflake-proxy` so people in censored countries can reach Tor through this
+  machine. No open port needed; it is not a relay. Off by default, because it contacts the Tor
+  Project and public STUN servers from your IP. Needs `snowflake-proxy` installed.
+- A new logo and favicon.
+- **Panel redesign**: a quiet terminal look with a sidebar of machines (or numbered tabs on top;
+  keys 1-5 either way), peers and tunnels as tables, and a log view. **Settings** choose the theme
+  (dark, light, system, green, amber), an accent colour, the layout and the text size, per browser. Your own
+  CSS in `panel.css` in the data folder is loaded on top. The panel can be installed as an app
+  window from browsers that support it.
 - **Open a peer's app from the panel.** Every service a peer shares with you has an **Open**
   button; `sol open` does the same. The node now owns tunnels: they stay open without a terminal,
   are saved and reopen on the same port after a restart, survive the peer going offline (each

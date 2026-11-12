@@ -10,8 +10,13 @@
 //
 // Routes:
 //
+//	GET    /user.css                        the user's own panel styles (panel.css in the data directory)
 //	GET    /api/status                      node id, name, uptime, transports, csrf token
 //	PUT    /api/name                        {name}: this node's name, as peers see it
+//	GET    /api/settings                    the node's settings (never secrets)
+//	PUT    /api/settings/{key}              {value}: change one -> {restart}
+//	POST   /api/restart                     restart the node (applies settings read at start-up)
+//	PUT    /api/help-tor                    {enabled}: run a Snowflake proxy to help censored users reach Tor
 //	POST   /api/transports/{name}/restart   reconnect a transport (e.g. tor after a network change)
 //	GET    /api/services                    list (with public addresses)
 //	POST   /api/services                    add {name, local_port, visibility, protocol}
@@ -54,6 +59,7 @@ import (
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/events"
+	"github.com/apv022/sol/internal/snowflake"
 	"github.com/apv022/sol/internal/transport"
 )
 
@@ -82,6 +88,17 @@ type Backend interface {
 	Blobs() *blob.Store
 	Events() *events.Log
 	Audit(ctx context.Context) []audit.Result
+	// Options lists the node's settings; SetOption changes one and reports
+	// whether a restart is needed for it (config.Option).
+	Options() []config.Option
+	SetOption(key, value string) (restart bool, err error)
+	// Restart shuts the node down and starts it again.
+	Restart()
+	// SetHelpTor turns the Snowflake proxy on or off (internal/snowflake).
+	SetHelpTor(on bool) error
+	// PanelCSS returns the user's own stylesheet for the panel (panel.css in
+	// the data directory), or nil if there is none.
+	PanelCSS() []byte
 }
 
 // StatusInfo is the body of GET /api/status (plus the CSRF token).
@@ -93,7 +110,10 @@ type StatusInfo struct {
 	Uptime     string             `json:"uptime"`
 	Transports []transport.Status `json:"transports"`
 	Autostart  autostart.State    `json:"autostart"` // starts at login? (sol autostart)
-	CSRF       string             `json:"csrf,omitempty"`
+	HelpTor    snowflake.Status   `json:"help_tor"`  // the opt-in Snowflake proxy (sol snowflake)
+	// RestartNeeded: a changed setting takes effect when the node restarts.
+	RestartNeeded bool   `json:"restart_needed"`
+	CSRF          string `json:"csrf,omitempty"`
 }
 
 // ServiceView is a service plus live state.
@@ -187,6 +207,11 @@ func Handler(b Backend, web fs.FS) http.Handler {
 	mux.Handle("GET /blob/", b.Blobs().Handler("/blob/"))
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/audit", s.audit)
+	mux.HandleFunc("GET /api/settings", s.listSettings)
+	mux.HandleFunc("PUT /api/settings/{key}", s.setSetting)
+	mux.HandleFunc("POST /api/restart", s.restart)
+	mux.HandleFunc("PUT /api/help-tor", s.setHelpTor)
+	mux.HandleFunc("GET /user.css", s.userCSS)
 	mux.Handle("GET /", http.FileServerFS(web))
 	return s.guard(mux)
 }
@@ -212,6 +237,64 @@ func (s *server) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *server) listSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.b.Options())
+}
+
+func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	restart, err := s.b.SetOption(r.PathValue("key"), body.Value)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"restart": restart})
+}
+
+// restart answers first, then restarts: the reply has to leave before the
+// panel's own listener closes.
+func (s *server) restart(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		s.b.Restart()
+	}()
+}
+
+func (s *server) setHelpTor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.b.SetHelpTor(body.Enabled); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.b.Status().HelpTor)
+}
+
+// userCSS serves the user's own stylesheet, loaded after style.css. It is
+// always 200 (empty when there is none) so the browser logs no error, and
+// never cached so an edit shows on reload. The CSP still applies: it can
+// restyle the panel but not load anything from elsewhere or run script.
+func (s *server) userCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(s.b.PanelCSS())
 }
 
 func loopbackHost(hostport string) bool {

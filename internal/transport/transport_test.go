@@ -9,6 +9,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +99,13 @@ func (f *fakeTorControl) serve(t *testing.T, c net.Conn) {
 			continue
 		}
 		switch {
+		case line == "SETEVENTS HS_DESC":
+			tp.PrintfLine("250 OK")
+			// What real tor sends: our own lookup of a peer, an upload that
+			// is only started, then one a directory accepted.
+			tp.PrintfLine("650 HS_DESC REQUESTED %s NO_AUTH $AAAA descid", strings.Repeat("p", 56))
+			tp.PrintfLine("650 HS_DESC UPLOAD %s UNKNOWN $BBBB descid", strings.Repeat("x", 56))
+			tp.PrintfLine("650 HS_DESC UPLOADED %s UNKNOWN $BBBB", strings.Repeat("x", 56))
 		case strings.HasPrefix(line, "AUTHENTICATE"), line == "TAKEOWNERSHIP",
 			strings.HasPrefix(line, "DEL_ONION"), strings.HasPrefix(line, "ONION_CLIENT_AUTH_ADD"):
 			tp.PrintfLine("250 OK")
@@ -240,6 +248,92 @@ func TestStatusMeansReachable(t *testing.T) {
 	tor.reachable = true
 	if st := tor.Status(); st.State != StateReady || st.Detail != "online and reachable" {
 		t.Fatalf("verified onion reported as %+v", st)
+	}
+}
+
+// A node counts as reachable once tor says a directory accepted its
+// descriptor. One failed self-check (a single slow directory can stall it
+// for two minutes) must not take that away; two in a row do.
+func TestReachableFromUploadNotOneCheck(t *testing.T) {
+	sid := strings.Repeat("x", 56)
+	tor := NewTor(t.TempDir(), nil)
+	tor.state = StateReady
+	tor.onions["node"] = &onion{serviceID: sid}
+
+	for _, line := range []string{
+		"650 HS_DESC UPLOAD " + sid + " UNKNOWN $BBBB descid",                 // only started
+		"650 HS_DESC UPLOADED " + strings.Repeat("p", 56) + " UNKNOWN $BBBB",  // someone else's onion
+		"650 HS_DESC FAILED " + sid + " UNKNOWN $BBBB REASON=UPLOAD_REJECTED", // refused
+		"650 HS_DESC", // truncated
+	} {
+		tor.noteDescEvent(line)
+		if st := tor.Status(); st.State != StateStarting {
+			t.Fatalf("%q made the node reachable: %+v", line, st)
+		}
+	}
+	tor.noteDescEvent("650 HS_DESC UPLOADED " + sid + " UNKNOWN $BBBB")
+	if st := tor.Status(); st.State != StateReady || st.Detail != "online and reachable" {
+		t.Fatalf("after an accepted upload: %+v", st)
+	}
+
+	if !stillReachable(true, 1) {
+		t.Error("one failed check took a published node offline")
+	}
+	if stillReachable(true, failsBeforeUnreachable) {
+		t.Error("repeated failed checks left the node marked reachable")
+	}
+	if stillReachable(false, 1) {
+		t.Error("a failed check made an unpublished node reachable")
+	}
+}
+
+// The event watcher uses its own control connection, without taking
+// ownership (closing it must never stop tor), and passes on event lines.
+func TestWatchTorEvents(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	f := &fakeTorControl{}
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			f.serve(t, c)
+		}
+	}()
+	cookie := filepath.Join(t.TempDir(), "cookie")
+	if err := os.WriteFile(cookie, []byte{0xde, 0xad}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan string, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- watchTorEvents(ctx, ln.Addr().String(), cookie, "HS_DESC", func(l string) { got <- l })
+	}()
+	var lines []string
+	for len(lines) < 3 {
+		select {
+		case l := <-got:
+			lines = append(lines, l)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("events so far: %q", lines)
+		}
+	}
+	if !strings.HasPrefix(lines[2], "650 HS_DESC UPLOADED "+strings.Repeat("x", 56)) {
+		t.Fatalf("events: %q", lines)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher did not stop when its context ended")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.Contains(f.cmds, "TAKEOWNERSHIP") {
+		t.Fatalf("the event connection took ownership of tor: %q", f.cmds)
 	}
 }
 

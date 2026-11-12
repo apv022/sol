@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"time"
@@ -34,6 +36,9 @@ func (n *Node) Status() api.StatusInfo {
 		Uptime:     time.Since(n.started).Round(time.Second).String(),
 		Transports: n.reg.Statuses(),
 		Autostart:  n.autostartState(),
+		HelpTor:    n.helper.Status(),
+
+		RestartNeeded: n.restartNeeded.Load(),
 	}
 }
 
@@ -74,7 +79,12 @@ func (n *Node) Services() []api.ServiceView {
 	}
 	n.mu.Unlock()
 	// Probe outside the lock: is something actually listening on the port?
+	// (A site runs when its folder could be opened.)
 	for i := range out {
+		if out[i].Dir != "" {
+			out[i].Running = n.siteHandler(out[i].Name) != nil
+			continue
+		}
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", out[i].LocalPort), 300*time.Millisecond)
 		if err == nil {
 			c.Close()
@@ -91,14 +101,25 @@ func (n *Node) Services() []api.ServiceView {
 func (n *Node) AddService(s config.Service) error {
 	if s.Protocol == "" {
 		s.Protocol = config.ProtocolTCP
+		if s.Dir != "" {
+			s.Protocol = config.ProtocolHTTP
+		}
 	}
 	if err := n.cfg.AddService(s); err != nil {
 		return err
 	}
+	where := fmt.Sprintf("127.0.0.1:%d", s.LocalPort)
+	if s.Dir != "" {
+		where = "the folder " + s.Dir
+		if err := n.openSite(s); err != nil {
+			n.cfg.RemoveService(s.Name) // a site nobody can open is not worth keeping
+			return err
+		}
+	}
 	if s.Visibility != config.VisibilityPrivate && n.ctx != nil {
 		n.publishService(s)
 	}
-	n.log.Add(events.KindService, fmt.Sprintf("service added: %s -> 127.0.0.1:%d (%s)", s.Name, s.LocalPort, s.Visibility))
+	n.log.Add(events.KindService, fmt.Sprintf("service added: %s -> %s (%s)", s.Name, where, s.Visibility))
 	return nil
 }
 
@@ -109,6 +130,7 @@ func (n *Node) RemoveService(name string) error {
 		return err
 	}
 	n.unpublishService(name)
+	n.closeSite(name)
 	n.closeConns(func(ci connInfo) bool { return ci.service == name && !ci.outbound })
 	n.log.Add(events.KindService, "service removed: "+name)
 	return nil
@@ -251,6 +273,78 @@ func (n *Node) Events() *events.Log { return n.log }
 // Audit implements api.Backend.
 func (n *Node) Audit(ctx context.Context) []audit.Result {
 	return audit.Run(ctx, audit.Env{Config: n.cfg.Snapshot()}, "")
+}
+
+// Options implements api.Backend: every setting with its current value.
+func (n *Node) Options() []config.Option { return n.cfg.Options() }
+
+// SetOption implements api.Backend: it changes one setting. Name and
+// help_tor apply at once; the rest are read at start-up, so the node
+// remembers that a restart is needed (Status.RestartNeeded).
+func (n *Node) SetOption(key, value string) (restart bool, err error) {
+	switch key {
+	case "name":
+		return false, n.SetName(value)
+	case "help_tor":
+		on := false
+		for _, o := range n.cfg.Options() {
+			on = on || (o.Key == key && o.Value == "on")
+		}
+		if _, err := n.cfg.SetOption(key, value); err != nil { // validates the word
+			return false, err
+		}
+		if now := n.cfg.HelpsTor(); now != on {
+			return false, n.SetHelpTor(now)
+		}
+		return false, nil
+	}
+	restart, err = n.cfg.SetOption(key, value)
+	if err != nil {
+		return false, err
+	}
+	if restart {
+		n.restartNeeded.Store(true)
+	}
+	n.log.Add(events.KindService, "setting changed: "+key)
+	return restart, nil
+}
+
+// SetHelpTor implements api.Backend: it saves the choice and starts or
+// stops the Snowflake proxy now. It is opt-in: the proxy contacts third
+// parties from this machine's IP (internal/snowflake).
+func (n *Node) SetHelpTor(on bool) error {
+	if err := n.cfg.SetHelpTor(on); err != nil {
+		return err
+	}
+	if on {
+		if n.ctx != nil {
+			n.helper.Start(n.ctx)
+		}
+		n.log.Add(events.KindService, "helping the Tor network: Snowflake proxy turned on")
+	} else {
+		n.helper.Stop()
+		n.log.Add(events.KindService, "Snowflake proxy turned off")
+	}
+	return nil
+}
+
+// panelCSSMax bounds the user's stylesheet; anything larger is a mistake.
+const panelCSSMax = 256 << 10
+
+// PanelCSS implements api.Backend: <DataDir>/panel.css, read on every
+// request so an edit shows on reload. A missing, unreadable or oversized
+// file means no user styles.
+func (n *Node) PanelCSS() []byte {
+	path := filepath.Join(n.opts.DataDir, "panel.css")
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > panelCSSMax {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // Transports lists the node's transports (for tests and the CLI).

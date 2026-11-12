@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -235,5 +236,108 @@ func TestSTUNIsOptInAndValidated(t *testing.T) {
 	c.Transports.STUN = []string{"cloudflar"}
 	if c.Validate() == nil {
 		t.Fatal("unknown preset accepted")
+	}
+}
+
+// A site is a folder instead of a port; a record needs HTTP to be served.
+func TestSiteAndRecordValidation(t *testing.T) {
+	abs, err := filepath.Abs("site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Default()
+	if err := c.AddService(Service{Name: "blog", Dir: abs, Visibility: VisibilityPublic, Record: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := c.Service("blog"); s.Protocol != ProtocolHTTP || s.LocalPort != 0 {
+		t.Fatalf("a site must default to http with no port: %+v", s)
+	}
+	bad := map[string]Service{
+		"relative folder":    {Name: "a", Dir: "site", Visibility: VisibilityPublic},
+		"folder and port":    {Name: "b", Dir: abs, LocalPort: 80, Visibility: VisibilityPublic},
+		"tcp site":           {Name: "c", Dir: abs, Protocol: ProtocolTCP, Visibility: VisibilityPublic},
+		"record over tcp":    {Name: "d", LocalPort: 22, Record: true, Visibility: VisibilityPublic},
+		"no port, no folder": {Name: "e", Visibility: VisibilityPrivate},
+	}
+	for name, s := range bad {
+		if err := c.AddService(s); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := c.AddService(Service{Name: "app", LocalPort: 8000, Protocol: ProtocolHTTP, Record: true, Visibility: VisibilityPublic}); err != nil {
+		t.Errorf("an http app with a record: %v", err)
+	}
+}
+
+// `sol config` and the panel change settings through SetOption: a bad value
+// changes nothing, and the answer says whether a restart is needed.
+func TestOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(key string) string {
+		for _, o := range c.Options() {
+			if o.Key == key {
+				return o.Value
+			}
+		}
+		t.Fatalf("no option %q", key)
+		return ""
+	}
+	for _, o := range c.Options() {
+		if o.Label == "" || o.Help == "" || o.Kind == "" {
+			t.Errorf("option %q is missing a label, help or kind", o.Key)
+		}
+	}
+	if get("tor") != "on" || get("direct") != "off" || get("stun") != "" || get("help_tor") != "off" {
+		t.Fatalf("defaults: %+v", c.Options())
+	}
+
+	if restart, err := c.SetOption("direct", "on"); err != nil || !restart {
+		t.Fatalf("direct on: restart=%v err=%v", restart, err)
+	}
+	if restart, err := c.SetOption("name", "attic"); err != nil || restart {
+		t.Fatalf("name: restart=%v err=%v", restart, err)
+	}
+	if _, err := c.SetOption("stun", "cloudflare, stun.example.org:3478"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetOption("direct_advertise", "203.0.113.7:7701"); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := map[string]string{
+		"direct":           "maybe",
+		"panel_port":       "0",
+		"node_port":        "8080", // the panel's port
+		"stun":             "not a server",
+		"direct_advertise": "example.org:7701", // names are never dialled
+		"direct_listen":    "7701",
+		"clearnet_listen":  "nope",
+		"name":             "",
+		"nonsense":         "1",
+	}
+	before := c.Options()
+	for key, v := range bad {
+		if _, err := c.SetOption(key, v); err == nil {
+			t.Errorf("%s=%q: accepted", key, v)
+		}
+	}
+	if after := c.Options(); !slices.Equal(before, after) {
+		t.Fatalf("a rejected value changed the config:\n%+v\n%+v", before, after)
+	}
+
+	// Saved: a fresh load sees the same values.
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Options(), c2.Options()) {
+		t.Fatalf("not saved:\n%+v\n%+v", c.Options(), c2.Options())
+	}
+	if get("stun") != "cloudflare, stun.example.org:3478" || get("direct_advertise") != "203.0.113.7:7701" {
+		t.Fatalf("lists: stun=%q advertise=%q", get("stun"), get("direct_advertise"))
 	}
 }
