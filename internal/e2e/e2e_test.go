@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -628,7 +629,9 @@ func TestSiteWithSignedRecord(t *testing.T) {
 	if rec.PubKey == identity.EncodePublicKey(a.ID().Public()) {
 		t.Fatal("the record is signed with the node key: the site is linkable to the node")
 	}
-	if fi, err := os.Stat(filepath.Join(a.dir, "services", "blog.key")); err != nil || fi.Mode().Perm() != 0o600 {
+	// (Windows has no Unix permission bits to check.)
+	if fi, err := os.Stat(filepath.Join(a.dir, "services", "blog.key")); err != nil ||
+		(goruntime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("service key file: %v %v", fi, err)
 	}
 

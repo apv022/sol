@@ -31,6 +31,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Added
+- `SOL_BIN_TOR` (and `SOL_BIN_<NAME>` for any helper program) names the program's file directly,
+  for platforms without a usable PATH. The Android app
+  ([sol-mobile](https://github.com/apv022/sol-mobile)) uses it.
 - **Settings without editing config.json**: `sol config` lists every setting with what it does,
   `sol config <key> <value>` changes one, and the panel has a Settings screen for the same list
   (Tor, direct mode and its port, forwarded addresses, STUN servers, LAN transport, ports, helping

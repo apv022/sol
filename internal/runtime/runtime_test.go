@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 )
@@ -58,5 +59,28 @@ func TestSelectFallsThrough(t *testing.T) {
 	}
 	if _, err := Select([]string{"nope"}, "tor", Options{}); err == nil {
 		t.Fatal("unknown provider accepted")
+	}
+}
+
+// SOL_BIN_<NAME> names a program's file directly (Android has no PATH for
+// app binaries); a path that isn't a file is an error, not a silent
+// fall-back to PATH.
+func TestNativeEnvOverride(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH
+	n := &Native{}
+	if n.Available("snowflake-proxy") {
+		t.Fatal("found a program on an empty PATH")
+	}
+	bin := filepath.Join(t.TempDir(), "libsnow.so")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SOL_BIN_SNOWFLAKE_PROXY", bin)
+	if got, err := nativePath("snowflake-proxy"); err != nil || got != bin {
+		t.Fatalf("nativePath = %q, %v", got, err)
+	}
+	t.Setenv("SOL_BIN_SNOWFLAKE_PROXY", filepath.Join(t.TempDir(), "missing"))
+	if n.Available("snowflake-proxy") {
+		t.Fatal("a missing SOL_BIN file counted as available")
 	}
 }
