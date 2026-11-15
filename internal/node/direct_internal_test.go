@@ -191,3 +191,50 @@ func TestBadDirectAdvertiseFailsClosed(t *testing.T) {
 		t.Fatalf("mixed entries: %+v", ts)
 	}
 }
+
+// A failed direct path is preferred again only after DirectStableProbes
+// successes spanning DirectStableFor; a failure in between starts over and
+// doubles the backoff, so a flaky path is tried less and less instead of
+// flapping. One lucky dial doesn't promote it either.
+func TestDirectHysteresis(t *testing.T) {
+	n := testNode()
+	n.opts.Liveness = Liveness{DirectStableFor: 50 * time.Millisecond, DirectStableProbes: 3,
+		DirectBackoff: time.Second, DirectBackoffMax: 8 * time.Second}
+	da := "sol-direct:a@10.0.0.2:7701"
+	p := config.Peer{ID: "p", Addrs: map[string]string{"direct": da, "tor": "tor:x"}}
+	first := func() string { return n.addrsInOrder(p)[0] }
+	if first() != da {
+		t.Fatal("a healthy direct path isn't first")
+	}
+	n.directFailed("p", da, "refused")
+	if first() != "tor:x" {
+		t.Fatal("a failed direct path is still first")
+	}
+	for range 2 {
+		if n.noteDirectSuccess("p", da) || first() != "tor:x" {
+			t.Fatal("promoted before enough successes")
+		}
+	}
+	n.directFailed("p", da, "timeout") // flaky: starts over, longer wait
+	if df := n.directFail[failKey("p", da)]; df.oks != 0 || df.wait != 2*time.Second || df.failures != 2 {
+		t.Fatalf("after a relapse: %+v", df)
+	}
+	for range 3 {
+		if n.noteDirectSuccess("p", da) {
+			t.Fatal("promoted before DirectStableFor passed")
+		}
+	}
+	time.Sleep(60 * time.Millisecond)
+	if !n.noteDirectSuccess("p", da) || first() != da {
+		t.Fatal("not promoted after a stable run")
+	}
+}
+
+// Probe and redial intervals stay within ±20% of the nominal value.
+func TestJitterBounds(t *testing.T) {
+	for range 1000 {
+		if j := jitter(time.Second); j < 800*time.Millisecond || j > 1200*time.Millisecond {
+			t.Fatalf("jitter %s", j)
+		}
+	}
+}

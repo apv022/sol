@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apv022/sol/internal/api"
@@ -192,6 +193,21 @@ func (n *Node) handleControl(c net.Conn) {
 			out.Options = append(out.Options, control.Option{Key: o.Key, Value: o.Value, Help: o.Help, Restart: o.Restart})
 		}
 		reply(out, err)
+	case control.OpNetworkChanged:
+		reason := strings.Map(func(r rune) rune {
+			if r < ' ' || r == 0x7f {
+				return -1 // keep the log one line per entry
+			}
+			return r
+		}, req.Name)
+		if len(reason) > control.MaxReasonLen {
+			reason = strings.ToValidUTF8(reason[:control.MaxReasonLen], "")
+		}
+		if reason == "" {
+			reason = "requested"
+		}
+		n.NetworkChanged(reason)
+		reply(nil, nil)
 	case control.OpStop:
 		reply(nil, nil)
 		n.Stop()

@@ -188,7 +188,7 @@ func (d *Direct) Publish(ctx context.Context, p Publication) (string, error) {
 }
 
 func (d *Direct) listenLocked() bool {
-	ln, err := net.Listen("tcp", d.ListenAddr)
+	ln, err := listenPeerTCP(d.ListenAddr)
 	if err != nil {
 		d.state, d.detail = StateStarting, "can't listen on "+d.ListenAddr+" ("+err.Error()+"); retrying"
 		return false
@@ -488,7 +488,7 @@ func (d *Direct) Dial(ctx context.Context, addr string) (net.Conn, error) {
 }
 
 func dialPinned(ctx context.Context, addr string, pub ed25519.PublicKey) (net.Conn, error) {
-	var nd net.Dialer
+	nd := net.Dialer{KeepAliveConfig: peerKeepAlive}
 	raw, err := nd.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err

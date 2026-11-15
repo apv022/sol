@@ -86,6 +86,9 @@ type Options struct {
 	// publishing; zero means 6 attempts, 20 seconds apart.
 	DialAttempts   int
 	DialRetryDelay time.Duration
+	// Liveness tunes how dead peer paths are detected and recovered
+	// (liveness.go); the zero value means the defaults.
+	Liveness Liveness
 }
 
 // Node is a Sol node.
@@ -115,7 +118,11 @@ type Node struct {
 	lastGood map[string]string // peer id -> address that last worked
 	// peer id -> last refreshDirect (dial.go)
 	lastDirectRefresh map[string]time.Time
-	directFail        map[string]directFailure // peer id -> last failed direct address
+	directFail        map[string]directFailure // failKey -> last failed direct address
+	links             map[string]*peerLink     // peer id -> liveness state (liveness.go)
+
+	netKick  chan string   // network-change signals for the supervisor (liveness.go)
+	probeSem chan struct{} // caps concurrent liveness probes
 
 	tmu     sync.Mutex
 	tunnels map[int]*tunnel // by local port (tunnels.go)
@@ -175,6 +182,7 @@ type connInfo struct {
 	since         time.Time
 	outbound      bool   // we dialed the peer (false: the peer dialed us)
 	via           string // outbound only: the transport that carried it
+	addr          string // outbound only: the peer address it was dialled at
 }
 
 type publicService struct {
@@ -235,6 +243,9 @@ func New(opts Options) (*Node, error) {
 
 		lastDirectRefresh: map[string]time.Time{},
 		directFail:        map[string]directFailure{},
+		links:             map[string]*peerLink{},
+		netKick:           make(chan string, 8),
+		probeSem:          make(chan struct{}, maxProbes),
 	}
 	ropts := runtime.Options{BinDir: filepath.Join(opts.DataDir, "bin"), ContainerRuntime: cfg.Snapshot().Runtime.ContainerRuntime}
 	n.helper = &snowflake.Helper{
@@ -275,8 +286,10 @@ func New(opts Options) (*Node, error) {
 		n.removeAccess(p)
 		n.mu.Lock()
 		delete(n.lastGood, p.ID)
-		delete(n.directFail, p.ID)
+		delete(n.directFail, p.ID+"|wg")
+		delete(n.directFail, p.ID+"|direct")
 		delete(n.lastDirectRefresh, p.ID)
+		delete(n.links, p.ID)
 		n.mu.Unlock()
 		n.log.Add(events.KindRevoke, "peer removed: "+peers.Describe(p))
 	})
@@ -445,6 +458,7 @@ func (n *Node) Run(ctx context.Context) error {
 		}
 	}
 	close(n.ready)
+	n.goBG(func() { n.supervise(ctx) })
 
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()

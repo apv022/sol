@@ -5,7 +5,38 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `sol network-changed [reason]` tells the running node that the network changed (the Android app
+  runs it on every default-network change), so it re-checks its connections at once.
+
+### Changed
+- Settings can no longer leave the node unusable: turning off the last transport, an invalid port,
+  or a port used twice is refused with a plain message next to the control.
+- `Tor.WaitReady` keeps waiting after tor is marked failed (the supervisor keeps retrying) until
+  tor is ready, the context ends or tor is stopped, instead of returning an error early.
+- **Panel redesign.** Every peer, open tunnel and connection shows the path it takes (Tor,
+  WireGuard direct, TLS direct, LAN) in plain words, and why direct mode isn't carrying it and
+  what fixes it. Tor's start-up shows its real phase, progress, time spent and retries instead of
+  a spinner; Reconnect appears only when Tor is stuck. Settings has a "How this node connects"
+  section that explains each transport and, before a change, shows whether it needs a restart and
+  which peers become unreachable (`GET /api/settings/{key}/impact`), asks before risky changes,
+  and shows the node's real running state (`running`/`pending` in `/api/settings`). Ports, STUN
+  and forwarded addresses moved under Advanced. New phone layout (tab bar, bottom sheets, 44 px
+  targets) and Android app support (`/#pair=` links, `SolAndroid` user agent).
+- The shared files page now looks like the panel: it inlines the panel's design tokens (`web.Tokens`, delimited in `web/style.css`), follows light or dark, and has a phone-friendly layout with large buttons and an empty state. Still inline CSS only, no script, same CSP.
+
 ### Fixed
+- **Peer connections no longer hang on a dead path.** A stream whose path died silently (phone
+  changed networks or slept, NAT dropped the mapping, WireGuard UDP blocked) is now detected by
+  path probes, TCP keepalive and WireGuard silence, closed, and the peer redialled with backoff
+  over the next path. A failed direct path returns only after it has been stable for two minutes,
+  so it no longer flaps with Tor. `NetworkChanged` and waking from sleep re-check every peer at
+  once. `Node.PeerLink` reports the path, fallback reason and direct-path state.
+- **Tor recovers by itself.** A tor that stalled while bootstrapping, froze, lost its control port,
+  or failed to start is now replaced automatically with backoff (and a stale directory cache is
+  cleared after repeated stalls), so "Reconnect" is no longer needed. Status reports the phase,
+  bootstrap percentage, what it waits for, the attempt and the next retry. A new
+  `NetworkChanged` hook (debounced) lets the OS report network changes.
 - **Slow "online" after starting.** A node could report "your address isn't reachable yet" for
   five minutes or more although peers could already reach it: its self-check fetched the
   descriptor from one directory picked at random, and a slow one stalled the check until tor was

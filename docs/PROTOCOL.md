@@ -176,12 +176,36 @@ the normal handshake inside TLS.
 
 Peers learn each other's current addresses in `PeerInfo` and `list` requests, and a peer may only
 announce a TLS address for its own node key. When a dialer reaches a peer over another transport,
-it asks for current addresses (`list`, at most every 5 minutes). A direct address that just
-failed is tried last for a minute, doubling with each failure up to an hour (a cancelled dial, or
-one whose deadline was already spent, doesn't count), unless WireGuard reports the tunnel live
-again. Peer-supplied candidates must be plain IP addresses (no names, loopback, link-local or
+it asks for current addresses (`list`, at most every 5 minutes). A direct address that failed
+(a cancelled dial, or one whose deadline was already spent, doesn't count) is tried after the
+other transports until it has proved itself again: the dialer probes it in the background after
+a minute, doubling with each failure up to an hour, and prefers it again only after three
+successful probes over at least two minutes (see "Liveness"). Peer-supplied candidates must be plain IP addresses (no names, loopback, link-local or
 multicast). Only the node publication is carried: public and anonymous services are never
 reachable directly.
+
+## Liveness
+
+The wire has no keepalive message: a `connect` stream is raw bytes after the OK. A node instead
+checks the *path* each of its outbound streams uses:
+
+- Every 30 s (±20% jitter), for each address that carries one of its live outbound streams to a
+  peer, it sends an ordinary `list` request over exactly that address and reads the `PeerInfo`
+  answer. The probe carries no `direct` field, so the callee changes nothing. A probe gets 10 s
+  over a direct or LAN path and 60 s over Tor or I2P.
+- Two failed probes in a row mean the path is dead: the dialer closes its streams over it, marks
+  a direct path as failed (above), and dials the peer again over the best remaining path. A peer
+  it can't reach is redialled with backoff from 2 s to 5 minutes, with jitter, while a saved
+  tunnel wants it or for 30 minutes after its streams were cut.
+- A network change reported by the OS, or a wall clock that ran ahead of the monotonic clock
+  (the machine slept), makes all of this due at once (debounced 2 s). Outbound TCP streams whose
+  local address is gone are closed straight away.
+- Underneath, direct TLS and clearnet sockets use TCP keepalive (15 s idle, then 4 probes 5 s
+  apart), so a stream whose path died also ends on the side that accepted it. A WireGuard
+  tunnel sends a keepalive every 25 s while up; 80 s without receiving anything marks it down,
+  closes its streams on both ends, and restarts punching.
+
+A callee can't tell a probe from any other `list` request.
 
 ## What this protocol does not do
 

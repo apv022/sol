@@ -31,6 +31,11 @@ package transport
 //   - Symmetric NATs (some mobile carriers, many corporate networks) can't
 //     be punched; those peers use Tor. Nothing is relayed through third
 //     parties.
+//   - A tunnel is live only while the peer is heard from: both sides send a
+//     keepalive every wgKeepalive seconds while it is up, so wgSilent
+//     without a received byte means the path died silently (a phone that
+//     changed networks or slept). The tunnel then counts as down, its
+//     streams are closed (the node falls back to Tor) and punching resumes.
 
 import (
 	"bufio"
@@ -73,8 +78,7 @@ const (
 	// (WireGuard rekeys every 2 minutes; sessions die at 3).
 	wgFresh = 150 * time.Second
 	// wgTryEvery matches WireGuard's own handshake retry (REKEY_TIMEOUT).
-	wgTryEvery  = 5 * time.Second
-	wgKeepalive = 25 // seconds; keeps NAT mappings open once a tunnel is up
+	wgTryEvery = 5 * time.Second
 	// observedFor: a punch packet's source address is preferred for this long.
 	observedFor = 30 * time.Second
 	// publicEvery: how often the public address is re-learned; publicRetry
@@ -84,6 +88,17 @@ const (
 	// replyWithin: a reflection reply counts only this soon after our query.
 	replyWithin = 5 * time.Second
 )
+
+// wgKeepalive (seconds) keeps NAT mappings open once a tunnel is up and
+// proves the peer is still there; wgSilent without receiving anything means
+// the tunnel is dead. Variables so tests can shorten them (SetWGLiveness).
+var (
+	wgKeepalive = 25
+	wgSilent    = 80 * time.Second // three keepalives and a margin
+)
+
+// wgNetDebounce collapses a burst of network-change signals.
+const wgNetDebounce = 2 * time.Second
 
 // IsWG reports whether addr is a WireGuard direct address.
 func IsWG(addr string) bool { return strings.HasPrefix(addr, wgScheme) }
@@ -115,6 +130,8 @@ type WG struct {
 	note    string               // shown in Status (e.g. a port fallback)
 	peers   map[[32]byte]*wgPeer
 	stopped chan struct{}
+	conns   map[[32]byte]map[net.Conn]struct{} // open tunnel streams, per peer
+	netCh   chan struct{}                      // NetworkChanged signals for loop
 }
 
 type wgPeer struct {
@@ -131,6 +148,8 @@ type wgPeer struct {
 	lastAct  time.Time // last punch reply / handshake start caused by a punch
 	lastRst  time.Time // last session reset caused by a punch
 	lastRfl  time.Time // last reflection reply sent to it
+	rx       uint64    // bytes received from it (the device's counter)
+	rxAt     time.Time // when rx last grew, or a handshake completed
 }
 
 // resetEvery limits session resets caused by punch packets (which anyone
@@ -144,7 +163,68 @@ func (w *WG) initiator(p *wgPeer) bool { return bytes.Compare(w.pub[:], p.pub[:]
 // on first start, 0600).
 func NewWG(listenAddr, keyPath string, advertise, stun []string) *WG {
 	return &WG{ListenAddr: listenAddr, keyPath: keyPath, Advertise: advertise, STUN: stun,
-		allowLoopback: netutil.IsLoopbackListen(listenAddr), state: StateStopped, peers: map[[32]byte]*wgPeer{}}
+		allowLoopback: netutil.IsLoopbackListen(listenAddr), state: StateStopped, peers: map[[32]byte]*wgPeer{},
+		conns: map[[32]byte]map[net.Conn]struct{}{}, netCh: make(chan struct{}, 1)}
+}
+
+// NetworkChanged implements NetworkWatcher: after a network change the
+// tunnels may be dead and this node's public address has likely changed, so
+// it re-learns the address, punches towards every peer right away and pokes
+// the live tunnels (an authenticated packet from the new address makes the
+// peer's WireGuard roam to it). Bursts are debounced.
+func (w *WG) NetworkChanged(string) {
+	select {
+	case w.netCh <- struct{}{}:
+	default:
+	}
+}
+
+// track registers a tunnel stream with peer pub, so a dead tunnel can cut
+// it; the returned conn unregisters itself on Close.
+func (w *WG) track(pub [32]byte, c net.Conn) net.Conn {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.conns[pub] == nil {
+		w.conns[pub] = map[net.Conn]struct{}{}
+	}
+	tc := &wgConn{Conn: c, w: w, pub: pub}
+	w.conns[pub][tc] = struct{}{}
+	return tc
+}
+
+// wgConn is a tunnel stream tracked per peer.
+type wgConn struct {
+	net.Conn
+	w    *WG
+	pub  [32]byte
+	once sync.Once
+}
+
+func (c *wgConn) Close() error {
+	c.once.Do(func() {
+		c.w.mu.Lock()
+		delete(c.w.conns[c.pub], c)
+		c.w.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// CloseWrite keeps half-close working through the wrapper.
+func (c *wgConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+// peerByIPLocked finds the peer at tunnel address ip. Called with w.mu held.
+func (w *WG) peerByIPLocked(ip netip.Addr) (*wgPeer, bool) {
+	for _, p := range w.peers {
+		if p.ip == ip {
+			return p, true
+		}
+	}
+	return nil, false
 }
 
 // Name implements Transport.
@@ -323,6 +403,14 @@ func (w *WG) serve(ln net.Listener) {
 				c.Close()
 				return
 			}
+			if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+				w.mu.Lock()
+				p, ok := w.peerByIPLocked(ap.Addr().Unmap())
+				w.mu.Unlock()
+				if ok {
+					c = w.track(p.pub, c)
+				}
+			}
 			netutil.Pipe(c, out)
 		}()
 	}
@@ -447,10 +535,17 @@ func (w *WG) RemovePeer(addr string) {
 		return
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	delete(w.peers, pub)
 	if w.dev != nil {
 		w.dev.IpcSet("public_key=" + hex.EncodeToString(pub[:]) + "\nremove=true\n")
+	}
+	var cut []net.Conn
+	for c := range w.conns[pub] {
+		cut = append(cut, c)
+	}
+	w.mu.Unlock()
+	for _, c := range cut {
+		c.Close() // without a peer the stream could only hang
 	}
 }
 
@@ -529,7 +624,7 @@ func (w *WG) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no direct path: %w", err)
 	}
-	return c, nil
+	return w.track(pub, c), nil
 }
 
 // Live reports whether a tunnel to the peer at addr is up right now (a
@@ -540,18 +635,32 @@ func (w *WG) Live(addr string) bool {
 	return err == nil && w.fresh(pub)
 }
 
-// fresh reports whether the peer's last handshake is recent.
+// fresh reports whether the peer's last handshake is recent and the
+// tunnel hasn't gone silent since.
 func (w *WG) fresh(pub [32]byte) bool {
-	hs := w.handshakes()
-	return time.Since(hs[pub]) < wgFresh
+	st := w.stats()[pub]
+	if time.Since(st.hs) >= wgFresh {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	p := w.peers[pub]
+	// Silent: nothing received for wgSilent, and no handshake since.
+	return p == nil || p.rxAt.IsZero() || st.hs.After(p.rxAt) || time.Since(p.rxAt) < wgSilent
 }
 
-// handshakes reads every peer's last handshake time from the device.
-func (w *WG) handshakes() map[[32]byte]time.Time {
+// wgStats is what the device reports about one peer.
+type wgStats struct {
+	hs time.Time // last handshake
+	rx uint64    // bytes received
+}
+
+// stats reads every peer's last handshake and received bytes.
+func (w *WG) stats() map[[32]byte]wgStats {
 	w.mu.Lock()
 	dev := w.dev
 	w.mu.Unlock()
-	out := map[[32]byte]time.Time{}
+	out := map[[32]byte]wgStats{}
 	if dev == nil {
 		return out
 	}
@@ -569,7 +678,22 @@ func (w *WG) handshakes() map[[32]byte]time.Time {
 			copy(cur[:], b)
 		case "last_handshake_time_sec":
 			if s, err := strconv.ParseInt(v, 10, 64); err == nil && s > 0 {
-				out[cur] = time.Unix(s, 0)
+				st := out[cur]
+				st.hs = time.Unix(s, 0)
+				out[cur] = st
+			}
+		case "last_handshake_time_nsec":
+			if ns, err := strconv.ParseInt(v, 10, 64); err == nil && ns > 0 {
+				if st := out[cur]; !st.hs.IsZero() {
+					st.hs = st.hs.Add(time.Duration(ns))
+					out[cur] = st
+				}
+			}
+		case "rx_bytes":
+			if b, err := strconv.ParseUint(v, 10, 64); err == nil {
+				st := out[cur]
+				st.rx = b
+				out[cur] = st
 			}
 		}
 	}
@@ -669,11 +793,33 @@ func (w *WG) loop(stopped chan struct{}) {
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	nextSTUN := time.Time{}
+	var netAt time.Time // a network change is pending since (debounce)
 	for {
 		select {
 		case <-stopped:
 			return
+		case <-w.netCh:
+			if netAt.IsZero() {
+				netAt = time.Now()
+			}
+			continue
 		case <-tick.C:
+		}
+		if !netAt.IsZero() && time.Since(netAt) >= wgNetDebounce {
+			netAt = time.Time{}
+			nextSTUN = time.Time{} // our public address has likely changed
+			var live []*wgPeer
+			w.mu.Lock()
+			for _, p := range w.peers {
+				p.nextTry, p.misses = time.Time{}, 0 // punch now
+				if p.up {
+					live = append(live, p)
+				}
+			}
+			w.mu.Unlock()
+			for _, p := range live {
+				w.poke(p)
+			}
 		}
 		if time.Now().After(nextSTUN) {
 			go w.refreshPublic()
@@ -685,20 +831,35 @@ func (w *WG) loop(stopped chan struct{}) {
 				nextSTUN = time.Now().Add(publicEvery)
 			}
 		}
-		hs := w.handshakes()
+		stats := w.stats()
 		now := time.Now()
 		var punch, poke []*wgPeer
+		var cut []net.Conn
 		w.mu.Lock()
 		if w.stopped != stopped { // Stop ran while we read the handshakes
 			w.mu.Unlock()
 			return
 		}
 		for _, p := range w.peers {
-			live := now.Sub(hs[p.pub]) < wgFresh
+			st := stats[p.pub]
+			if st.rx != p.rx || st.hs.After(p.rxAt) {
+				p.rx, p.rxAt = st.rx, now // heard from it
+			}
+			live := now.Sub(st.hs) < wgFresh && now.Sub(p.rxAt) < wgSilent
 			if live {
-				p.lastHS, p.misses = hs[p.pub], 0
+				p.lastHS, p.misses = st.hs, 0
 			}
 			if live != p.up { // turn keepalives on with the tunnel, off without
+				if p.up && now.Sub(st.hs) < wgFresh {
+					// Gone silent with a session that looks fine: the path
+					// died. Its streams would hang; cut them so the node
+					// falls back, and punch again.
+					slog.Debug("wireguard: tunnel went silent", "since", p.rxAt)
+					for c := range w.conns[p.pub] {
+						cut = append(cut, c)
+					}
+					p.lastHS = time.Time{}
+				}
 				p.up = live
 				w.configureLocked(p)
 			}
@@ -726,6 +887,9 @@ func (w *WG) loop(stopped chan struct{}) {
 			}
 		}
 		w.mu.Unlock()
+		for _, c := range cut {
+			c.Close()
+		}
 		for _, p := range punch {
 			w.punch(p)
 		}
@@ -896,4 +1060,12 @@ func wgLogLevel() int {
 		return device.LogLevelVerbose
 	}
 	return device.LogLevelSilent
+}
+
+// SetWGLiveness shortens the tunnel keepalive (seconds) and the silence
+// after which a tunnel counts as dead, for a test.
+func SetWGLiveness(t interface{ Cleanup(func()) }, keepaliveSec int, silent time.Duration) {
+	oldK, oldS := wgKeepalive, wgSilent
+	wgKeepalive, wgSilent = keepaliveSec, silent
+	t.Cleanup(func() { wgKeepalive, wgSilent = oldK, oldS })
 }

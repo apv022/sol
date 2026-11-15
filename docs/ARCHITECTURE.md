@@ -81,8 +81,8 @@ network stack it brings) for direct mode; new ones need a good reason.
    at the next start.
 2. For each local connection (or, for `http` services, each upstream connection the tunnel's
    reverse proxy needs, after its Host check), the tunnel calls `DialPeer`.
-3. The node's `DialPeer` → `dial` picks an address (the peer's direct address unless it failed in
-   the last minute, then the last one that worked, then ready transports, then Tor before I2P
+3. The node's `DialPeer` → `dial` picks an address (the peer's direct address unless it failed and
+   hasn't proved stable since, then the last one that worked, then ready transports, then Tor before I2P
    before clearnet), dials it (`transport.Tor.Dial` → SOCKS5 →
    `<peer>.onion:80`), and runs the handshake, checking the callee is the expected node.
 4. On the peer, Tor forwards to the node listener `127.0.0.1:8081`, and `node.handleConn` →
@@ -112,6 +112,27 @@ and removing the peer on either side closes it.
 peer, `inboxHandler` (one HTTP server per verified stream, so it knows the sender) enforces the
 per-file and total limits and stores it with `blob.PutLimited`, labelled with the sender.
 
+### Peer liveness and fallback (`internal/node/liveness.go`)
+
+A supervisor goroutine, started by `Run`, keeps peer paths honest (protocol side: PROTOCOL.md,
+"Liveness"). It probes every address that carries a live outbound stream (`connInfo.addr`) with
+a `list` request; after `Liveness.Misses` failures it closes those streams, marks a direct path
+failed (`directFail`, `dial.go`) and redials over the next path. Redials of unreachable peers
+back off with jitter, at most `maxProbes` run at once and one per peer. A failed direct path is
+demoted in `addrsInOrder` until background probes have succeeded `DirectStableProbes` times over
+`DirectStableFor` (hysteresis); a failure meanwhile doubles its backoff. `Node.NetworkChanged`
+forwards to transports implementing `transport.NetworkWatcher` (Tor restarts, WireGuard
+re-learns its address and punches again) and also kicks the supervisor, as does a wall-clock
+jump ahead of the monotonic clock (resume from sleep). All timings are in `node.Options.Liveness`
+so tests run them in milliseconds.
+
+What the panel should show about a path comes from `Node.PeerLink(id) (PeerLink, bool)`:
+`Via` and `Live` (the newest live outbound stream's transport, else the last dial or probe that
+worked), `LastOK`, `Down`/`DownSince`/`NextRedial`/`LastError` (the peer couldn't be reached),
+`Fallback`/`FallbackAt` (why the last connection didn't go direct; cleared when one does), and
+`Direct["wg"|"direct"]` (`State` "backoff" or "probation", `FailedAt`, `Failures`, `LastError`,
+`NextProbe`, `PreferredAt`). A direct path that isn't in `Direct` is preferred.
+
 ### Live status in the panel
 
 `Node.Peers()` groups tracked streams into `api.PeerView.Connections` (inbound and outbound), so
@@ -129,20 +150,64 @@ goes to `sol.log` in the data directory, waits until the control socket answers,
 a node kept by systemd or launchd exits non-zero and is started again by it, any other node
 starts its replacement before it exits.
 
+`sol network-changed [reason]` is the control op `network-changed`: it calls `Node.NetworkChanged`
+(transports that watch the network restart or re-probe, and the peer supervisor re-checks every
+path). The reason is free text, control characters dropped and capped at `control.MaxReasonLen`,
+default "requested". The Android app runs it whenever the default network changes.
+
 Settings a user may change are one list, `config.Options` (`internal/config/options.go`): key,
 label, help text, current value, and whether a restart is needed. `sol config` and the panel's
 Settings screen (`GET /api/settings`, `PUT /api/settings/{key}`) both go through
 `Node.SetOption`, which validates the whole config and rolls back on any error. A new setting is
 one entry in that list. Secrets never appear in it.
 
+`SetOption` also refuses settings that leave the node unusable (`settingProblemsLocked`): turning
+off the last enabled transport, a direct or LAN address without a valid port (1 to 65535), and a
+port used twice among the panel, node, direct, LAN, service and tunnel ports. It refuses only
+problems the change introduces, so a config that already has one can be repaired. `CheckOption`
+runs the same checks without saving.
+
+Most settings apply at the next start, so `GET /api/settings` returns each one with `running`
+(the value the node started with, remembered by the panel handler) and `pending`;
+`restart_needed` in `/api/status` is true exactly while one is pending, and changing a setting
+back clears it. Before the panel changes a setting it asks
+`GET /api/settings/{key}/impact?value=` (`Node.OptionImpact`, `views.go`), which changes nothing
+and returns plain sentences (`effects`), whether it needs a restart, whether to ask first
+(`confirm`: it exposes an address, drops encryption or cuts peers off), and the peers that would
+become unreachable (`unreachable`, worked out from each peer's addresses and the transports left
+on). The panel confirms when needed and re-reads everything after saving.
+
+### Which path a connection takes
+
+`api.PeerView.Path` (`Node.peerPath`, `views.go`) says which transport carries this node's
+connections to a peer (`via`, `live`), which one the next dial tries first (`next`), and, when it
+isn't WireGuard, a stable `reason` code with a sentence (`detail`) and what to do (`fix`):
+`direct_off`, `direct_restart`, `direct_failed`, `peer_no_direct`, `direct_backoff` (with
+`retry_in`: seconds to the next background probe), `direct_probation` (with `retry_in`: seconds
+until direct is preferred again), `direct_next` or `wg_blocked`. While the last attempt to reach
+the peer failed, `down` is true and `redial_in` is the seconds to the next redial. It reads
+`Node.PeerLink` (the liveness supervisor's state), the last good address and the running
+transports. `/api/status` passes each transport's
+`transport.Status` through unchanged, including Tor's start-up `phase`, `progress`,
+`waiting_for`, `phase_since`, `attempt`, `retry_at`, `problem` and `restarts`, which the panel
+shows instead of a spinner.
+
 ### The panel's look
 
 The panel is one page of plain HTML, CSS and JS (`web/`), installable as an app window from
 browsers that support it (`manifest.json`). Its look is separate from its logic: `style.css`
-defines every colour, the font and the text size as tokens, the settings dialog switches theme,
-accent colour, layout (tabs on top or a sidebar) and text size per browser (`localStorage`), and
+defines every colour, the font and the text size as tokens (between the `sol:tokens` comments,
+which the shared files page inlines), the Appearance dialog switches theme, accent colour,
+layout (tabs on top or a sidebar) and text size per browser (`localStorage`), and
 `GET /user.css` serves `panel.css` from the data directory after the built-in styles, under the
-same CSP.
+same CSP. Below 760 px wide the panel switches to a top bar, a bottom tab bar and dialogs as
+bottom sheets, with safe-area insets.
+
+The same page is the whole UI of the Android app, a WebView whose user agent contains
+`SolAndroid/<version>`: the panel then hides desktop-only hints and doesn't open tabs. Downloads
+stay plain `<a href="/blob/…" download>` links. The app opens a `sol://pair…` link by loading
+`/#pair=<url-encoded link>`; the panel treats it as untrusted (prefix and length checked), puts
+it in the join form and waits for the user to press Pair, then clears the hash.
 
 ### Removal
 
@@ -183,11 +248,30 @@ Sol.
   `__OwningControllerProcess`. It authenticates, sends `TAKEOWNERSHIP` (so tor dies with Sol),
   polls bootstrap progress, and restarts tor with backoff if it exits, re-registering every onion
   and client key.
+- **Supervisor** (`transport/tor.go`, `supervise` + `monitor`): one goroutine owns the tor process
+  and never gives up, so nobody has to press Reconnect. It replaces tor when the process exits or
+  cannot start (backoff `torRetryBase` doubling to `torRetryMax`; a requested restart or a network
+  change cuts it short), when the control port drops or stops answering (every control command
+  has a deadline), when bootstrap makes no progress for `bootstrapStall` while the machine has a
+  route (`netutil.Online`; without one the phase is `offline` and nothing is restarted), and
+  after `purgeAfterStalls` stalls in a row it deletes the cached directory files first (never
+  `state` or keys). Publications and client keys given while tor is down are remembered and
+  registered by the next tor. Phases: `launching` → `bootstrapping` → `publishing` (connected,
+  address not yet announced) → `ready`, plus `offline` and `retrying`. `transport.Status` reports
+  them for the UI: `phase`, `progress` (bootstrap %), `waiting_for`, `phase_since`, `attempt` (1 =
+  first try since tor last worked), `retry_at` (while retrying), `problem` (why the last attempt
+  was given up) and `restarts`. `Tor.NetworkChanged(reason)`, reached through
+  `Node.NetworkChanged` for every `transport.NetworkWatcher` (the hook a mobile OS calls), is
+  debounced by `netLoop`: one restart per burst (`netSettle`, at most `netSettleMax`), at most one
+  per `netRestartGap`, none while offline or for a tor started after the change, and only a kick
+  of the backoff while retrying. Stop waits for every supervisor goroutine. The tests drive all of
+  this against `faultnet`'s scripted fake tor with shortened timings
+  (`transport/torsupervisor_test.go`).
 - Onion keys live in `~/.sol/tor/onions/<publication id>.key`, so addresses survive restarts. Tor's
   own state (`tor/data`) is kept too, so later starts bootstrap in seconds.
 - **Health** (`transport/torhealth.go`): tor doesn't notice network changes such as a VPN turning
-  on, and keeps saying "bootstrapped" while its onions are dead. So `watchNetwork` restarts tor
-  when local IP addresses change, and `selfCheck` dials our own onion through our own tor. Onions
+  on, and keeps saying "bootstrapped" while its onions are dead. So `watchNetwork` reports a change
+  of local IP addresses (and tor's `CLOCK_JUMPED`, a wake from sleep) to `NetworkChanged`, and `selfCheck` dials our own onion through our own tor. Onions
   with client auth also authorize a private "self" key for this. `Status` reports `ready` once
   tor says a directory accepted our descriptor (an `HS_DESC UPLOADED` event, read on a second
   control connection) or a self-check succeeds. The upload event comes first, usually within ten

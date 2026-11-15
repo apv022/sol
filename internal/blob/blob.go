@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/apv022/sol/web"
 	"time"
 
 	"github.com/apv022/sol/internal/config"
@@ -335,7 +337,7 @@ func (s *Store) Browser() http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		listPage.Execute(w, rows)
+		listPage.Execute(w, listData{Tokens: template.CSS(web.Tokens()), CSS: filesCSS, Rows: rows})
 	})
 	return mux
 }
@@ -355,34 +357,69 @@ func humanSize(n int64) string {
 	}
 }
 
-// listPage is rendered with html/template, which escapes every value.
+// filesCSS is the page's own rules. Every colour, the font and the base size
+// come from the panel's tokens (web.Tokens, inlined next to this), so the
+// page follows the panel's look and themes. No JS and nothing external: the
+// page is served to peers and visitors under a CSP that allows inline style
+// only.
+const filesCSS = `
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:var(--size)/1.55 var(--mono);-webkit-text-size-adjust:100%}
+a{color:var(--accent)}
+code{font-family:var(--mono);font-size:.93em}
+header{border-bottom:1px solid var(--line);padding:14px 0}
+.brand{display:flex;align-items:center;gap:8px;font-size:1.1em;color:var(--accent);max-width:52em;margin:0 auto;padding:0 16px}
+.sun{width:18px;height:18px;flex:none}
+.brand .muted{font-size:.9em}
+.muted{color:var(--muted)}
+main{max-width:52em;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.25em;line-height:1.3;margin:0 0 6px}
+.lede{margin:0 0 18px;color:var(--muted)}
+.lede b{color:var(--ok);font-weight:700}
+ul{list-style:none;margin:0;padding:0}
+.file{border-top:1px solid var(--line);padding:14px 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:center}
+.file:last-child{border-bottom:1px solid var(--line)}
+.name{font-weight:700;overflow-wrap:anywhere;word-break:break-word}
+.meta{color:var(--muted);font-size:.9em}
+.hash{grid-column:1/-1;color:var(--muted);font-size:.8em;overflow-wrap:anywhere;word-break:break-all}
+.actions{display:flex;gap:8px}
+.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:6px 16px;border:1px solid var(--accent);border-radius:2px;color:var(--accent);font-weight:700;text-decoration:none;white-space:nowrap}
+.button:hover,.button.primary{background:var(--accent);color:var(--accent-ink)}
+.button.primary:hover{filter:brightness(1.1)}
+.button.ghost{color:var(--ink);border-color:var(--line);font-weight:400}
+.button.ghost:hover{background:var(--panel-2);color:var(--ink);border-color:var(--muted)}
+.button:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.empty{border:1px dashed var(--line);padding:28px 16px;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--ink);margin-bottom:4px}
+@media (max-width:560px){
+ .file{grid-template-columns:minmax(0,1fr)}
+ .actions .button{flex:1}
+}
+`
+
+// listPage is rendered with html/template, which escapes every value. The
+// page opts into the panel's "system" theme, so it follows the visitor's
+// light or dark setting with the same tokens and no script.
 var listPage = template.Must(template.New("files").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en" data-theme="system"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Shared files · Sol</title>
-<style>
-:root{--bg:#f6f5f1;--panel:#fff;--ink:#1c1d21;--muted:#636672;--line:#e3e0d8;--accent:#e08a00;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#0e0f13;--panel:#17191f;--ink:#ecedf0;--muted:#969aa6;--line:#2a2d36;--accent:#f5b13d;color-scheme:dark}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:820px;margin:0 auto;padding:24px 16px 48px}h1{font-size:22px;margin:16px 0 4px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px}
-.sun{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,var(--accent) 55%,transparent 58%),repeating-conic-gradient(var(--accent) 0 10deg,transparent 10deg 30deg)}
-.lock{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:99px;background:color-mix(in srgb,#1f8a57 15%,transparent);color:#1f8a57}
-.muted{color:var(--muted);font-size:13px}
-.file{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
-.file .name{flex:1;min-width:180px;font-weight:600;word-break:break-word}
-.file code{font-size:12px;color:var(--muted);word-break:break-all}
-a.btn{display:inline-block;padding:6px 12px;border-radius:8px;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:600;font-size:13px}
-a.btn.primary{background:var(--accent);border-color:transparent;color:#1c1d21}
-</style></head><body><main>
-<div class="brand"><span class="sun"></span>Sol</div>
+<style>{{.Tokens}}{{.CSS}}</style></head><body>
+<header><div class="brand"><svg class="sun" viewBox="0 0 64 64" aria-hidden="true" fill="currentColor"><circle cx="32" cy="32" r="8"/><g fill="none" stroke="currentColor" stroke-linecap="round"><path stroke-width="5" d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/><path stroke-width="5" d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></svg><b>sol</b><span class="muted">shared files</span></div></header>
+<main>
 <h1>Shared files</h1>
-<p class="muted"><span class="lock">🔒 Verified connection</span> Shared from your Sol node over Tor. Only
-your peers can open this page. The fingerprint (SHA-256) under each file lets you check
-that what you downloaded is exactly what was shared.</p>
-{{range .}}<div class="file">
-  <div class="name">{{.Name}}<div class="muted">{{.Size}} · {{.When}}</div><code title="SHA-256">{{.Hash}}</code></div>
-  <a class="btn" href="{{.Link}}">Open</a>
-  <a class="btn primary" href="{{.Link}}?download">Download</a>
-</div>{{else}}<p>No files shared yet. Add some in the Sol panel on your node (Files tab).</p>{{end}}
+<p class="lede"><b>Verified connection.</b> Shared from a Sol node; only its peers can open this page. The fingerprint (SHA-256) under each file lets you check that what you downloaded is exactly what was shared.</p>
+{{if .Rows}}<ul>{{range .Rows}}
+<li class="file">
+  <div><div class="name">{{.Name}}</div><div class="meta">{{.Size}} · {{.When}}</div></div>
+  <div class="actions"><a class="button ghost" href="{{.Link}}">Open</a><a class="button primary" href="{{.Link}}?download">Download</a></div>
+  <code class="hash" title="SHA-256">{{.Hash}}</code>
+</li>{{end}}</ul>{{else}}<div class="empty"><b>No files shared yet.</b>Add some in the Sol panel on your node (Files tab).</div>{{end}}
 </main></body></html>`))
+
+// listData is what listPage renders. Tokens is the panel's own token block.
+type listData struct {
+	Tokens, CSS template.CSS
+	Rows        []listRow
+}

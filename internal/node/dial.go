@@ -43,18 +43,20 @@ func transportPreference(name string) int {
 	return 5
 }
 
-// directBackoff is how long a failed direct address is tried last instead
-// of first, so a dead direct path doesn't add DirectDialTimeout to every
-// connection. It doubles with each failure of the same address, up to
-// directBackoffMax (two peers on different home networks advertise LAN
-// addresses the other can never reach).
+// directBackoff is how long a failed direct address waits before the
+// liveness supervisor probes it again (liveness.go); until probes show it
+// stable, it is tried after the other transports, so a dead direct path
+// doesn't add DirectDialTimeout to every connection. It doubles with each
+// failure of the same address, up to directBackoffMax (two peers on
+// different home networks advertise LAN addresses the other can never
+// reach). Liveness.DirectBackoff and DirectBackoffMax override them.
 var (
 	directBackoff    = time.Minute
 	directBackoffMax = time.Hour
 )
 
 // addrsInOrder lists p's addresses: its direct address first (unless it
-// failed within directBackoff), then the one that last worked, then the
+// failed and hasn't proved itself stable again since), then the one that last worked, then the
 // ones whose transport is ready right now (e.g. LAN while tor is still
 // bootstrapping), then by transport preference.
 func (n *Node) addrsInOrder(p config.Peer) []string {
@@ -79,26 +81,20 @@ func (n *Node) addrsInOrder(p config.Peer) []string {
 		return cs[i].pref < cs[j].pref
 	})
 	// Direct-mode addresses go first (WireGuard, then TLS), unless they
-	// failed recently: then they are tried last, as a last resort.
+	// failed: then they are tried last, as a last resort, until the
+	// supervisor's background probes show them stable again (hysteresis,
+	// liveness.go). Neither a backoff running out nor one lucky dial is
+	// enough, so a flaky path doesn't flap between direct and Tor.
 	fast := []string{p.Addrs["wg"], p.Addrs["direct"]}
 	n.mu.Lock()
 	last := n.lastGood[p.ID]
 	backingOff := map[string]bool{}
 	for _, a := range fast {
-		if df := n.directFail[failKey(p.ID, a)]; a != "" && df.addr == a && time.Since(df.at) < df.wait {
+		if df, ok := n.directFail[failKey(p.ID, a)]; ok && a != "" && df.addr == a {
 			backingOff[a] = true
 		}
 	}
 	n.mu.Unlock()
-	// A path that healed in the background (WireGuard reports a live
-	// tunnel) needn't wait out its backoff.
-	for a := range backingOff {
-		if t, err := n.reg.For(a); err == nil {
-			if l, ok := t.(interface{ Live(string) bool }); ok && l.Live(a) {
-				delete(backingOff, a)
-			}
-		}
-	}
 	out := make([]string, 0, len(cs)+1)
 	add := func(a string, lastResort bool) {
 		if a == "" || slices.Contains(out, a) || (backingOff[a] && !lastResort) {
@@ -170,18 +166,30 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		dctx, cancel := context.WithTimeout(ctx, perAddrDialTimeout)
 		attempt := time.Now()
 		conn, err := t.Dial(dctx, addr)
-		cancel()
 		if err != nil {
+			cancel()
 			errs = append(errs, fmt.Errorf("%s: %w", t.Name(), err))
 			if isFast(addr) && blameDirect(ctx, attempt) {
-				n.noteDirectFailure(p.ID, addr)
+				n.directFailed(p.ID, addr, explain(err))
+				n.noteFallback(p.ID, t.Name()+" failed: "+explain(err))
 			}
 			continue
 		}
-		if err := protocol.ClientHandshake(conn, n.id, p.NodeID, req); err != nil {
+		// The handshake has deadlines of its own (protocol.HandshakeTimeout);
+		// the caller's context still ends it early, so a path that went
+		// silent between dial and handshake doesn't hold a probe or redial.
+		stop := context.AfterFunc(dctx, func() { conn.Close() })
+		err = protocol.ClientHandshake(conn, n.id, p.NodeID, req)
+		if !stop() && err == nil {
+			err = fmt.Errorf("handshake cut short: %w", dctx.Err())
+		}
+		cancel()
+		if err != nil {
 			conn.Close()
 			if isFast(addr) && !errors.Is(err, protocol.ErrRejected) && blameDirect(ctx, attempt) {
-				n.noteDirectFailure(p.ID, addr) // TLS worked but the path breaks (a middlebox, ...)
+				// TLS worked but the path breaks (a middlebox, ...)
+				n.directFailed(p.ID, addr, explain(err))
+				n.noteFallback(p.ID, t.Name()+" failed: "+explain(err))
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
 				return nil, err // the peer answered; another path will not help
@@ -192,10 +200,11 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		if p.ID != "" {
 			n.mu.Lock()
 			n.lastGood[p.ID] = addr
-			if isFast(addr) {
-				delete(n.directFail, failKey(p.ID, addr))
-			}
 			n.mu.Unlock()
+			n.noteReached(p.ID, addr, t.Name())
+			if isFast(addr) {
+				n.noteDirectSuccess(p.ID, addr) // counts towards stability; doesn't promote at once
+			}
 			// Reached it, but not directly: its direct address may be stale,
 			// or it may have turned direct mode on since we last asked. Ask
 			// over this working path (rate-limited per peer).
@@ -205,7 +214,7 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 				}
 			}
 		}
-		return &pathConn{Conn: conn, via: t.Name()}, nil
+		return &pathConn{Conn: conn, via: t.Name(), addr: addr}, nil
 	}
 	return nil, errors.Join(errs...)
 }
@@ -267,7 +276,7 @@ func explain(err error) string {
 // "direct", ...), for the panel's "via" indicator.
 type pathConn struct {
 	net.Conn
-	via string
+	via, addr string
 }
 
 // CloseWrite keeps half-close working through the wrapper.
@@ -314,12 +323,12 @@ func (n *Node) DialPeer(ctx context.Context, id, service string) (net.Conn, erro
 	if err != nil {
 		return nil, err
 	}
-	via := ""
+	via, addr := "", ""
 	if pc, ok := conn.(*pathConn); ok {
-		via = pc.via
+		via, addr = pc.via, pc.addr
 	}
 	tc := &trackedConn{Conn: conn, n: n, via: via}
-	n.track(tc, connInfo{peer: p.ID, service: service, since: time.Now().UTC(), outbound: true, via: via})
+	n.track(tc, connInfo{peer: p.ID, service: service, since: time.Now().UTC(), outbound: true, via: via, addr: addr})
 	return tc, nil
 }
 
@@ -501,28 +510,42 @@ func blameDirect(ctx context.Context, attempt time.Time) bool {
 	return time.Since(attempt) >= transport.DirectDialTimeout
 }
 
-// directFailure remembers a direct address that just failed.
+// directFailure remembers a direct address that failed, until it has
+// proved itself stable again (liveness.go).
 type directFailure struct {
-	addr string
-	at   time.Time
-	wait time.Duration // current backoff
+	addr     string
+	at       time.Time     // last failure
+	wait     time.Duration // current backoff: next probe at at+wait
+	failures int           // since the path was last preferred
+	err      string        // why the last attempt failed
+
+	oks       int       // successful probes in a row since the last failure
+	okSince   time.Time // first of those
+	nextProbe time.Time // when the supervisor probes it next
 }
 
-// noteDirectFailure starts or doubles the backoff for peer id's direct
-// address. Dials without a peer record (pairing) aren't tracked.
-func (n *Node) noteDirectFailure(id, addr string) {
+// noteDirectFailure is directFailed without a reason.
+func (n *Node) noteDirectFailure(id, addr string) { n.directFailed(id, addr, "") }
+
+// directFailed starts or doubles the backoff for peer id's direct address
+// and restarts its stability count. Dials without a peer record (pairing)
+// aren't tracked.
+func (n *Node) directFailed(id, addr, why string) {
 	if id == "" {
 		return
 	}
+	lv := n.lv()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	k := failKey(id, addr)
 	f := n.directFail[k]
-	wait := directBackoff
+	wait, failures := lv.DirectBackoff, 1
 	if f.addr == addr && f.wait > 0 {
-		wait = min(f.wait*2, directBackoffMax)
+		wait, failures = min(f.wait*2, lv.DirectBackoffMax), f.failures+1
 	}
-	n.directFail[k] = directFailure{addr: addr, at: time.Now(), wait: wait}
+	now := time.Now()
+	n.directFail[k] = directFailure{addr: addr, at: now, wait: wait, failures: failures, err: why,
+		nextProbe: now.Add(jitter(wait))}
 }
 
 // refreshDirectEvery rate-limits refreshDirect per peer: a peer that turns

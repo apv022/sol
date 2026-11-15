@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/apv022/sol/web"
 )
 
 func TestPutGetRange(t *testing.T) {
@@ -184,4 +186,46 @@ func httpGet(t *testing.T, url string) string {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
+}
+
+// The files page must be built from the panel's own tokens, stay inline-only
+// and keep its security headers.
+func TestFilesPageUsesPanelTokens(t *testing.T) {
+	s, _ := New(t.TempDir())
+	s.PutNamed(strings.NewReader("x"), "a.txt")
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(b)
+	if !strings.Contains(body, web.Tokens()) || web.Tokens() == "" {
+		t.Fatal("page does not inline the panel's token block")
+	}
+	if !strings.Contains(body, `data-theme="system"`) || !strings.Contains(body, "var(--accent)") {
+		t.Fatal("page does not use the panel's theme mechanism and tokens")
+	}
+	for _, bad := range []string{"<script", "http://", "https://", "#e08a00"} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("page contains %q", bad)
+		}
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "default-src 'none'; style-src 'unsafe-inline'" {
+		t.Fatalf("CSP = %q", csp)
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("security headers weakened")
+	}
+}
+
+func TestFilesPageEmptyState(t *testing.T) {
+	s, _ := New(t.TempDir())
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+	if page := httpGet(t, srv.URL+"/"); !strings.Contains(page, "No files shared yet") {
+		t.Fatal("no empty state")
+	}
 }

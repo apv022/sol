@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-layout="side">
+<html lang="en" data-theme="system" data-layout="side">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#0d1117">
+<meta name="color-scheme" content="dark light">
 <title>Sol</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.json">
@@ -11,309 +12,436 @@
 <link rel="stylesheet" href="/user.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- Icons, drawn once and reused with <use>. -->
+<svg class="defs" aria-hidden="true" focusable="false">
+  <symbol id="i-sun" viewBox="0 0 64 64"><circle cx="32" cy="32" r="8" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="5"><path d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/><path d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-peers" viewBox="0 0 24 24"><rect x="3" y="5" width="7" height="6" rx="1"/><rect x="14" y="13" width="7" height="6" rx="1"/><path d="M10 8h4.5a2 2 0 0 1 2 2v3M14 16H9.5a2 2 0 0 1-2-2v-3"/></symbol>
+  <symbol id="i-services" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1"/><rect x="4" y="14" width="16" height="6" rx="1"/><path d="M8 7h.01M8 17h.01"/></symbol>
+  <symbol id="i-files" viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 17h1M10 17h9"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></symbol>
+</svg>
+
 <div class="shell">
 <aside class="side">
-  <div class="brand"><svg class="sun" viewBox="0 0 64 64" aria-hidden="true" fill="currentColor"><circle cx="32" cy="32" r="8"/><g fill="none" stroke="currentColor" stroke-linecap="round">  <path stroke-width="5" d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/>  <path stroke-width="5" d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></svg><b>sol</b><span id="side-name" class="muted"></span></div>
-  <div class="side-status">
-    <div id="status-pill" class="pill"><span class="dot"></span><span id="status-pill-text">starting…</span></div>
-    <div id="side-transports" class="chips"></div>
-  </div>
+  <div class="brand"><svg class="sun" aria-hidden="true"><use href="#i-sun"/></svg><b>sol</b><span id="side-name" class="muted"></span></div>
+  <button class="side-status" data-action="go-home" title="Show this machine's status">
+    <span id="status-pill" class="pill"><span class="dot"></span><span id="status-pill-text">starting…</span></span>
+    <span id="side-transports" class="chips"></span>
+  </button>
 
   <nav class="nav" aria-label="Sections">
-    <button data-screen="home" class="active"><kbd>1</kbd>home</button>
-    <button data-screen="services"><kbd>2</kbd>services</button>
-    <button data-screen="peers"><kbd>3</kbd>peers</button>
-    <button data-screen="files"><kbd>4</kbd>files</button>
-    <button data-screen="activity"><kbd>5</kbd>log</button>
-    <button data-screen="settings"><kbd>6</kbd>settings</button>
+    <button data-screen="home" class="active"><kbd>1</kbd><svg aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></button>
+    <button data-screen="peers"><kbd>2</kbd><svg aria-hidden="true"><use href="#i-peers"/></svg><span>Peers</span></button>
+    <button data-screen="services"><kbd>3</kbd><svg aria-hidden="true"><use href="#i-services"/></svg><span>Services</span></button>
+    <button data-screen="files"><kbd>4</kbd><svg aria-hidden="true"><use href="#i-files"/></svg><span>Files</span></button>
+    <button data-screen="activity" class="nav-log"><kbd>5</kbd><svg aria-hidden="true"><use href="#i-log"/></svg><span>Log</span></button>
+    <button data-screen="settings"><kbd>6</kbd><svg aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span></button>
   </nav>
 
   <div class="side-machines">
-    <h4>Machines</h4>
+    <h2 class="label">Machines</h2>
     <div id="side-peers"></div>
-    <button class="ghost small" data-action="pair">+ pair a machine</button>
+    <button class="ghost small" data-action="pair">Pair a machine</button>
   </div>
 
   <div class="side-foot muted small"><span id="side-version"></span>
-    <button class="linkish" data-action="settings">appearance</button></div>
+    <button class="linkish" data-action="appearance">Appearance</button></div>
 </aside>
 
-<main>
+<main id="main" tabindex="-1">
+  <!-- Shown instead of everything else when the panel can't reach the node. -->
+  <div id="lost" class="notice bad" role="alert" hidden>
+    <h2>The panel can't reach the node</h2>
+    <p>It may be restarting, or it has stopped. This page reconnects by itself when the node is back.
+      <span class="desktop-only">To start it, run <code>sol</code> in a terminal.</span></p>
+  </div>
+
   <!-- HOME -->
-  <section id="home" class="screen active">
-    <div id="hero" class="hero">
-      <h1 id="hero-title">Starting up…</h1>
-      <p id="hero-text" class="muted"></p>
-      <div id="hero-progress" class="progress" hidden><div id="hero-progress-bar"></div></div>
-      <button id="hero-reconnect" class="ghost small" data-action="restart-tor" hidden>Reconnect to Tor</button>
+  <section id="home" class="screen active" aria-labelledby="home-title">
+    <div id="hero" class="hero" aria-live="polite">
+      <h1 id="home-title"><span id="hero-title">Starting up…</span></h1>
+      <p id="hero-text" class="lede"></p>
+      <div id="tor-progress" class="startup" hidden></div>
+      <div id="networks" class="networks"></div>
     </div>
 
-    <div id="checklist" class="card" hidden>
+    <div id="checklist" class="block" hidden>
       <h2>Get started</h2>
       <ol class="steps">
-        <li id="step-service"><span class="check"></span><div><b>Add a service</b>
-          <p class="muted">Tell Sol about an app on this computer, like a music or photo server.</p></div>
-          <button data-action="add-service" class="small">Add service</button></li>
-        <li id="step-device"><span class="check"></span><div><b>Pair another machine</b>
+        <li id="step-device"><span class="check" aria-hidden="true"></span><div><b>Pair another machine</b>
           <p class="muted">Both machines run Sol. Once paired they can reach each other and send files.</p></div>
           <button data-action="pair" class="small">Pair a machine</button></li>
-        <li id="step-connect"><span class="check"></span><div><b>Share something with it</b>
-          <p class="muted">On the Peers tab, tick the services that machine may open.</p></div></li>
+        <li id="step-service"><span class="check" aria-hidden="true"></span><div><b>Add a service</b>
+          <p class="muted">Tell Sol about an app on this machine, like a music or photo server.</p></div>
+          <button data-action="add-service" class="small ghost">Add a service</button></li>
+        <li id="step-connect"><span class="check" aria-hidden="true"></span><div><b>Share it with a peer</b>
+          <p class="muted">On the Peers screen, switch on the services that machine may open.</p></div>
+          <button data-screen-link="peers" class="small ghost">Go to Peers</button></li>
       </ol>
     </div>
 
-    <div class="card">
-      <h2>Peers</h2>
-      <div id="live-list" class="tblwrap"></div>
+    <div class="block">
+      <div class="block-head"><h2>Peers</h2>
+        <button class="linkish" data-action="pair">Pair a machine</button></div>
+      <div id="live-list"></div>
     </div>
 
-    <div class="card" id="tunnels-card" hidden>
-      <h2>Tunnels</h2>
-      <div id="tunnel-list" class="tblwrap"></div>
+    <div class="block" id="tunnels-card" hidden>
+      <div class="block-head"><h2>Open on this machine</h2></div>
+      <p class="muted small">Peers' services kept reachable on this machine's own addresses. They stay open after a restart.</p>
+      <div id="tunnel-list"></div>
     </div>
 
-    <div class="card">
-      <h2>This machine</h2>
-      <dl class="kv">
-        <dt>Name</dt><dd><span id="node-name">-</span> <button class="ghost small" data-action="rename">Rename</button></dd>
-        <dt>Node ID</dt><dd class="mono" id="node-id">-</dd>
-        <dt>Version</dt><dd id="version">-</dd>
-        <dt>Running for</dt><dd id="uptime">-</dd>
-        <dt>Starts at login</dt><dd id="autostart">-</dd>
-        <dt>Help the Tor network</dt><dd>
-          <label class="share"><input type="checkbox" id="help-tor">
-            <span><b id="help-tor-state">off</b> <span id="help-tor-detail" class="muted small"></span></span></label>
-          <p class="muted small">Runs a Snowflake proxy so people in censored countries can reach Tor through this
-            machine. It needs no open port and is not a relay. While on, it contacts the Tor Project and public
-            STUN servers from your IP address, and uses some of your bandwidth.</p></dd>
-      </dl>
-      <h3>Networks</h3>
-      <div id="transports"></div>
-      <div id="tor-reconnect" hidden>
-      <button class="ghost small" data-action="restart-tor">Reconnect to Tor</button>
-      <p class="muted small">Sol reconnects by itself when your network changes (for example turning a VPN on).
-        Use this if your devices can't reach this computer.</p>
-      </div>
-      <div id="audit-card" hidden>
-        <h3>Leak check (anonymous services)</h3>
-        <div id="audit-list"></div>
-      </div>
+    <div class="block" id="audit-card" hidden>
+      <h2>Leak check</h2>
+      <p class="muted small">Checks on your anonymous public services: things that could give away which machine serves them.</p>
+      <div id="audit-list"></div>
     </div>
-  </section>
 
-  <!-- SERVICES -->
-  <section id="services" class="screen">
-    <div class="section-head">
-      <div><h2>Services</h2>
-        <p class="muted">Apps on this computer. Choose which peers may open each one on the Peers tab.</p></div>
-      <button data-action="add-service">+ Add service</button>
+    <div class="block">
+      <div class="block-head"><h2>Recent activity</h2>
+        <button class="linkish" data-screen-link="activity">Open the log</button></div>
+      <ul id="recent-events" class="events"></ul>
     </div>
-    <div id="service-list" class="grid"></div>
   </section>
 
   <!-- PEERS -->
-  <section id="peers" class="screen">
+  <section id="peers" class="screen" aria-labelledby="peers-title">
     <div class="section-head">
-      <div><h2>Peers</h2>
-        <p class="muted">Other machines running Sol that you've paired with. Each side chooses what it shares,
-          and either can send the other files. Unpair one and its access ends instantly.</p></div>
+      <div><h1 id="peers-title">Peers</h1>
+        <p class="lede">Other machines running Sol that you've paired with. Each side chooses what it shares,
+          and either can send the other files.</p></div>
       <div class="actions">
         <button class="ghost" data-action="join">Join with a link</button>
-        <button data-action="pair">+ Invite a machine</button>
+        <button data-action="pair">Invite a machine</button>
       </div>
     </div>
     <input type="file" id="send-input" multiple hidden>
-    <div id="peer-list" class="grid"></div>
+    <div id="peer-list" class="stack"></div>
+  </section>
+
+  <!-- SERVICES -->
+  <section id="services" class="screen" aria-labelledby="services-title">
+    <div class="section-head">
+      <div><h1 id="services-title">Services</h1>
+        <p class="lede">Apps and websites on this machine. Nobody can open one until you share it with a peer
+          (Peers screen) or make it public.</p></div>
+      <div class="actions"><button data-action="add-service">Add a service</button></div>
+    </div>
+    <div id="service-list" class="stack"></div>
   </section>
 
   <!-- FILES -->
-  <section id="files" class="screen">
+  <section id="files" class="screen" aria-labelledby="files-title">
     <div class="section-head">
-      <div><h2>Files</h2>
-        <p class="muted">Files you add here go on your <b>shared files</b> page, which peers can open if you
-          share it with them (Peers tab). Files peers send you also appear here, marked with who sent them;
-          only you can see those. Every file has a SHA-256 fingerprint so it can be checked.</p></div>
+      <div><h1 id="files-title">Files</h1>
+        <p class="lede">Files you add go on your <b>shared files</b> page, which a peer can open once you share
+          it with them. Files peers send you land here too, marked with who sent them; only you see those.</p></div>
     </div>
     <label id="dropzone" class="dropzone">
-      <input type="file" id="file-input" multiple hidden>
-      <b>Drop files here</b> or click to choose
-      <span id="upload-status" class="muted"></span>
+      <input type="file" id="file-input" multiple class="visually-hidden">
+      <span class="button">Add files</span>
+      <span class="muted small desktop-only">or drop them here</span>
+      <span id="upload-status" class="muted small" role="status"></span>
     </label>
     <audio id="player" controls hidden></audio>
     <div id="file-list"></div>
   </section>
 
   <!-- ACTIVITY -->
-  <section id="activity" class="screen">
-    <h2>Activity</h2>
-    <p class="muted">Pairings, connections, files, and blocked attempts. Newest first.</p>
-    <ul id="event-list" class="events"></ul>
+  <section id="activity" class="screen" aria-labelledby="activity-title">
+    <div class="section-head">
+      <div><h1 id="activity-title">Log</h1>
+        <p class="lede">Pairings, connections, files and blocked attempts on this machine, newest first.
+          Kept in memory: it starts again when the node restarts.</p></div>
+    </div>
+    <div id="log-filter" class="segmented" role="group" aria-label="Show">
+      <button data-log="all" class="active" aria-pressed="true">All</button>
+      <button data-log="peers" aria-pressed="false">Peers</button>
+      <button data-log="files" aria-pressed="false">Files</button>
+      <button data-log="network" aria-pressed="false">Network</button>
+      <button data-log="blocked" aria-pressed="false">Blocked</button>
+    </div>
+    <ul id="event-list" class="events full"></ul>
   </section>
 
-  <!-- SETTINGS (the node's; how the panel looks is under "appearance") -->
-  <section id="settings" class="screen">
-    <h2>Settings</h2>
-    <p class="muted">How this node connects. The same settings as <code>sol config</code> in a terminal.</p>
-    <div id="restart-banner" class="hero warn" hidden>
-      <h1>Restart to apply your changes</h1>
-      <p class="muted">Connections drop for a few seconds while the node restarts.</p>
-      <button data-action="restart-node">Restart now</button>
+  <!-- SETTINGS (the node's; how the panel looks is under Appearance) -->
+  <section id="settings" class="screen" aria-labelledby="settings-title">
+    <div class="section-head">
+      <div><h1 id="settings-title">Settings</h1></div>
     </div>
-    <div id="settings-list"></div>
-    <div class="card">
-      <h2>This node</h2>
-      <button class="ghost small" data-action="restart-node">Restart the node</button>
-      <p class="muted small">Stop it from a terminal with <code>sol stop</code>, start it with <code>sol</code>.
-        How the panel looks (theme, colours, layout) is under <b>appearance</b>.</p>
+    <div id="restart-banner" class="notice warn" role="status" hidden>
+      <h2>Restart to apply your changes</h2>
+      <ul id="pending-list" class="plain"></ul>
+      <p class="muted small">Until then the node keeps running with the old settings. Restarting drops
+        connections for a few seconds.</p>
+      <div class="actions start">
+        <button data-action="restart-node">Restart now</button>
+        <button class="ghost" data-action="undo-settings">Undo these changes</button>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>How this node connects</h2>
+      <p class="muted">Peers are reached over whichever of these is on, fastest first. Whatever the path, only
+        machines you paired can connect, and each proves who it is first.</p>
+      <div id="connect-list" class="stack"></div>
+      <details id="advanced" class="disclosure">
+        <summary>Advanced: ports, forwarded addresses, STUN</summary>
+        <p class="muted small">The defaults work for most setups. Each of these applies when the node restarts.</p>
+        <div id="advanced-list"></div>
+      </details>
+    </div>
+
+    <div class="block">
+      <h2>This machine</h2>
+      <dl class="kv">
+        <dt>Name</dt><dd><span id="node-name">-</span> <button class="ghost small" data-action="rename">Rename</button></dd>
+        <dt>Node ID</dt><dd><code id="node-id" class="wrap">-</code>
+          <button class="ghost small" data-action="copy-node-id">Copy</button></dd>
+        <dt>Version</dt><dd id="version">-</dd>
+        <dt>Running for</dt><dd id="uptime">-</dd>
+        <dt class="desktop-only">Starts at login</dt><dd class="desktop-only" id="autostart">-</dd>
+      </dl>
+    </div>
+
+    <div class="block">
+      <h2>Help the Tor network</h2>
+      <label class="switch"><input type="checkbox" role="switch" id="help-tor" aria-describedby="help-tor-text">
+        <span class="track" aria-hidden="true"></span>
+        <span class="switch-text"><b>Run a Snowflake proxy</b>
+          <span id="help-tor-state" class="muted"></span></span></label>
+      <p id="help-tor-text" class="muted small">Lets people in censored countries reach Tor through this machine.
+        It needs no open port and is not a relay. While on, it contacts the Tor Project and public STUN servers
+        from your IP address, and uses some of your bandwidth.</p>
+      <p id="help-tor-error" class="field-error" role="alert" hidden></p>
+    </div>
+
+    <div class="block">
+      <h2>Panel and node</h2>
+      <div class="actions start">
+        <button class="ghost" data-action="appearance">Appearance</button>
+        <button class="ghost" data-action="restart-node">Restart the node</button>
+      </div>
+      <p class="muted small desktop-only">Every setting here is also in a terminal: <code>sol config</code>.
+        Stop the node with <code>sol stop</code>, start it with <code>sol</code>.</p>
     </div>
   </section>
 </main>
 </div>
 
-<!-- ADD SERVICE DIALOG -->
-<dialog id="dlg-service">
+<!-- Phone: the screen's name and status on top, sections along the bottom. -->
+<header class="topbar">
+  <button class="icon-btn" id="topbar-back" data-action="go-home" aria-label="Back to Home" hidden><svg aria-hidden="true"><use href="#i-back"/></svg></button>
+  <svg class="sun" id="topbar-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+  <b id="topbar-title">Sol</b>
+  <button class="pill" id="topbar-pill" data-action="go-home"><span class="dot"></span><span id="topbar-pill-text">starting…</span></button>
+</header>
+<nav class="tabbar" aria-label="Sections">
+  <button data-screen="home" class="active"><svg aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></button>
+  <button data-screen="peers"><svg aria-hidden="true"><use href="#i-peers"/></svg><span>Peers</span></button>
+  <button data-screen="services"><svg aria-hidden="true"><use href="#i-services"/></svg><span>Services</span></button>
+  <button data-screen="files"><svg aria-hidden="true"><use href="#i-files"/></svg><span>Files</span></button>
+  <button data-screen="settings"><svg aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span></button>
+</nav>
+
+<!-- ADD SERVICE -->
+<dialog id="dlg-service" aria-labelledby="dlg-service-title">
   <form id="service-form" method="dialog">
-    <h2>Add a service</h2>
-    <p class="muted">Pick the app, or choose Custom. An app must already be running on this computer;
-      a website is just a folder of files.</p>
-    <div id="templates" class="templates"></div>
+    <header class="sheet-head"><h2 id="dlg-service-title">Add a service</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+    <div class="sheet-body">
+      <p class="muted">Pick the app, or choose Custom. An app must already be running on this machine;
+        a website is just a folder of files.</p>
+      <div id="templates" class="templates"></div>
 
-    <label>Name <span class="muted">(lowercase letters, numbers, dashes)</span>
-      <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,31}" placeholder="music"></label>
-    <label id="field-port">Port the app listens on
-      <input name="local_port" type="number" min="1" max="65535" required placeholder="4533"></label>
-    <label id="field-dir" hidden>Folder to serve <span class="muted">(full path; needs an index.html)</span>
-      <input name="dir" placeholder="/home/you/site">
-      <span class="muted small">Sol serves the files itself: no web server needed. Folders are never listed, and
-        hidden files (.git, .env) and file dates are not shown.</span></label>
+      <label>Name <span class="muted">(lowercase letters, numbers, dashes)</span>
+        <input name="name" required pattern="[a-z0-9][a-z0-9-]{0,31}" placeholder="music" autocapitalize="none" autocomplete="off" spellcheck="false"></label>
+      <label id="field-port">Port the app listens on
+        <input name="local_port" type="number" inputmode="numeric" min="1" max="65535" required placeholder="4533"></label>
+      <label id="field-dir" hidden>Folder to serve <span class="muted">(full path; needs an index.html)</span>
+        <input name="dir" placeholder="/home/you/site" autocapitalize="none" autocomplete="off" spellcheck="false">
+        <span class="muted small">Sol serves the files itself: no web server needed. Folders are never listed, and
+          hidden files (.git, .env) and file dates are not shown.</span></label>
 
-    <fieldset class="choices">
-      <legend>Who can open it?</legend>
-      <label class="choice"><input type="radio" name="visibility" value="private" checked>
-        <span><b>Only my devices</b> <span class="tag">Recommended</span>
-        <span class="muted">Invisible to everyone else, even if they find the address.</span></span></label>
-      <label class="choice"><input type="radio" name="visibility" value="public">
-        <span><b>Anyone with Tor Browser</b>
-        <span class="muted">Gets its own .onion address you can share, or open on a phone. Your IP stays hidden.</span></span></label>
-      <label class="choice"><input type="radio" name="visibility" value="anonymous-public">
-        <span><b>Anonymous public</b> <span class="tag warn">Experimental</span>
-        <span class="muted">Like public, with extra leak protection. Not complete yet: don't rely on it.</span></span></label>
-    </fieldset>
+      <fieldset class="choices">
+        <legend>Who can open it?</legend>
+        <label class="choice"><input type="radio" name="visibility" value="private" checked>
+          <span><b>Only peers I choose</b> <span class="tag">Recommended</span>
+          <span class="muted">Invisible to everyone else. You pick the peers on the Peers screen.</span></span></label>
+        <label class="choice"><input type="radio" name="visibility" value="public">
+          <span><b>Anyone with Tor Browser</b>
+          <span class="muted">Gets its own .onion address you can hand out. Your IP address stays hidden. Needs Tor on.</span></span></label>
+        <label class="choice"><input type="radio" name="visibility" value="anonymous-public">
+          <span><b>Anonymous public</b> <span class="tag warn">Experimental</span>
+          <span class="muted">Like public, with extra leak protection. Not complete yet: don't rely on it.</span></span></label>
+      </fieldset>
 
-    <details>
-      <summary>Advanced</summary>
-      <label id="field-protocol">Protocol
-        <select name="protocol">
-          <option value="tcp">Any (tcp): works for everything</option>
-          <option value="http">Web (http): lets Sol hide server headers on public sites</option>
-        </select></label>
-      <label class="share"><input type="checkbox" name="record">
-        <span><b>Publish a signed record</b> <span class="muted small">Public web services only. Adds
-          <code>/.well-known/sol.json</code>, which ties the site's addresses to one key so directories
-          and visitors can verify it. It also shows that the site runs Sol.</span></span></label>
-    </details>
+      <details class="disclosure">
+        <summary>Advanced</summary>
+        <label id="field-protocol">Protocol
+          <select name="protocol">
+            <option value="tcp">Any (tcp): works for everything</option>
+            <option value="http">Web (http): opens in a browser; lets Sol hide server headers on public sites</option>
+          </select></label>
+        <label class="checkline"><input type="checkbox" name="record">
+          <span><b>Publish a signed record</b> <span class="muted small">Public web services only. Adds
+            <code>/.well-known/sol.json</code>, which ties the site's addresses to one key so directories
+            and visitors can verify it. It also shows that the site runs Sol.</span></span></label>
+      </details>
 
-    <p id="service-error" class="error" hidden></p>
-    <div class="actions">
-      <button value="cancel" formnovalidate class="ghost">Cancel</button>
+      <p id="service-error" class="field-error" role="alert" hidden></p>
+    </div>
+    <footer class="actions">
+      <button type="button" data-close class="ghost">Cancel</button>
       <button id="service-submit" value="ok">Add service</button>
-    </div>
+    </footer>
   </form>
 </dialog>
 
-<!-- PAIR DIALOG -->
-<dialog id="dlg-pair">
-  <div class="pair">
-    <h2>Invite another machine</h2>
-    <div id="pair-steps">
-      <div class="step"><span class="num">1</span><div>
-        <b>On the other machine, install Tor and Sol, and start it with <code>sol</code></b>
-        <div class="os-tabs">
-          <button data-os="arch" class="active">Arch</button><button data-os="debian">Ubuntu / Debian</button>
-          <button data-os="mac">macOS</button>
-        </div>
-        <div class="copyrow"><pre id="install-cmd"></pre><button data-copy="install-cmd" class="ghost small">Copy</button></div>
-      </div></div>
-      <div class="step"><span class="num">2</span><div>
-        <b>Run this there</b> (or paste the link into its panel: Peers → Join with a link)
-        <div class="copyrow"><pre id="pair-cmd">Creating a link…</pre><button data-copy="pair-cmd" class="ghost small">Copy</button></div>
-        <p class="muted small">Works once and expires in <span id="pair-countdown">10:00</span>. Treat it like a password.</p>
-        <details><summary>Show as QR code</summary>
-          <div id="qr"></div>
-          <p class="muted small">Phones can't run Sol yet: to reach a service from a phone, make it
-            "Anyone with Tor Browser" and open its address in Tor Browser.</p>
+<!-- INVITE -->
+<dialog id="dlg-pair" aria-labelledby="dlg-pair-title">
+  <header class="sheet-head"><h2 id="dlg-pair-title">Invite a machine</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+  <div class="sheet-body pair">
+    <div id="pair-notready" class="notice warn" hidden>
+      <h3 id="pair-notready-title">This machine isn't reachable yet</h3>
+      <p id="pair-notready-text"></p>
+      <progress id="pair-notready-bar" max="100"></progress>
+      <p class="muted small">The link appears here by itself as soon as it can be made.</p>
+    </div>
+    <ol id="pair-steps" class="wizard">
+      <li><b>Start Sol on the other machine</b>
+        <p class="muted small">Phone: open the Sol app. Computer: run <code>sol</code>.</p>
+        <details class="disclosure"><summary>It doesn't have Sol yet</summary>
+          <div class="segmented" role="group" aria-label="Operating system">
+            <button data-os="arch" class="active">Arch</button><button data-os="debian">Ubuntu / Debian</button>
+            <button data-os="mac">macOS</button>
+          </div>
+          <div class="copyrow"><pre id="install-cmd"></pre><button data-copy="install-cmd" class="ghost small">Copy</button></div>
         </details>
-      </div></div>
-      <div class="step"><span class="num">3</span><div>
-        <b id="pair-wait-title">Waiting for the other machine…</b>
-        <p id="pair-wait-text" class="muted">Keep this open. The first connection over Tor usually takes 30 seconds to 2 minutes.</p>
-      </div></div>
-    </div>
-    <p id="pair-error" class="error" hidden></p>
-    <div class="actions"><button id="pair-close" class="ghost">Close</button></div>
+      </li>
+      <li><b>Give it this link</b>
+        <p class="muted small">In its panel: Peers, then Join with a link. In a terminal: <code>sol pair '&lt;link&gt;'</code>.
+          Or scan the code with the phone's camera.</p>
+        <div class="copyrow"><pre id="pair-link" class="oneline">Creating a link…</pre></div>
+        <div class="actions start">
+          <button data-copy="pair-link" id="pair-copy" disabled>Copy link</button>
+          <button class="ghost" data-action="copy-pair-cmd" id="pair-copy-cmd" disabled>Copy terminal command</button>
+        </div>
+        <div id="qr" class="qr"></div>
+        <p class="muted small">Works once and expires in <b id="pair-countdown">10:00</b>. Treat it like a password:
+          whoever uses it first is paired with this machine.</p>
+      </li>
+      <li id="pair-wait"><b id="pair-wait-title">Waiting for the other machine…</b>
+        <p id="pair-wait-text" class="muted small"></p>
+      </li>
+    </ol>
+    <p id="pair-error" class="field-error" role="alert" hidden></p>
   </div>
+  <footer class="actions"><button type="button" id="pair-close" data-close class="ghost">Close</button></footer>
 </dialog>
 
-<!-- JOIN DIALOG -->
-<dialog id="dlg-join">
+<!-- JOIN -->
+<dialog id="dlg-join" aria-labelledby="dlg-join-title">
   <form id="join-form" method="dialog">
-    <h2>Join another machine</h2>
-    <p class="muted">On the other machine, open its panel and choose <b>Invite a machine</b> (or run
-      <code>sol invite</code>), then paste the <code>sol://pair…</code> link here.</p>
-    <label>Pairing link
-      <textarea name="link" rows="3" required placeholder="sol://pair?node=…"></textarea></label>
-    <p id="join-status" class="muted" hidden></p>
-    <p id="join-error" class="error" hidden></p>
-    <div class="actions">
-      <button value="cancel" formnovalidate class="ghost">Cancel</button>
-      <button id="join-submit" value="ok">Pair</button>
+    <header class="sheet-head"><h2 id="dlg-join-title">Join with a link</h2>
+      <button type="button" class="icon-btn" data-action="join-cancel" aria-label="Close">✕</button></header>
+    <div class="sheet-body">
+      <div id="join-entry">
+        <p class="muted">On the other machine choose <b>Invite a machine</b> (or run <code>sol invite</code>)
+          and bring its <code>sol://pair…</code> link here.</p>
+        <label for="join-link">Pairing link</label>
+        <textarea id="join-link" name="link" rows="3" required placeholder="sol://pair?node=…" autocapitalize="none" autocomplete="off" spellcheck="false"></textarea>
+        <div class="actions start"><button type="button" class="ghost small" id="join-paste" data-action="join-paste">Paste</button></div>
+        <div id="join-preview" class="notice" hidden></div>
+      </div>
+      <div id="join-busy" class="busy" role="status" hidden>
+        <progress></progress>
+        <b id="join-busy-title">Pairing…</b>
+        <p id="join-status" class="muted"></p>
+      </div>
+      <p id="join-error" class="field-error" role="alert" hidden></p>
     </div>
+    <footer class="actions">
+      <button type="button" class="ghost" data-action="join-cancel">Cancel</button>
+      <button id="join-submit" value="ok">Pair</button>
+    </footer>
   </form>
 </dialog>
 
-<!-- QR DIALOG (public addresses) -->
-<dialog id="dlg-qr">
-  <h2 id="qr-title">Open in Tor Browser</h2>
-  <div id="qr-big"></div>
-  <pre id="qr-text"></pre>
-  <div class="actions"><button data-close class="ghost">Close</button></div>
-</dialog>
-
-<!-- SETTINGS DIALOG (look of this panel; saved in this browser) -->
-<dialog id="dlg-settings">
-  <h2>Appearance</h2>
-  <p class="muted small">How this panel looks. Saved in this browser only.</p>
-  <div class="set">
-    <label for="set-theme">Theme</label>
-    <select id="set-theme" data-set="theme">
-      <option value="dark">Dark</option>
-      <option value="light">Light</option>
-      <option value="system">Match the system</option>
-      <option value="green">Green phosphor</option>
-      <option value="amber">Amber</option>
-    </select>
-    <label for="set-accent">Accent colour</label>
-    <div class="inline-row"><input type="color" id="set-accent" data-set="accent">
-      <button class="ghost small" data-action="reset-accent">Use the theme's</button></div>
-    <label for="set-layout">Layout</label>
-    <select id="set-layout" data-set="layout">
-      <option value="side">Sidebar with machines</option>
-      <option value="top">Tabs on top</option>
-    </select>
-    <label for="set-size">Text size</label>
-    <select id="set-size" data-set="size">
-      <option value="12">Small</option>
-      <option value="14">Normal</option>
-      <option value="16">Large</option>
-      <option value="18">Larger</option>
-    </select>
+<!-- QR (public addresses) -->
+<dialog id="dlg-qr" aria-labelledby="qr-title">
+  <header class="sheet-head"><h2 id="qr-title">Open in Tor Browser</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+  <div class="sheet-body">
+    <div id="qr-big" class="qr"></div>
+    <pre id="qr-text"></pre>
   </div>
-  <p class="muted small">For anything else, write your own CSS in <code>~/.sol/panel.css</code> (the Sol data
-    folder) and reload. It is loaded after the built-in styles, so it can replace any colour, font or spacing.</p>
-  <div class="actions"><button data-close class="ghost">Close</button></div>
+  <footer class="actions"><button type="button" class="ghost" data-copy="qr-text">Copy address</button>
+    <button type="button" data-close>Done</button></footer>
 </dialog>
 
-<div id="toasts" aria-live="polite"></div>
+<!-- CONFIRM / NOTICE (replaces the browser's confirm and prompt) -->
+<dialog id="dlg-ask" aria-labelledby="ask-title">
+  <form id="ask-form" method="dialog">
+    <header class="sheet-head"><h2 id="ask-title"></h2></header>
+    <div class="sheet-body">
+      <div id="ask-body"></div>
+      <label id="ask-field" hidden><span id="ask-label"></span>
+        <input id="ask-input" autocomplete="off" spellcheck="false"></label>
+      <p id="ask-error" class="field-error" role="alert" hidden></p>
+    </div>
+    <footer class="actions">
+      <button type="button" class="ghost" id="ask-no" data-close>Cancel</button>
+      <button id="ask-yes" value="ok">OK</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- APPEARANCE (look of this panel; saved in this browser) -->
+<dialog id="dlg-settings" aria-labelledby="look-title">
+  <header class="sheet-head"><h2 id="look-title">Appearance</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+  <div class="sheet-body">
+    <p class="muted small">How this panel looks. Saved on this device only.</p>
+    <div class="set">
+      <label for="set-theme">Theme</label>
+      <select id="set-theme" data-set="theme">
+        <option value="system">Match the system</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="green">Green phosphor</option>
+        <option value="amber">Amber</option>
+      </select>
+      <label for="set-accent">Accent colour</label>
+      <div class="inline-row"><input type="color" id="set-accent" data-set="accent">
+        <button type="button" class="ghost small" data-action="reset-accent">Use the theme's</button></div>
+      <label for="set-layout" class="desktop-only">Layout</label>
+      <select id="set-layout" data-set="layout" class="desktop-only">
+        <option value="side">Sidebar with machines</option>
+        <option value="top">Tabs on top</option>
+      </select>
+      <label for="set-size">Text size</label>
+      <select id="set-size" data-set="size">
+        <option value="12">Small</option>
+        <option value="14">Normal</option>
+        <option value="16">Large</option>
+        <option value="18">Larger</option>
+      </select>
+    </div>
+    <p class="muted small desktop-only">For anything else, write your own CSS in <code>~/.sol/panel.css</code> (the Sol data
+      folder) and reload. It is loaded after the built-in styles, so it can replace any colour, font or spacing.</p>
+  </div>
+  <footer class="actions"><button type="button" data-close>Done</button></footer>
+</dialog>
+
+<div id="toasts" role="status" aria-live="polite"></div>
 
 <script src="/vendor/qrcode.js"></script>
 <script src="/app.js"></script>

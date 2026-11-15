@@ -5,6 +5,9 @@ tries hard not to leak. It does not invent new cryptography or a new anonymity n
 says plainly what is and isn't protected in the current build. The longer design discussion is in
 [spec.md §7](spec.md#7-security-model).
 
+> **No independent review yet.** Everything below is the project's own claim. The three parts
+> we most want outside eyes on are listed in [SECURITY.md](../SECURITY.md#looking-for-review).
+
 ## What is protected
 
 | Threat | Protection | Where |
@@ -58,6 +61,13 @@ says plainly what is and isn't protected in the current build. The longer design
   loopback, so a peer can't aim your node at services on this machine. It still chooses LAN IPs
   and ports, so a malicious peer could make your node send a short preamble and TLS hello to up
   to 8 addresses on your network, backing off from a minute up to an hour.
+- **Liveness probes show that you are using a peer.** While a stream to a peer is open, the
+  node sends that peer a `list` request about every 30 s (±20%) over the same path
+  (docs/PROTOCOL.md, "Liveness"); a WireGuard tunnel sends a keepalive every 25 s and direct TCP
+  sockets a TCP keepalive after 15 s idle. The peer learns nothing it didn't know, but someone
+  watching the path (your LAN, your ISP on a direct path) sees a steady heartbeat between the
+  two IPs for as long as the stream is open. Over Tor the requests are inside the onion
+  circuit, so an observer sees only regular small cells.
 - **Clearnet transport.** It's unencrypted and shows your LAN IP. Use it only on a trusted LAN or
   for testing. Peers are still authenticated, but traffic can be read.
 - **Your peers know your onion.** Pairing is mutual, so each peer can reach your node's address

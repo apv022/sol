@@ -55,6 +55,10 @@ const (
 	OpRestart = "restart"  // shut down and start again (settings that need it)
 	OpHelpTor = "help-tor" // Set ("on", "off", or empty to only ask) -> HelpTor
 
+	// OpNetworkChanged tells the node the machine's network changed (Name, if
+	// set, is the reason). The Android app sends it on every default-network change.
+	OpNetworkChanged = "network-changed"
+
 	OpTunnels     = "tunnels"      // -> []Tunnel
 	OpTunnelOpen  = "tunnel-open"  // Peer, Service, Port (0: pick one) -> Tunnel
 	OpTunnelClose = "tunnel-close" // Peer, Service (empty: all of the peer's tunnels)
@@ -80,6 +84,9 @@ type Request struct {
 	Dir        string `json:"dir,omitempty"`    // a site: serve this folder (absolute path) instead of a port
 	Record     bool   `json:"record,omitempty"` // publish a signed service record
 }
+
+// MaxReasonLen caps the free-text reason of OpNetworkChanged.
+const MaxReasonLen = 80
 
 // LocalService is one of this node's services, as the CLI sees it.
 type LocalService struct {

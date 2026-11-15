@@ -74,6 +74,9 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
   self-check reaches our own onion (`torhealth.go`). Don't make the self-check the only signal
   again: it fetches the descriptor from one random directory, and a slow one stalls it for two
   minutes. A network change restarts tor on purpose.
+- The Tor supervisor's timings are package variables (`torRetryBase`, `bootstrapStall`,
+  `netSettle`, ...). Tests that shorten them must set them before `Start` and restore them only
+  after `Stop` (which waits for every supervisor goroutine), or `-race` flags the read.
 - Never send tor `SIGNAL NEWNYM`: it also drops the client-auth keys added over the control port,
   which would cut this node off from its peers.
 - `config.Config` must only be touched through its methods (it holds a mutex). Use `Snapshot()`

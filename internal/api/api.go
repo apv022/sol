@@ -13,7 +13,8 @@
 //	GET    /user.css                        the user's own panel styles (panel.css in the data directory)
 //	GET    /api/status                      node id, name, uptime, transports, csrf token
 //	PUT    /api/name                        {name}: this node's name, as peers see it
-//	GET    /api/settings                    the node's settings (never secrets)
+//	GET    /api/settings                    the node's settings (never secrets), each with the value the node runs with
+//	GET    /api/settings/{key}/impact       ?value=: what changing it would do (nothing is changed)
 //	PUT    /api/settings/{key}              {value}: change one -> {restart}
 //	POST   /api/restart                     restart the node (applies settings read at start-up)
 //	PUT    /api/help-tor                    {enabled}: run a Snowflake proxy to help censored users reach Tor
@@ -51,6 +52,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -92,6 +94,9 @@ type Backend interface {
 	// whether a restart is needed for it (config.Option).
 	Options() []config.Option
 	SetOption(key, value string) (restart bool, err error)
+	// OptionImpact says what SetOption(key, value) would do, in plain
+	// sentences, without changing anything.
+	OptionImpact(key, value string) (Impact, error)
 	// Restart shuts the node down and starts it again.
 	Restart()
 	// SetHelpTor turns the Snowflake proxy on or off (internal/snowflake).
@@ -140,6 +145,76 @@ type PeerView struct {
 	// Every connection passed the signed handshake with this peer's key.
 	Online      bool             `json:"online"`
 	Connections []ConnectionView `json:"connections"`
+	// Path is how this node reaches the peer, and why not a faster way.
+	Path PathView `json:"path"`
+}
+
+// PathView says which transport carries this node's connections to a peer
+// and, when direct mode could be faster but isn't in use, why not. The
+// sentences are written for the panel and the CLI to show as they are.
+type PathView struct {
+	// Via is the transport in use, or the one that last worked since the
+	// node started: "tor", "wg", "direct", "clearnet". Empty: this node has
+	// not connected to the peer since it started.
+	Via string `json:"via"`
+	// Live: a connection over Via is open right now (or, for WireGuard,
+	// its tunnel is up).
+	Live bool `json:"live"`
+	// Next is the transport the next connection tries first.
+	Next string `json:"next,omitempty"`
+	// Reason is a stable code for why direct mode (WireGuard) is not the
+	// path: "direct_off", "direct_restart", "direct_failed",
+	// "peer_no_direct", "direct_backoff", "direct_probation",
+	// "direct_next", "wg_blocked".
+	// Empty when the fastest path is in use.
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"` // Reason as one plain sentence
+	Fix    string `json:"fix,omitempty"`    // what the user can do about it
+	// RetryIn: with "direct_backoff", seconds until the next background
+	// probe of the direct path; with "direct_probation", seconds until it is
+	// preferred again (if it keeps working). 0 or absent: any moment now.
+	RetryIn int `json:"retry_in,omitempty"`
+	// Down: the last attempt to reach the peer failed and the node is
+	// redialling with backoff; RedialIn is the seconds until the next try.
+	Down     bool `json:"down,omitempty"`
+	RedialIn int  `json:"redial_in,omitempty"`
+}
+
+// SettingView is a setting plus the value the running node started with.
+// Most settings are read at start-up, so after a change the saved value and
+// the running one differ until the node restarts; the panel shows both
+// rather than a state the node isn't in.
+type SettingView struct {
+	config.Option
+	Running string `json:"running"` // the value this run of the node started with
+	Pending bool   `json:"pending"` // saved value differs and applies at the next restart
+}
+
+// Impact is what changing a setting would do: the body of
+// GET /api/settings/{key}/impact.
+type Impact struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Changes bool   `json:"changes"` // false: that is already the saved value
+	// Problem, when set, is why saving this value would be refused (the
+	// last transport turned off, a bad address, a port in use twice). The
+	// panel shows it instead of asking to confirm.
+	Problem string `json:"problem,omitempty"`
+	Restart bool   `json:"restart"` // applies when the node restarts
+	// Confirm: ask before saving (it exposes an address, drops encryption
+	// or cuts peers off).
+	Confirm bool `json:"confirm"`
+	// Effects are plain sentences: what happens, most important first.
+	Effects []string `json:"effects"`
+	// Unreachable are the peers this node could no longer reach, or be
+	// reached by, after the change.
+	Unreachable []ImpactPeer `json:"unreachable"`
+}
+
+// ImpactPeer names a peer in an Impact (never credentials).
+type ImpactPeer struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ConnectionView groups one peer's open connections to one service.
@@ -176,13 +251,19 @@ type InviteInfo struct {
 type server struct {
 	b    Backend
 	csrf string
+	// boot is every setting's value when the panel started, which is when
+	// the node did: what the node is running with.
+	boot map[string]string
 }
 
 // Handler returns the panel handler serving the API and the static files in web.
 func Handler(b Backend, web fs.FS) http.Handler {
 	tok := make([]byte, 32)
 	rand.Read(tok)
-	s := &server{b: b, csrf: base64.RawURLEncoding.EncodeToString(tok)}
+	s := &server{b: b, csrf: base64.RawURLEncoding.EncodeToString(tok), boot: map[string]string{}}
+	for _, o := range b.Options() {
+		s.boot[o.Key] = o.Value
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.status)
@@ -208,6 +289,7 @@ func Handler(b Backend, web fs.FS) http.Handler {
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/audit", s.audit)
 	mux.HandleFunc("GET /api/settings", s.listSettings)
+	mux.HandleFunc("GET /api/settings/{key}/impact", s.settingImpact)
 	mux.HandleFunc("PUT /api/settings/{key}", s.setSetting)
 	mux.HandleFunc("POST /api/restart", s.restart)
 	mux.HandleFunc("PUT /api/help-tor", s.setHelpTor)
@@ -239,8 +321,36 @@ func (s *server) guard(next http.Handler) http.Handler {
 	})
 }
 
+// settings pairs each saved setting with the value the node runs with.
+func (s *server) settings() []SettingView {
+	out := []SettingView{}
+	for _, o := range s.b.Options() {
+		v := SettingView{Option: o, Running: o.Value}
+		if boot, ok := s.boot[o.Key]; ok && o.Restart {
+			v.Running, v.Pending = boot, boot != o.Value
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 func (s *server) listSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.b.Options())
+	writeJSON(w, http.StatusOK, s.settings())
+}
+
+func (s *server) settingImpact(w http.ResponseWriter, r *http.Request) {
+	im, err := s.b.OptionImpact(r.PathValue("key"), r.URL.Query().Get("value"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if im.Effects == nil {
+		im.Effects = []string{}
+	}
+	if im.Unreachable == nil {
+		im.Unreachable = []ImpactPeer{}
+	}
+	writeJSON(w, http.StatusOK, im)
 }
 
 func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +439,9 @@ func writeErr(w http.ResponseWriter, err error) {
 func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.b.Status()
 	st.CSRF = s.csrf
+	// A restart is needed exactly while a saved setting differs from the
+	// running one: changing a setting back clears it again.
+	st.RestartNeeded = slices.ContainsFunc(s.settings(), func(v SettingView) bool { return v.Pending })
 	writeJSON(w, http.StatusOK, st)
 }
 

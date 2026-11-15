@@ -71,6 +71,27 @@ func LANIP() (net.IP, error) {
 	return ip, nil
 }
 
+// Online reports whether this machine has a route to the internet: whether
+// the system would pick a non-loopback local address to send towards a
+// public one, over IPv4 or IPv6. It sends nothing (a UDP "connect" only
+// consults the routing table), so it is cheap enough to call every second.
+// It cannot tell whether the route actually works (a captive portal, a dead
+// Wi-Fi): it only answers "is there anything to try".
+func Online() bool {
+	for _, p := range [][2]string{{"udp4", "192.0.2.1:9"}, {"udp6", "[2001:db8::1]:9"}} { // documentation ranges
+		c, err := net.Dial(p[0], p[1])
+		if err != nil {
+			continue
+		}
+		ip := c.LocalAddr().(*net.UDPAddr).IP
+		c.Close()
+		if !ip.IsLoopback() && !ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
 // DirectCandidate checks one direct-mode candidate (docs/PROTOCOL.md,
 // "Direct mode transport"): an IP:port that could be another machine. No
 // names, unspecified, multicast or link-local addresses, and loopback only

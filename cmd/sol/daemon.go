@@ -174,6 +174,15 @@ func runStop(ctx context.Context, args []string) error {
 	return nil
 }
 
+// runNetworkChanged is `sol network-changed [reason]`: it tells the running
+// node the machine's network changed (a phone moved from Wi-Fi to cellular),
+// so it re-checks its connections at once.
+func runNetworkChanged(ctx context.Context, args []string) error {
+	data, rest := flags("network-changed", args, nil)
+	reason := strings.Join(rest, " ")
+	return control.Call(ctx, sock(data), control.Request{Op: control.OpNetworkChanged, Name: reason}, nil)
+}
+
 // runRestart is `sol restart`: the node restarts itself (so a node kept by
 // systemd or launchd stays under it), or is started if it wasn't running.
 func runRestart(ctx context.Context, args []string) error {

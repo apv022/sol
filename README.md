@@ -1,13 +1,19 @@
 <p align="center"><img src="docs/media/logo.svg" width="96" alt="Sol logo"></p>
 
-# Sol
+<h1 align="center">Sol</h1>
 
-**Connect your own machines over Tor: open each other's apps, send each other files.**
-No port forwarding, no VPN, no accounts, no domain, no cloud.
+<p align="center"><b>Connect your own machines over Tor: open each other's apps, send each other files,
+host a site on an onion.</b><br>
+No port forwarding, no VPN, no accounts, no domain, no cloud.</p>
 
-[![ci](https://github.com/apv022/sol/actions/workflows/ci.yml/badge.svg)](https://github.com/apv022/sol/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Go dependencies: 1 (wireguard-go)](https://img.shields.io/badge/go%20dependencies-1%20(wireguard--go)-brightgreen)
+<p align="center">
+<a href="https://github.com/apv022/sol/actions/workflows/ci.yml"><img src="https://github.com/apv022/sol/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+<a href="https://github.com/apv022/sol/releases"><img src="https://img.shields.io/github/v/release/apv022/sol?include_prereleases&sort=semver" alt="release"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+<img src="https://img.shields.io/github/go-mod/go-version/apv022/sol" alt="Go version">
+<img src="https://img.shields.io/badge/go%20dependencies-1%20(wireguard--go)-brightgreen" alt="Go dependencies: 1 (wireguard-go)">
+<img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android-lightgrey" alt="Platforms">
+</p>
 
 ```
 home server (behind CGNAT, no open ports)           your laptop, anywhere
@@ -24,7 +30,10 @@ send the other files, through Tor, from anywhere. Nobody else can even find them
 
 <!-- demo GIF: record with `vhs docs/demo.tape` and replace this comment -->
 
-<p align="center"><img src="docs/media/panel-services.png" width="85%" alt="Sol panel: services with who can open them, and a public onion address"></p>
+<p align="center"><img src="docs/media/panel-home.png" width="88%" alt="Sol panel: online over Tor, with a paired machine and two open tunnels"></p>
+
+> **Early software.** Sol works and is tested on Linux, macOS and Windows, but nobody outside
+> the project has reviewed its security yet. [We're asking for that review](SECURITY.md#looking-for-review).
 
 ## Why
 
@@ -48,26 +57,35 @@ configs, or handing your traffic to a tunnel company. Sol skips all of it:
 
 ## Quick start
 
-You need `tor` installed on each machine (`sudo apt install tor`, `brew install tor`, …) and Go
-1.24+ to build.
+**1. Install** Sol and Tor on each machine.
 
 ```sh
-go install github.com/apv022/sol/cmd/sol@latest
-sol                       # on every machine: starts the node in the background;
-                          # panel at http://127.0.0.1:8080
+curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh    # Linux, macOS
+sudo apt install tor        # or: brew install tor · sudo pacman -S tor · sudo dnf install tor
+```
+
+The script downloads the release binary for your system, checks its checksum, and never uses
+`sudo`. Other ways: grab an archive from [Releases](https://github.com/apv022/sol/releases)
+(Windows included), or build it with Go 1.24+: `go install github.com/apv022/sol/cmd/sol@latest`.
+On a phone, there is an alpha [Android app](https://github.com/apv022/sol-mobile).
+
+**2. Start it.**
+
+```sh
+sol                       # starts the node in the background; panel at http://127.0.0.1:8080
 ```
 
 `sol` gives your terminal back. `sol stop` stops the node, `sol logs -f` shows what it is doing,
 and `sol autostart on` starts it when you log in.
 
-**Pair two machines** (once). On the home server, `sol invite` (or the panel's **Peers → Invite a
+**3. Pair two machines** (once). On the home server, `sol invite` (or the panel's **Peers → Invite a
 machine**) prints a link. On the laptop:
 
 ```sh
 sol pair 'sol://pair?node=…'          # or paste it in the panel: Peers → Join with a link
 ```
 
-**Share an app.** On the server:
+**4. Share an app.** On the server:
 
 ```sh
 sol service add navidrome 4533 --http --share laptop
@@ -85,18 +103,25 @@ The tunnel belongs to the node, not the terminal: it stays open, comes back on t
 after a restart (bookmark it), and heals by itself when the other machine reboots or changes
 networks.
 
-**Send files**, either way: `sol send home notes.pdf` (or **Send a file…** on the Peers tab).
+**5. Send files**, either way: `sol send home notes.pdf` (or **Send a file…** on the Peers tab).
 They show up in the other machine's Files tab, marked with who sent them.
 
 The panel walks you through it: a getting-started checklist, presets for common apps (Navidrome,
 Jellyfin, Immich, Home Assistant, SSH…), a warning if the app isn't running, and a live view of
-which peers are connected to what, each one cryptographically verified. Its look is yours to
-change: themes, accent colour, tabs or a sidebar under **settings**, and any CSS you like in
-`~/.sol/panel.css`.
+which peers are connected to what, each one cryptographically verified. Every peer and open
+tunnel says which path it takes (Tor, WireGuard direct, TLS direct or LAN), what that means for
+speed and for who sees your IP address, and, when direct mode isn't carrying it, why not and
+what fixes it. While Tor starts you see its real progress, step by step, and when it retries.
+**Settings → How this node connects** explains each choice and, before you change one, tells
+you whether it needs a restart and which peers would become unreachable. On a phone the panel
+has a tab bar and bottom sheets. Its look is yours to change: themes, accent colour, tabs or a
+sidebar under **Appearance**, and any CSS you like in `~/.sol/panel.css`.
 
-> Tor is slow to start the first time (around 30 s to bootstrap, plus up to a minute for a new
-> onion to become reachable). Your onion address and Tor's state are kept between runs, so later
-> starts take seconds to bootstrap and 10-60 s to become reachable again.
+**6. Publish a site**, if you want one: `sol site add blog ./public` serves that folder on its
+own `.onion` address, which anyone can open in Tor Browser.
+
+> The first start takes about 30 seconds while Tor connects. After that a node is online within
+> about ten seconds of starting. Your onion address is kept between runs.
 
 Try it without Tor on one LAN: `sol config tor off`, `sol config clearnet on`, `sol restart`.
 That's for LAN and testing only, since clearnet traffic is not encrypted.
@@ -119,9 +144,12 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 
 ## Screenshots
 
-| Panel home | Services (dark) |
+| Peers: what each side shares | Settings |
 |---|---|
-| <img src="docs/media/panel-home.png" alt="Sol panel home: online over Tor"> | <img src="docs/media/panel-services-dark.png" alt="Sol services, dark theme"> |
+| <img src="docs/media/panel-peers.png" alt="Sol peers screen: a paired machine, what it shares, what you share with it"> | <img src="docs/media/panel-settings.png" alt="Sol settings screen"> |
+
+The panel is one web page served on `127.0.0.1`. Themes, accent colour and layout are under
+**appearance**; anything else is yours to restyle in `~/.sol/panel.css`.
 
 ## Commands
 
@@ -129,6 +157,7 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 |---|---|
 | `sol` | Start the node in the background (panel on `127.0.0.1:8080`, data in `~/.sol`). Everything below talks to it |
 | `sol stop`, `sol restart`, `sol logs [-f]` | Stop it, restart it, or read its log |
+| `sol network-changed [reason]` | Tell the running node the network changed (the Android app runs it when the phone switches networks), so it re-checks its connections now |
 | `sol run` | Run the node in the foreground instead (what systemd, launchd and containers run) |
 | `sol config [key [value]]` | List, show or change settings: Tor, direct mode, STUN servers, ports… The panel's Settings screen changes the same ones |
 | `sol invite` | Print a one-time pairing link for another machine |
@@ -162,7 +191,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Mutual peer pairing, per-peer sharing, instant unpairing on both sides | ✅ |
 | Any TCP service; lasting tunnels from the panel's **Open** button or `sol open` | ✅ |
 | Send files between peers, both ways, SHA-256 verified, with size limits | ✅ |
-| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status | ✅ |
+| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status, the path each connection takes and why, phone layout | ✅ |
 | Public services on their own onion | ✅ |
 | Static sites from a folder (`sol site add`), with an opt-in signed record of their addresses | ✅ |
 | Panel themes, layouts and your own `panel.css`; installable as an app window | ✅ |
@@ -171,6 +200,9 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Direct mode over WireGuard: straight to a peer, punching through home routers (Tailscale-style), TLS where UDP is blocked, Tor otherwise | ✅ opt-in (`"direct": true`) · ❌ symmetric NATs stay on Tor (no relays) |
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
+| Background node (`sol`, `sol stop`, `sol logs`), settings from the CLI and the panel | ✅ |
+| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha |
+| Release binaries for Linux, macOS, Windows (amd64, arm64) and an install script | ✅ tor installed separately |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |
 | I2P transport | 🗺️ stub in place ([how to add it](docs/EXTENDING.md)) |
@@ -181,17 +213,24 @@ The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
 
 ## How Sol compares
 
-| | Sol | Tailscale | Cloudflare Tunnel / ngrok | Hand-made Tor onion |
-|---|---|---|---|---|
-| Account needed | No | Yes | Yes | No |
-| Third party sees your traffic | No (Tor, end to end) | No (WireGuard) | Yes (TLS terminates at the provider) | No |
-| Works behind CGNAT | Yes | Yes | Yes | Yes |
-| Hides your IP from clients | Yes | No | From clients, not the provider | Yes |
-| Per-machine access and revocation | Yes, built in | Yes | Via provider ACLs | Manual key files |
-| Speed | Tor speed (fine for media, not for 4K) | Fast | Fast | Tor speed |
-| Setup | One binary, a link | App + login | Account + domain | torrc, keys, restarts |
+| | Sol | Tailscale | Cloudflare Tunnel | Pangolin | OnionShare | Plain WireGuard |
+|---|---|---|---|---|---|---|
+| Needs an account | No | Yes | Yes | On your own server | No | No |
+| Needs a server someone runs | No (the Tor network) | Coordination and relay servers | Cloudflare's edge | A VPS you rent | No (the Tor network) | No |
+| Works behind CGNAT | Yes | Yes | Yes | Yes (through the VPS) | Yes | Only if the other end is reachable |
+| Needs a domain | No | No | Yes | Yes | No | No |
+| Who can tell your service exists | Only paired machines | Your tailnet, and Tailscale (metadata) | Anyone with the URL, and Cloudflare | Anyone with the URL | Anyone with the address | Anyone who scans the port |
+| Who can read the traffic | Nobody in between | Nobody in between | Cloudflare (TLS ends there) | Your VPS | Nobody in between | Nobody in between |
+| Hides your IP from the other side | Yes (over Tor) | No | Yes | Yes | Yes | No |
+| Speed | Tor: fine for music and photos, not 4K. Direct mode: full speed | Full speed | Full speed | Full speed | Tor speed | Full speed |
+| First start | About 30 s (Tor) | Seconds | Seconds | Seconds | About 30 s | Instant |
 
-Pick Sol when you want privacy and independence more than raw speed.
+Where Sol loses: **speed and start-up time over Tor.** Direct mode (opt-in, WireGuard with NAT
+hole punching) removes the speed gap between machines that can reach each other, at the price
+of showing your peers your IP address. Two machines behind strict (symmetric) NATs stay on Tor,
+because Sol runs no relay servers.
+
+Pick Sol when you want privacy and independence, and no company or rented server in the middle.
 
 ## Development
 
@@ -204,6 +243,28 @@ make test-tor  # e2e over the real Tor network (needs tor; takes a few minutes)
 Start with [AGENTS.md](AGENTS.md) for a map of the code and the rules, and
 [docs/EXTENDING.md](docs/EXTENDING.md) to add a transport, provider, or audit check. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/PEERS.md](docs/PEERS.md) | The model: nodes, peers, sharing, tunnels, direct mode |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | The pairing link and the handshake, byte by byte |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What is protected, and what is not |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Packages, request paths, files on disk |
+| [docs/EXTENDING.md](docs/EXTENDING.md) | Where a new transport, setting or check plugs in |
+| [docs/spec.md](docs/spec.md) | Goals, the four stages, and the roadmap |
+| [CHANGELOG.md](CHANGELOG.md) | What changed |
+
+## Getting help, giving feedback
+
+- **Questions and ideas:** [Discussions](https://github.com/apv022/sol/discussions).
+- **Bugs:** [Issues](https://github.com/apv022/sol/issues/new/choose). `sol logs -n 60` helps a lot.
+- **Security problems:** privately, see [SECURITY.md](SECURITY.md).
+- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md).
+
+Sol is free and will stay free. I also do paid private self-hosting setups (your own media,
+photos, files and home automation, reachable from anywhere) through [Solarae](https://solarae.io).
 
 ## License
 

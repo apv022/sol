@@ -119,6 +119,18 @@ func (p *Proc) Stop() error {
 	return nil
 }
 
+// Kill ends the process at once, without asking. For a process that has
+// stopped answering (a frozen tor): Stop would wait 5 seconds for it first.
+func (p *Proc) Kill() {
+	select {
+	case <-p.done:
+		return
+	default:
+	}
+	_ = p.cmd.Process.Kill()
+	<-p.done
+}
+
 // Signal sends sig to the process (e.g. SIGHUP to make tor reload).
 func (p *Proc) Signal(sig os.Signal) error { return p.cmd.Process.Signal(sig) }
 
@@ -142,6 +154,12 @@ func WriteConfigFiles(p Program) error {
 // startBinary is shared by the bundled and native providers. Output goes to
 // <DataDir>/<name>.log. The process is killed if ctx is cancelled.
 func startBinary(ctx context.Context, path string, p Program) (*Proc, error) {
+	return startBinaryEnv(ctx, path, p, nil)
+}
+
+// startBinaryEnv is startBinary with extra environment variables for the
+// child ("KEY=value", added to this process's environment).
+func startBinaryEnv(ctx context.Context, path string, p Program, env []string) (*Proc, error) {
 	if err := WriteConfigFiles(p); err != nil {
 		return nil, err
 	}
@@ -151,6 +169,9 @@ func startBinary(ctx context.Context, path string, p Program) (*Proc, error) {
 	}
 	cmd := exec.CommandContext(ctx, path, p.Args...)
 	cmd.Dir = p.DataDir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.WaitDelay = 5 * time.Second

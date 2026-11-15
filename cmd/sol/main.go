@@ -61,6 +61,8 @@ Run the node (everything else talks to it):
                               http://127.0.0.1:8080. Running it again shows where it is.
   sol stop                    stop it
   sol restart                 stop and start it (needed after some settings change)
+  sol network-changed [reason]  tell the running node the network changed, so it re-checks its
+                              connections now (what the Android app runs on a Wi-Fi/cellular switch)
   sol logs [-f] [-n N]        what the background node has logged (-f keeps following)
   sol run [--panel ADDR]      run the node in this terminal instead, until Ctrl+C
                               (this is what systemd, launchd and containers should run)
@@ -132,7 +134,7 @@ func main() {
 	}
 	commands := map[string]func(context.Context, []string) error{
 		"start": runStart, "run": runNode, "node": runNode,
-		"stop": runStop, "restart": runRestart, "logs": runLogs, "config": runConfig,
+		"stop": runStop, "restart": runRestart, "network-changed": runNetworkChanged, "logs": runLogs, "config": runConfig,
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
 		"open": runOpen, "tunnels": runTunnels, "close": runClose, "send": runSend, "unpair": runUnpair, "name": runName,
 		"services": runServices, "service": runService, "site": runSite,

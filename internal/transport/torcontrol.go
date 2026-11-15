@@ -3,12 +3,14 @@ package transport
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/textproto"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // torControl is a minimal client for Tor's control protocol
@@ -17,11 +19,24 @@ import (
 // ONION_CLIENT_AUTH_ADD. Asynchronous events are never subscribed to on this
 // connection, so every reply belongs to the command just sent. Events are
 // read on a connection of their own (watchTorEvents).
+//
+// Every command has a deadline (torControlTimeout): a tor that has stopped
+// answering (frozen, or its control port died) must not hang the caller
+// while it holds the lock. After any I/O error the stream can no longer be
+// trusted to be in step, so the connection is closed and stays broken; the
+// supervisor then replaces that tor (tor.go).
 type torControl struct {
-	mu   sync.Mutex
-	conn net.Conn
-	tp   *textproto.Conn
+	mu     sync.Mutex
+	conn   net.Conn
+	tp     *textproto.Conn
+	broken error // the I/O error that ended this connection, if any
 }
+
+// torControlTimeout bounds one control command and its reply.
+var torControlTimeout = 20 * time.Second
+
+// errControlLost wraps the I/O error that broke a control connection.
+var errControlLost = errors.New("lost the control connection to tor")
 
 // dialTorControl connects to addr and authenticates with the cookie file.
 func dialTorControl(ctx context.Context, addr, cookiePath string) (*torControl, error) {
@@ -54,17 +69,28 @@ func dialTorControl(ctx context.Context, addr, cookiePath string) (*torControl, 
 func (c *torControl) do(cmd string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.broken != nil {
+		return nil, c.broken
+	}
+	// lost marks the connection broken and closes it: a reply that arrives
+	// late would otherwise be read as the answer to the next command.
+	lost := func(err error) ([]string, error) {
+		c.broken = fmt.Errorf("%w: %v", errControlLost, err)
+		c.conn.Close()
+		return nil, c.broken
+	}
+	c.conn.SetDeadline(time.Now().Add(torControlTimeout))
 	if err := c.tp.PrintfLine("%s", cmd); err != nil {
-		return nil, err
+		return lost(err)
 	}
 	var lines []string
 	for {
 		line, err := c.tp.ReadLine()
 		if err != nil {
-			return nil, err
+			return lost(err)
 		}
 		if len(line) < 4 {
-			return nil, fmt.Errorf("tor control: short reply %q", line)
+			return lost(fmt.Errorf("short reply %q", line))
 		}
 		code, sep, rest := line[:3], line[3], line[4:]
 		switch sep {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/apv022/sol/internal/api"
@@ -221,9 +223,153 @@ func (n *Node) Peers() []api.PeerView {
 			return !v.Connections[i].Outbound
 		})
 		v.Online = len(v.Connections) > 0
+		v.Path = n.peerPath(p)
 		out = append(out, v)
 	}
 	return out
+}
+
+// peerPath works out how this node reaches p: the transport in use (or the
+// one that last worked), and, when that isn't WireGuard, why direct mode is
+// not carrying the connection and what would change that. It only reads
+// what the dialer and the liveness supervisor know (PeerLink), the last good
+// address, and which transports are running.
+func (n *Node) peerPath(p config.Peer) api.PathView {
+	var v api.PathView
+	nameOf := func(addr string) string {
+		if t, err := n.reg.For(addr); err == nil && addr != "" {
+			return t.Name()
+		}
+		return ""
+	}
+	usable := func(name string) bool {
+		t, ok := n.reg.Get(name)
+		return ok && transport.Usable(t)
+	}
+
+	wgAddr, tlsAddr := p.Addrs["wg"], p.Addrs["direct"]
+	link, _ := n.PeerLink(p.ID)
+	n.mu.Lock()
+	last := n.lastGood[p.ID]
+	n.mu.Unlock()
+
+	// When direct is tried first again: a path in probation is preferred at
+	// PreferredAt, one in backoff is next probed at NextProbe. A direct
+	// address that isn't listed is preferred already (direct_next).
+	var retry time.Duration
+	var probation, preferred bool
+	now := time.Now()
+	for kind, a := range map[string]string{"wg": wgAddr, "direct": tlsAddr} {
+		if a == "" {
+			continue
+		}
+		dp, failed := link.Direct[kind]
+		if !failed {
+			preferred = true
+			continue
+		}
+		at, prob := dp.NextProbe, dp.State == "probation"
+		if prob {
+			at = dp.PreferredAt
+		}
+		d := at.Sub(now)
+		switch {
+		case prob && !probation, prob == probation && (retry <= 0 || d < retry):
+			retry, probation = d, prob
+		}
+	}
+	if link.Down {
+		v.Down = true
+		v.RedialIn = max(0, int(link.NextRedial.Sub(now).Round(time.Second)/time.Second))
+	}
+
+	v.Via, v.Live = link.Via, link.Live
+	if v.Via == "" {
+		v.Via = nameOf(last)
+	}
+	if order := n.addrsInOrder(p); len(order) > 0 {
+		v.Next = nameOf(order[0])
+	}
+	if v.Via == "wg" {
+		return v // the fastest path there is
+	}
+
+	who := nameOr(p)
+	port := "the direct mode port"
+	if _, pt, err := net.SplitHostPort(n.cfg.Snapshot().Transports.DirectListen); err == nil && pt != "" {
+		port = "port " + pt
+	}
+	failed := func(name string) string { // "" unless the transport is registered but broken
+		if t, ok := n.reg.Get(name); ok && !transport.Usable(t) {
+			return t.Status().Detail
+		}
+		return ""
+	}
+	switch {
+	case v.Via == "direct" && wgAddr != "" && usable("wg"):
+		v.Reason = "wg_blocked"
+		v.Detail = fmt.Sprintf("WireGuard (UDP) didn't get through to %s, so this is a direct TLS connection over TCP instead. It is still direct, only a little slower.", who)
+		v.Fix = fmt.Sprintf("Allow UDP %s in the firewall on both machines.", port)
+	case v.Via == "direct":
+		// TLS direct is the best this pair can do; nothing to explain.
+	case failed("wg") != "" || failed("direct") != "":
+		v.Reason = "direct_failed"
+		v.Detail = "Direct mode is on but couldn't start: " + cmp(failed("wg"), failed("direct")) + "."
+		v.Fix = "Check the direct mode port in Settings (another program may be using it), then restart the node."
+	case !usable("wg") && !usable("direct"):
+		if n.cfg.Snapshot().Transports.Direct {
+			v.Reason = "direct_restart"
+			v.Detail = "Direct mode is turned on but hasn't started: the node needs a restart first."
+			v.Fix = "Restart the node (Settings)."
+		} else {
+			v.Reason = "direct_off"
+			v.Detail = "Direct mode is off on this machine."
+			v.Fix = fmt.Sprintf("For a much faster connection, turn on direct mode in Settings here and on %s. Each machine then sees the other's IP address.", who)
+		}
+	case wgAddr == "" && tlsAddr == "":
+		v.Reason = "peer_no_direct"
+		v.Detail = fmt.Sprintf("Direct mode is on here, but %s hasn't given this machine a direct address: direct mode is off there, or it hasn't told this machine yet.", who)
+		v.Fix = fmt.Sprintf("Turn on direct mode on %s and restart it, then choose \"Check again\" here.", who)
+	case preferred:
+		v.Reason = "direct_next"
+		v.Detail = fmt.Sprintf("%s has a direct address. Sol tries it first on the next connection.", who)
+	case probation:
+		v.Reason = "direct_probation"
+		v.RetryIn = max(0, int(retry.Round(time.Second)/time.Second))
+		v.Detail = fmt.Sprintf("Direct to %s works again, but Sol waits until it has stayed up for a while before going back to it.", who)
+		if v.RetryIn > 0 {
+			v.Detail = fmt.Sprintf("Direct to %s works again, but Sol waits until it has stayed up for a while: it goes back to direct in %s unless it fails again.", who, roughly(retry))
+		}
+	default:
+		v.Reason = "direct_backoff"
+		v.RetryIn = max(0, int(retry.Round(time.Second)/time.Second))
+		v.Detail = fmt.Sprintf("The last direct connection to %s failed, so Sol fell back to a path that works. It checks direct again in the background", who)
+		if v.RetryIn > 0 {
+			v.Detail += " in " + roughly(retry)
+		}
+		v.Detail += ", and goes back to it once that stays reliable."
+		v.Fix = fmt.Sprintf("Usually a firewall or router is blocking %s (UDP and TCP) on one side. Allow it on both machines, or forward it on the router and set \"Forwarded addresses\" in Settings.", port)
+	}
+	return v
+}
+
+// cmp returns the first non-empty string.
+func cmp(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// roughly words a wait: "about 40 seconds", "about 12 minutes".
+func roughly(d time.Duration) string {
+	switch {
+	case d < 90*time.Second:
+		return fmt.Sprintf("about %d seconds", max(1, int(d.Seconds())))
+	case d < 90*time.Minute:
+		return fmt.Sprintf("about %d minutes", int(d.Round(time.Minute).Minutes()))
+	}
+	return "about an hour"
 }
 
 // Invite implements api.Backend: it creates a one-time token and returns
@@ -307,6 +453,155 @@ func (n *Node) SetOption(key, value string) (restart bool, err error) {
 	}
 	n.log.Add(events.KindService, "setting changed: "+key)
 	return restart, nil
+}
+
+// OptionImpact implements api.Backend: what SetOption(key, value) would do
+// to this node and its peers, in plain sentences. It changes nothing and
+// only reads the saved config, so it is right even before a restart.
+func (n *Node) OptionImpact(key, value string) (api.Impact, error) {
+	im := api.Impact{Key: key, Value: strings.TrimSpace(value)}
+	var cur config.Option
+	found := false
+	for _, o := range n.cfg.Options() {
+		if o.Key == key {
+			cur, found = o, true
+		}
+	}
+	if !found {
+		return im, fmt.Errorf("setting %q: %w", key, config.ErrNotFound)
+	}
+	im.Restart = cur.Restart
+	im.Changes = im.Value != cur.Value
+	if !im.Changes {
+		return im, nil
+	}
+	if err := n.cfg.CheckOption(key, im.Value); err != nil {
+		im.Problem = err.Error() // refused: nothing else to preview
+		return im, nil
+	}
+	say := func(format string, a ...any) { im.Effects = append(im.Effects, fmt.Sprintf(format, a...)) }
+
+	tr := n.cfg.Snapshot().Transports
+	on := map[string]bool{"tor": tr.Tor, "i2p": tr.I2P, "clearnet": tr.Clearnet, "wg": tr.Direct, "direct": tr.Direct}
+	after := maps.Clone(on)
+	turnOn := im.Value == "on"
+	switch key {
+	case "tor":
+		after["tor"] = turnOn
+	case "direct":
+		after["wg"], after["direct"] = turnOn, turnOn
+	case "clearnet":
+		after["clearnet"] = turnOn
+	}
+	reach := func(p config.Peer, enabled map[string]bool) bool {
+		for name, a := range p.Addrs {
+			if a != "" && enabled[name] {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range n.peers.List() {
+		if reach(p, on) && !reach(p, after) {
+			im.Unreachable = append(im.Unreachable, api.ImpactPeer{ID: p.ID, Name: nameOr(p)})
+		}
+	}
+	lost := make([]string, 0, len(im.Unreachable))
+	for _, p := range im.Unreachable {
+		lost = append(lost, p.Name)
+	}
+	anyLeft := after["tor"] || after["clearnet"] || after["wg"]
+
+	switch {
+	case key == "tor" && !turnOn:
+		im.Confirm = true
+		if !anyLeft {
+			say("Every way to connect would be off: no peer could reach this machine, and it could reach none.")
+		}
+		if len(lost) > 0 {
+			say("%s will be unreachable: Tor is the only way this machine knows to reach %s. Turn on direct mode on both machines first, and connect once, to keep the connection.", list(lost), them(len(lost)))
+		}
+		var public []string
+		for _, s := range n.cfg.ServiceList() {
+			if s.Visibility != config.VisibilityPrivate {
+				public = append(public, s.Name)
+			}
+		}
+		if len(public) > 0 {
+			say("The public .onion address of %s stops working.", list(public))
+		}
+		if anyLeft {
+			say("Peers reach this machine only by its IP address, so they see where it is, and it can't be reached from behind most routers without direct mode or a forwarded port.")
+		}
+	case key == "tor":
+		say("Tor starts with the node. It takes from 30 seconds to a couple of minutes before peers can reach this machine over it.")
+		say("Connections over Tor hide this machine's IP address, and work behind any router.")
+	case key == "direct" && turnOn:
+		im.Confirm = true
+		say("Peers you connect to directly see this machine's IP addresses, and it sees theirs. Connections are still encrypted and only your paired peers can connect.")
+		say("A peer is reached directly only once direct mode is on there too. Until then, and whenever a direct connection fails, Sol keeps using %s.", cmp(pick(after["tor"], "Tor"), "the other networks"))
+		say("This machine listens on %s, UDP and TCP. Allow it in the firewall.", cmp(tr.DirectListen, ":7701"))
+	case key == "direct":
+		im.Confirm = len(lost) > 0 || !anyLeft
+		if !anyLeft {
+			say("Every way to connect would be off: no peer could reach this machine, and it could reach none.")
+		}
+		if len(lost) > 0 {
+			say("%s will be unreachable: a direct address is the only way this machine knows to reach %s.", list(lost), them(len(lost)))
+		}
+		if after["tor"] {
+			say("Connections go through Tor again: slower, and peers no longer see this machine's IP address.")
+		}
+	case key == "clearnet" && turnOn:
+		im.Confirm = true
+		say("Traffic on the LAN transport is not encrypted: anyone on the same network can read it. Use it only on one network you trust, or for testing.")
+		say("Peers still prove who they are before they get in, and prefer Tor or direct mode when those are on.")
+	case key == "clearnet":
+		im.Confirm = len(lost) > 0 || !anyLeft
+		if !anyLeft {
+			say("Every way to connect would be off: no peer could reach this machine, and it could reach none.")
+		}
+		if len(lost) > 0 {
+			say("%s will be unreachable: the LAN address is the only way this machine knows to reach %s.", list(lost), them(len(lost)))
+		}
+	case key == "panel_port":
+		say("This panel moves to http://127.0.0.1:%s. Bookmarks to the old address stop working.", im.Value)
+	case key == "help_tor" && turnOn:
+		im.Confirm = true
+		say("A Snowflake proxy starts now. It contacts the Tor Project and public STUN servers from this machine's IP address, and uses some of your bandwidth.")
+	case key == "stun" && im.Value != "":
+		say("Each STUN server you list learns this machine's public IP address.")
+	}
+	if cur.Restart {
+		say("Takes effect when the node restarts. Connections drop for a few seconds.")
+	}
+	return im, nil
+}
+
+// pick returns s if ok, else "".
+func pick(ok bool, s string) string {
+	if ok {
+		return s
+	}
+	return ""
+}
+
+// list joins names for a sentence: "a", "a and b", "a, b and c".
+func list(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+func them(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // SetHelpTor implements api.Backend: it saves the choice and starts or

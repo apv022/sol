@@ -29,6 +29,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"time"
 )
 
 // ErrNotImplemented is returned by transports and features that are
@@ -51,6 +52,55 @@ type Status struct {
 	State     State             `json:"state"`
 	Detail    string            `json:"detail,omitempty"`    // e.g. "bootstrapping 80%"
 	Addresses map[string]string `json:"addresses,omitempty"` // publication ID -> public address
+
+	// The fields below are filled in by transports that supervise a program
+	// of their own (Tor), so the UI can say what is going on and since when.
+	// Others leave them empty.
+
+	// Phase is the supervisor's step: "launching", "bootstrapping",
+	// "publishing", "ready", "offline", "retrying" or "stopped" (the
+	// Phase* constants).
+	Phase string `json:"phase,omitempty"`
+	// Progress is the bootstrap percentage (0-100) of the current attempt.
+	Progress int `json:"progress,omitempty"`
+	// WaitingFor says in a few words what the current phase waits for
+	// ("a network connection"); empty when nothing is pending.
+	WaitingFor string `json:"waiting_for,omitempty"`
+	// PhaseSince is when the current phase began.
+	PhaseSince time.Time `json:"phase_since,omitzero"`
+	// Attempt counts start attempts since the transport last worked: 1 is
+	// the first try, 2 the first retry, and so on.
+	Attempt int `json:"attempt,omitempty"`
+	// RetryAt is when the next attempt starts, while Phase is "retrying".
+	RetryAt time.Time `json:"retry_at,omitzero"`
+	// Problem is why the previous attempt was given up, if one was.
+	Problem string `json:"problem,omitempty"`
+	// Restarts counts automatic recoveries since the transport started.
+	Restarts int `json:"restarts,omitempty"`
+}
+
+// peerKeepAlive is the TCP keepalive on every socket that carries a peer
+// stream end to end (direct TLS, clearnet), both dialled and accepted. A
+// path that dies silently (no FIN or RST: a phone that left the Wi-Fi, a
+// NAT that forgot the mapping) then fails within about
+// Idle + Interval*Count = 35 s on both ends, instead of Go's default of
+// over two minutes, and the stream's pipe ends. Keepalive probes carry no
+// data and are answered by the peer's kernel, so they reveal nothing new
+// about either node to the path (docs/THREAT_MODEL.md).
+var peerKeepAlive = net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 4}
+
+// listenPeerTCP listens on addr with peerKeepAlive on accepted sockets.
+func listenPeerTCP(addr string) (net.Listener, error) {
+	lc := net.ListenConfig{KeepAliveConfig: peerKeepAlive}
+	return lc.Listen(context.Background(), "tcp", addr)
+}
+
+// NetworkWatcher is implemented by transports that want to hear when the
+// machine's network may have changed (Wi-Fi switch, VPN, wake from sleep),
+// for example from a mobile OS that announces it. Calls may come in bursts;
+// the transport debounces them.
+type NetworkWatcher interface {
+	NetworkChanged(reason string)
 }
 
 // Publication describes one thing to expose through a transport.

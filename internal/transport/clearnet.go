@@ -63,7 +63,7 @@ func (c *Clearnet) Publish(ctx context.Context, p Publication) (string, error) {
 		}
 		listen = net.JoinHostPort(host, "0")
 	}
-	ln, err := net.Listen("tcp", listen)
+	ln, err := listenPeerTCP(listen)
 	if err != nil {
 		return "", fmt.Errorf("clearnet listen %s: %w", listen, err)
 	}
@@ -124,12 +124,15 @@ func (c *Clearnet) Unpublish(id string) error {
 // Handles accepts any host:port that is not an onion or I2P address.
 func (c *Clearnet) Handles(addr string) bool {
 	_, _, err := net.SplitHostPort(addr)
-	return err == nil && !IsOnion(addr) && !IsI2P(addr)
+	// Not a direct-mode address either: "sol-direct:" alone parses as a
+	// host and an empty port, and would otherwise make direct mode look
+	// available to the node when only clearnet is on.
+	return err == nil && !IsOnion(addr) && !IsI2P(addr) && !IsDirect(addr) && !IsWG(addr)
 }
 
 // Dial opens a direct TCP connection.
 func (c *Clearnet) Dial(ctx context.Context, addr string) (net.Conn, error) {
-	var d net.Dialer
+	d := net.Dialer{KeepAliveConfig: peerKeepAlive}
 	return d.DialContext(ctx, "tcp", addr)
 }
 
