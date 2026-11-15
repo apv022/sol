@@ -1,10 +1,17 @@
 version: 2
 updates:
+  # One grouped PR per ecosystem, so a bump arrives as a single change CI can pass or fail as a whole.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

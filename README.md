@@ -67,7 +67,7 @@ sudo apt install tor        # or: brew install tor · sudo pacman -S tor · sudo
 
 The script downloads the release binary for your system, checks its checksum, and never uses
 `sudo`. Other ways: grab an archive from [Releases](https://github.com/apv022/sol/releases)
-(Windows included), or build it with Go 1.24+: `go install github.com/apv022/sol/cmd/sol@latest`.
+(Windows included), or build it with Go 1.26+: `go install github.com/apv022/sol/cmd/sol@latest`.
 On a phone, there is an alpha [Android app](https://github.com/apv022/sol-mobile).
 
 **2. Start it.**

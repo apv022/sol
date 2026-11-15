@@ -115,6 +115,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
+- **Security updates:** builds use Go 1.27.4 (fixes GO-2026-6859 in `net/http`), and
+  `golang.org/x/crypto` and `golang.org/x/net` are updated past every open advisory. Building
+  from source now needs Go 1.26+. CI runs `govulncheck` on every push and weekly, and a release
+  is refused if it finds anything.
+- `install.sh` installs the newest pre-release while no stable release exists, instead of
+  failing with a broken download URL.
 - **First contact over Tor is fast again.** Reaching a new onion often took minutes: tor's lookup
   of the onion's descriptor from one directory sometimes hangs, and tor waited 120 s
   (`SocksTimeout`) before giving up, while further dials only joined the hung lookup. `Tor.Dial`
