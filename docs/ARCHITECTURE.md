@@ -62,6 +62,7 @@ files, because the laptop publishes its own onion.
 | `internal/gateway` | v0.2 HTTPS front door (stub, design in package doc) | `Run` |
 | `web` | Panel HTML/CSS/JS, embedded with `go:embed` | `FS` |
 | `internal/e2e` | Several nodes in one process (clearnet), plus an opt-in real-Tor test | |
+| `internal/faultnet` | Fault-injection test kit: a scripted fake tor and loopback TCP/SOCKS5 proxies that add latency or blackhole, reset or refuse connections (tests only; run on Linux so far) | |
 
 **Dependency rules:** only `node` and `cmd/sol` wire packages together. `api` reaches the node
 only through the `api.Backend` interface (it uses other packages for their types). The leaf
@@ -287,7 +288,7 @@ Sol.
   default), and more SOCKS requests only join the hung fetch. So `Tor.Dial` sends `HSFETCH`
   when no `HS_DESC RECEIVED` for that address arrived within `hsFetchAfter` (8 s; then every
   10 s, at most 3): tor asks another directory and the first descriptor serves the waiting
-  connection. The torrc sets `SocksTimeout 45` (a whole first contact took 9 to 14 s), and
+  connection. The torrc sets `SocksTimeout 45` (first contact to a new onion: median 17 s over 6 onions, but about 1 run in 6 still took over 2 minutes because of rendezvous stalls), and
   `ExtendedErrors`, so a failure says why (descriptor not found, introduction failed, ...).
   The node retries a failed dial after 5 s (`Options.DialRetryDelay`), 6 attempts.
 

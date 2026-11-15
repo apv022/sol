@@ -32,8 +32,9 @@ send the other files, through Tor, from anywhere. Nobody else can even find them
 
 <p align="center"><img src="docs/media/panel-home.png" width="88%" alt="Sol panel: online over Tor, with a paired machine and two open tunnels"></p>
 
-> **Early software.** Sol works and is tested on Linux, macOS and Windows, but nobody outside
-> the project has reviewed its security yet. [We're asking for that review](SECURITY.md#looking-for-review).
+> **Early software.** Sol works and its tests pass on Linux. CI covers macOS and
+> Windows too, but the newest changes (self-healing Tor and peer links) have so far only been run on
+> Linux. Nobody outside the project has reviewed its security yet. [We're asking for that review](SECURITY.md#looking-for-review).
 
 ## Why
 
@@ -188,10 +189,13 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Feature | Status |
 |---|---|
 | Tor onion services with client authorization | ✅ |
+| Tor restarts itself (failed start, stalled bootstrap, tor exit, frozen control port, network change, wake from sleep) | ✅ tested on Linux (scripted fake tor and the real Tor network) |
+| Peer links probed about every 30 s; dead paths redialled; direct falls back to Tor and returns once stable | ✅ tested on Linux with fault injection |
+| Settings checks (unusable combinations refused, impact shown before applying) | ✅ |
 | Mutual peer pairing, per-peer sharing, instant unpairing on both sides | ✅ |
 | Any TCP service; lasting tunnels from the panel's **Open** button or `sol open` | ✅ |
 | Send files between peers, both ways, SHA-256 verified, with size limits | ✅ |
-| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status, the path each connection takes and why, phone layout | ✅ |
+| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status, the path each connection takes and why, phone layout | ✅ (phone layout seen in the Android emulator only) |
 | Public services on their own onion | ✅ |
 | Static sites from a folder (`sol site add`), with an opt-in signed record of their addresses | ✅ |
 | Panel themes, layouts and your own `panel.css`; installable as an app window | ✅ |
@@ -201,7 +205,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
 | Background node (`sol`, `sol stop`, `sol logs`), settings from the CLI and the panel | ✅ |
-| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha |
+| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha: runs on an emulator, not yet verified on a real phone |
 | Release binaries for Linux, macOS, Windows (amd64, arm64) and an install script | ✅ tor installed separately |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |
@@ -210,6 +214,21 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Known-hosts directory | 🗺️ |
 
 The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
+
+### Known limitations
+
+- **First contact over Tor can still be slow.** Reaching a brand-new onion took a median of
+  89 s before the fix and 17 s after (6 new onions each). About 1 run in 6 still took over 2
+  minutes, because of Tor rendezvous stalls. Sol retries the dial, but pairing can take that long.
+- **Only tested on Linux so far.** The self-healing Tor and peer-liveness work, and its
+  fault-injection tests (`internal/faultnet`), have not yet run on macOS or Windows CI.
+- **No real-device mobile verification.** The Android app is checked on an emulator only. Battery,
+  Doze and mobile-data switching are untested on a real phone (see sol-mobile's docs).
+- **The wire protocol still changes in place** (pre-release). Versioning is planned before the
+  first public release, so until then, update both machines together.
+- **Direct mode:** opt-in; two machines behind symmetric NATs stay on Tor (Sol runs no relays).
+- **Tor is not bundled** in release binaries; install it separately. Windows has no autostart yet.
+- **No independent security review** yet.
 
 ## How Sol compares
 

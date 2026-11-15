@@ -8,80 +8,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ### Added
 - `sol network-changed [reason]` tells the running node that the network changed (the Android app
   runs it on every default-network change), so it re-checks its connections at once.
-
-### Fixed
-- **First contact over Tor is fast again.** Reaching a new onion often took minutes: tor's lookup
-  of the onion's descriptor from one directory sometimes hangs, and tor waited 120 s
-  (`SocksTimeout`) before giving up, while further dials only joined the hung lookup. `Tor.Dial`
-  now asks tor to fetch from another directory (`HSFETCH`) when no descriptor has arrived after 8 s,
-  the torrc sets `SocksTimeout 45` and `ExtendedErrors`, and a failed dial is retried after 5 s
-  instead of 20 s. Measured over 6 new onions each: median 89 s → 17 s from publish to first
-  connection. A joining node publishes the key it issues to the inviter before the pairing dial,
-  so pairing no longer re-publishes its onion right when the inviter first dials it.
-- SOCKS extended error codes from F1 on were named off by one (F5 said "missing client
-  authorization" for "wrong client authorization").
-- A peer probe cut mid-handshake (or whose held bytes never arrive) no longer logs "handshake failed:
-  malformed request"; truncated or timed-out handshakes are a debug-level "connection closed during
-  handshake". Genuinely malformed bytes are still rejected and logged as before.
-- A peer with a working tunnel no longer shows "Not connected": the panel's peer state is now connected,
-  reachable-but-idle, unreachable or unknown, matching its tunnels and link.
-
-### Changed
-- Panel polish: the leak check's "skip" badges were invisible (a class clash with the skip link), the
-  sidebar no longer squashes in short landscape windows, the tabs-on-top layout keeps Appearance on the
-  first row, stopped peers show a visible hollow dot, and the system bars on phones follow the bar colour.
-- Settings can no longer leave the node unusable: turning off the last transport, an invalid port,
-  or a port used twice is refused with a plain message next to the control.
-- `Tor.WaitReady` keeps waiting after tor is marked failed (the supervisor keeps retrying) until
-  tor is ready, the context ends or tor is stopped, instead of returning an error early.
-- **Panel redesign.** Every peer, open tunnel and connection shows the path it takes (Tor,
-  WireGuard direct, TLS direct, LAN) in plain words, and why direct mode isn't carrying it and
-  what fixes it. Tor's start-up shows its real phase, progress, time spent and retries instead of
-  a spinner; Reconnect appears only when Tor is stuck. Settings has a "How this node connects"
-  section that explains each transport and, before a change, shows whether it needs a restart and
-  which peers become unreachable (`GET /api/settings/{key}/impact`), asks before risky changes,
-  and shows the node's real running state (`running`/`pending` in `/api/settings`). Ports, STUN
-  and forwarded addresses moved under Advanced. New phone layout (tab bar, bottom sheets, 44 px
-  targets) and Android app support (`/#pair=` links, `SolAndroid` user agent).
-- The shared files page now looks like the panel: it inlines the panel's design tokens (`web.Tokens`, delimited in `web/style.css`), follows light or dark, and has a phone-friendly layout with large buttons and an empty state. Still inline CSS only, no script, same CSP.
-
-### Fixed
-- **Peer connections no longer hang on a dead path.** A stream whose path died silently (phone
-  changed networks or slept, NAT dropped the mapping, WireGuard UDP blocked) is now detected by
-  path probes, TCP keepalive and WireGuard silence, closed, and the peer redialled with backoff
-  over the next path. A failed direct path returns only after it has been stable for two minutes,
-  so it no longer flaps with Tor. `NetworkChanged` and waking from sleep re-check every peer at
-  once. `Node.PeerLink` reports the path, fallback reason and direct-path state.
-- **Tor recovers by itself.** A tor that stalled while bootstrapping, froze, lost its control port,
-  or failed to start is now replaced automatically with backoff (and a stale directory cache is
-  cleared after repeated stalls), so "Reconnect" is no longer needed. Status reports the phase,
-  bootstrap percentage, what it waits for, the attempt and the next retry. A new
-  `NetworkChanged` hook (debounced) lets the OS report network changes.
-- **Slow "online" after starting.** A node could report "your address isn't reachable yet" for
-  five minutes or more although peers could already reach it: its self-check fetched the
-  descriptor from one directory picked at random, and a slow one stalled the check until tor was
-  restarted. The node is now online as soon as tor confirms a directory accepted the descriptor
-  (about ten seconds), and a single failed check no longer marks it unreachable.
-- Panel buttons marked hidden were still shown (for example "Reconnect to Tor" while online).
-- The directory page put values from `hosts.json` into the page unescaped.
-
-### Changed
-- **Every machine is now a node, and nodes pair as peers** ([docs/PEERS.md](docs/PEERS.md)).
-  Pairing is mutual: both sides can reach each other, each chooses what it shares with the other,
-  and either can unpair (the other side is told, and live connections close on both).
-  `sol connect` and `~/.sol-client` are gone; re-pair your machines once with `sol invite` /
-  `sol pair`. The handshake, pairing link, and config format changed in place (pre-release).
-- New peers can only send you files; services are shared per peer (panel Peers tab, or
-  `sol share`). The shared-files page is a share like any other.
-- Pairing links and peer records keep addresses and access keys per transport, so I2P, a direct
-  path, or a new protocol plug in without changing pairing or the handshake.
-
-### Changed
-- **`sol` now starts the node in the background and returns.** `sol stop`, `sol restart` and
-  `sol logs [-f]` manage it; `sol run` is the old foreground behaviour, and what `sol autostart`
-  uses. Running `sol` again shows where the running node is.
-
-### Added
+- `internal/faultnet`, a fault-injection test kit (scripted fake tor, TCP/SOCKS5 proxies that add latency or blackhole, reset or refuse connections), and tests that use it for the Tor supervisor and peer liveness. These have only been run on Linux so far.
 - `SOL_BIN_TOR` (and `SOL_BIN_<NAME>` for any helper program) names the program's file directly,
   for platforms without a usable PATH. The Android app
   ([sol-mobile](https://github.com/apv022/sol-mobile)) uses it.
@@ -155,3 +82,69 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `sol audit` with a pluggable check registry.
 - Clearnet transport for LAN and tests; in-process end-to-end test suite.
 - Stubs with documented seams: I2P transport, Docker provider, gateway, directory checker.
+
+### Changed
+- Panel polish: the leak check's "skip" badges were invisible (a class clash with the skip link), the
+  sidebar no longer squashes in short landscape windows, the tabs-on-top layout keeps Appearance on the
+  first row, stopped peers show a visible hollow dot, and the system bars on phones follow the bar colour.
+- Settings can no longer leave the node unusable: turning off the last transport, an invalid port,
+  or a port used twice is refused with a plain message next to the control.
+- `Tor.WaitReady` keeps waiting after tor is marked failed (the supervisor keeps retrying) until
+  tor is ready, the context ends or tor is stopped, instead of returning an error early.
+- **Panel redesign.** Every peer, open tunnel and connection shows the path it takes (Tor,
+  WireGuard direct, TLS direct, LAN) in plain words, and why direct mode isn't carrying it and
+  what fixes it. Tor's start-up shows its real phase, progress, time spent and retries instead of
+  a spinner; Reconnect appears only when Tor is stuck. Settings has a "How this node connects"
+  section that explains each transport and, before a change, shows whether it needs a restart and
+  which peers become unreachable (`GET /api/settings/{key}/impact`), asks before risky changes,
+  and shows the node's real running state (`running`/`pending` in `/api/settings`). Ports, STUN
+  and forwarded addresses moved under Advanced. New phone layout (tab bar, bottom sheets, 44 px
+  targets) and Android app support (`/#pair=` links, `SolAndroid` user agent).
+- The shared files page now looks like the panel: it inlines the panel's design tokens (`web.Tokens`, delimited in `web/style.css`), follows light or dark, and has a phone-friendly layout with large buttons and an empty state. Still inline CSS only, no script, same CSP.
+- **Every machine is now a node, and nodes pair as peers** ([docs/PEERS.md](docs/PEERS.md)).
+  Pairing is mutual: both sides can reach each other, each chooses what it shares with the other,
+  and either can unpair (the other side is told, and live connections close on both).
+  `sol connect` and `~/.sol-client` are gone; re-pair your machines once with `sol invite` /
+  `sol pair`. The handshake, pairing link, and config format changed in place (pre-release).
+- New peers can only send you files; services are shared per peer (panel Peers tab, or
+  `sol share`). The shared-files page is a share like any other.
+- Pairing links and peer records keep addresses and access keys per transport, so I2P, a direct
+  path, or a new protocol plug in without changing pairing or the handshake.
+- **`sol` now starts the node in the background and returns.** `sol stop`, `sol restart` and
+  `sol logs [-f]` manage it; `sol run` is the old foreground behaviour, and what `sol autostart`
+  uses. Running `sol` again shows where the running node is.
+
+### Fixed
+- **First contact over Tor is fast again.** Reaching a new onion often took minutes: tor's lookup
+  of the onion's descriptor from one directory sometimes hangs, and tor waited 120 s
+  (`SocksTimeout`) before giving up, while further dials only joined the hung lookup. `Tor.Dial`
+  now asks tor to fetch from another directory (`HSFETCH`) when no descriptor has arrived after 8 s,
+  the torrc sets `SocksTimeout 45` and `ExtendedErrors`, and a failed dial is retried after 5 s
+  instead of 20 s. Measured over 6 new onions each: median 89 s → 17 s from publish to first
+  connection. A joining node publishes the key it issues to the inviter before the pairing dial,
+  so pairing no longer re-publishes its onion right when the inviter first dials it.
+- SOCKS extended error codes from F1 on were named off by one (F5 said "missing client
+  authorization" for "wrong client authorization").
+- A peer probe cut mid-handshake (or whose held bytes never arrive) no longer logs "handshake failed:
+  malformed request"; truncated or timed-out handshakes are a debug-level "connection closed during
+  handshake". Genuinely malformed bytes are still rejected and logged as before.
+- A peer with a working tunnel no longer shows "Not connected": the panel's peer state is now connected,
+  reachable-but-idle, unreachable or unknown, matching its tunnels and link.
+- **Peer connections no longer hang on a dead path.** A stream whose path died silently (phone
+  changed networks or slept, NAT dropped the mapping, WireGuard UDP blocked) is now detected by
+  path probes, TCP keepalive and WireGuard silence, closed, and the peer redialled with backoff
+  over the next path. A failed direct path returns only after it has been stable for two minutes,
+  so it no longer flaps with Tor. `NetworkChanged` and waking from sleep re-check every peer at
+  once. `Node.PeerLink` reports the path, fallback reason and direct-path state.
+- **Tor recovers by itself.** A tor that stalled while bootstrapping, froze, lost its control port,
+  or failed to start is now replaced automatically with backoff (and a stale directory cache is
+  cleared after repeated stalls), so "Reconnect" is no longer needed. Status reports the phase,
+  bootstrap percentage, what it waits for, the attempt and the next retry. A new
+  `NetworkChanged` hook (debounced) lets the OS report network changes.
+- **Slow "online" after starting.** A node could report "your address isn't reachable yet" for
+  five minutes or more although peers could already reach it: its self-check fetched the
+  descriptor from one directory picked at random, and a slow one stalled the check until tor was
+  restarted. The node is now online as soon as tor confirms a directory accepted the descriptor
+  (about ten seconds), and a single failed check no longer marks it unreachable.
+- Panel buttons marked hidden were still shown (for example "Reconnect to Tor" while online).
+- The directory page put values from `hosts.json` into the page unescaped.
