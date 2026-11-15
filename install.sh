@@ -31,9 +31,13 @@ esac
 
 tag=${SOL_VERSION:-}
 if [ -z "$tag" ]; then
-  # /releases/latest redirects to /releases/tag/<tag>.
-  tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's|.*/tag/||')
-  [ -n "$tag" ] && [ "$tag" != "latest" ] || die "couldn't find the latest release; set SOL_VERSION, or see https://github.com/$repo/releases"
+  # /releases/latest redirects to /releases/tag/<tag>, or to /releases when nothing is
+  # published yet (pre-releases don't count as "latest"), so only trust a /tag/ URL.
+  url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest") || url=
+  case $url in
+    */releases/tag/?*) tag=${url##*/tag/} ;;
+    *) die "no Sol release is published yet; build from source (go install github.com/$repo/cmd/sol@latest), or set SOL_VERSION to a pre-release from https://github.com/$repo/releases" ;;
+  esac
 fi
 version=${tag#v}
 file="sol_${version}_${os}_${arch}.tar.gz"
