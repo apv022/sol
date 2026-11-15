@@ -2,6 +2,7 @@ package blob
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -188,11 +189,13 @@ func httpGet(t *testing.T, url string) string {
 	return string(b)
 }
 
-// The files page must be built from the panel's own tokens, stay inline-only
-// and keep its security headers.
-func TestFilesPageUsesPanelTokens(t *testing.T) {
+// The files page must be built from the panel's own base (tokens, buttons,
+// row card), follow the visitor's light/dark setting, and keep strict headers:
+// no script, and the one <style> block allowed by its hash only.
+func TestFilesPageUsesPanelBase(t *testing.T) {
 	s, _ := New(t.TempDir())
 	s.PutNamed(strings.NewReader("x"), "a.txt")
+	s.NodeName = func() string { return "my<node>" }
 	srv := httptest.NewServer(s.Browser())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/")
@@ -202,22 +205,53 @@ func TestFilesPageUsesPanelTokens(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	body := string(b)
-	if !strings.Contains(body, web.Tokens()) || web.Tokens() == "" {
-		t.Fatal("page does not inline the panel's token block")
+	if web.Base() == "" || !strings.Contains(body, web.Base()) {
+		t.Fatal("page does not inline the panel's shared base")
 	}
-	if !strings.Contains(body, `data-theme="system"`) || !strings.Contains(body, "var(--accent)") {
-		t.Fatal("page does not use the panel's theme mechanism and tokens")
+	if !strings.Contains(web.Base(), "button, .button") || !strings.Contains(web.Base(), ".rows") || !strings.Contains(web.Base(), `data-theme="system"`) {
+		t.Fatal("shared base lost the buttons, row card or system theme")
 	}
-	for _, bad := range []string{"<script", "http://", "https://", "#e08a00"} {
+	if !strings.Contains(body, `data-theme="system"`) || !strings.Contains(body, `class="rows"`) || !strings.Contains(body, `class="brand"`) {
+		t.Fatal("page does not use the panel's theme mechanism, row card or header")
+	}
+	for _, bad := range []string{"<script", "http://", "https://", "#e08a00", "style="} {
 		if strings.Contains(body, bad) {
 			t.Fatalf("page contains %q", bad)
 		}
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "default-src 'none'; style-src 'unsafe-inline'" {
-		t.Fatalf("CSP = %q", csp)
+	if strings.Contains(body, "my<node>") || !strings.Contains(body, "my&lt;node&gt;") {
+		t.Fatal("node name is not escaped")
+	}
+	// The CSP must name the hash of the exact <style> text.
+	i := strings.Index(body, "<style>") + len("<style>")
+	j := strings.Index(body, "</style>")
+	sum := sha256.Sum256([]byte(body[i:j]))
+	want := "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != want {
+		t.Fatalf("CSP = %q, want %q", csp, want)
+	}
+	if strings.Contains(resp.Header.Get("Content-Security-Policy"), "unsafe-inline") {
+		t.Fatal("CSP allows unsafe-inline")
 	}
 	if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatal("security headers weakened")
+	}
+}
+
+// The owner's panel.css reaches the page (and the CSP hash still matches);
+// a stylesheet that tries to close the <style> element is ignored.
+func TestFilesPageUserCSS(t *testing.T) {
+	s, _ := New(t.TempDir())
+	css := ":root { --accent: #123456; }"
+	s.UserCSS = func() []byte { return []byte(css) }
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+	if page := httpGet(t, srv.URL+"/"); !strings.Contains(page, "#123456") {
+		t.Fatal("panel.css not applied")
+	}
+	css = "</style><script>alert(1)</script>"
+	if page := httpGet(t, srv.URL+"/"); strings.Contains(page, "<script") {
+		t.Fatal("hostile panel.css broke out of the style block")
 	}
 }
 

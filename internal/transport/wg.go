@@ -403,21 +403,35 @@ func (w *WG) serve(ln net.Listener) {
 				c.Close()
 				return
 			}
+			// Find the peer first. gVisor's RemoteAddr is nil once the stream
+			// was reset, and an untracked stream would never be cut when its
+			// tunnel dies, so a stream that can't be tied to a peer is dropped.
+			ra := c.RemoteAddr()
+			if ra == nil {
+				c.Close()
+				return
+			}
+			ap, err := netip.ParseAddrPort(ra.String())
+			if err != nil {
+				slog.Debug("wireguard: stream from an unparsable address", "addr", ra.String())
+				c.Close()
+				return
+			}
+			w.mu.Lock()
+			p, ok := w.peerByIPLocked(ap.Addr().Unmap())
+			w.mu.Unlock()
+			if !ok {
+				slog.Debug("wireguard: stream from an address that is no peer's", "addr", ap)
+				c.Close()
+				return
+			}
 			out, err := net.DialTimeout("tcp", target, 5*time.Second)
 			if err != nil {
 				slog.Debug("wireguard: node listener unreachable", "err", err)
 				c.Close()
 				return
 			}
-			if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
-				w.mu.Lock()
-				p, ok := w.peerByIPLocked(ap.Addr().Unmap())
-				w.mu.Unlock()
-				if ok {
-					c = w.track(p.pub, c)
-				}
-			}
-			netutil.Pipe(c, out)
+			netutil.Pipe(w.track(p.pub, c), out)
 		}()
 	}
 }

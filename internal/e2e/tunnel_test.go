@@ -168,10 +168,19 @@ func freePort(t *testing.T) int {
 // The point of saved tunnels: the same port works after either side
 // restarts, with nothing to do by hand.
 func TestTunnelSurvivesRestarts(t *testing.T) {
-	// a needs a fixed clearnet port so b can find it again after a restarts.
-	aDir, aAddr := t.TempDir(), fmt.Sprintf("127.0.0.1:%d", freePort(t))
-	fixed := func(o *node.Options) { o.Transports = []transport.Transport{transport.NewClearnet(aAddr, "")} }
+	// a keeps its clearnet port so b can find it again after a restarts.
+	// The first a picks a free one itself: a port from freePort can be taken
+	// by another socket before a binds it, leaving a with no address.
+	aDir, aAddr := t.TempDir(), "127.0.0.1:0"
+	var aNet *transport.Clearnet
+	fixed := func(o *node.Options) {
+		aNet = transport.NewClearnet(aAddr, "")
+		o.Transports = []transport.Transport{aNet}
+	}
 	a := startNode(t, aDir, "alpha", fixed)
+	if aAddr = aNet.Status().Addresses["node"]; aAddr == "" {
+		t.Fatal("a came up without a clearnet address")
+	}
 	bDir := t.TempDir()
 	b := startNode(t, bDir, "beta")
 	aID := shareWeb(t, a, b, "alpha says")

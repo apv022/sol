@@ -200,8 +200,12 @@ shows instead of a spinner.
 
 The panel is one page of plain HTML, CSS and JS (`web/`), installable as an app window from
 browsers that support it (`manifest.json`). Its look is separate from its logic: `style.css`
-defines every colour, the font and the text size as tokens (between the `sol:tokens` comments,
-which the shared files page inlines), the Appearance dialog switches theme, accent colour,
+defines every colour, the font and the text size as tokens, followed by a shared base (buttons, the
+row card, empty states, header branding): both sit between the `sol:tokens:begin` and
+`sol:base:end` comments, which the shared files page inlines (`web.Base()`) so it is the panel's
+own look, not a copy. The files page follows the visitor's light/dark setting (a peer cannot see
+the owner's per-browser theme and accent), shows the node name, and appends the owner's
+`panel.css`; its CSP allows its single `<style>` block by hash, no scripts. The Appearance dialog switches theme, accent colour,
 layout (tabs on top or a sidebar) and text size per browser (`localStorage`), and
 `GET /user.css` serves `panel.css` from the data directory after the built-in styles, under the
 same CSP. Below 760 px wide the panel switches to a top bar, a bottom tab bar and dialogs as

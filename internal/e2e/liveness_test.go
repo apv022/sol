@@ -160,17 +160,30 @@ func TestBlackholedDirectPathFallsBackAndReturns(t *testing.T) {
 // through a fault-injecting proxy, so tests can kill and heal its path.
 func clearnetBehind(t *testing.T, name string, lv node.Liveness) (*testNode, *faultnet.TCPProxy) {
 	t.Helper()
-	port := freePort(t)
-	proxy, err := faultnet.NewTCPProxy(fmt.Sprintf("127.0.0.1:%d", port))
+	proxy, err := faultnet.NewTCPProxy("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(proxy.Close)
-	n := newNode(t, name, func(o *node.Options) {
-		o.Transports = []transport.Transport{transport.NewClearnet(fmt.Sprintf("127.0.0.1:%d", port), proxy.Addr())}
-		o.Liveness = lv
-	})
-	return n, proxy
+	// The node advertises the proxy, so its own port must be fixed before
+	// it starts. A port from freePort can be taken by another socket before
+	// the node binds it; the node then comes up with no clearnet address
+	// (it has nothing else to publish), so try again on a fresh port.
+	for range 5 {
+		addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+		cn := transport.NewClearnet(addr, proxy.Addr())
+		n := newNode(t, name, func(o *node.Options) {
+			o.Transports = []transport.Transport{cn}
+			o.Liveness = lv
+		})
+		if cn.Status().Addresses["node"] != "" {
+			proxy.SetUpstream(addr)
+			return n, proxy
+		}
+		n.stop()
+	}
+	t.Fatal("no free port for the clearnet listener after 5 tries")
+	return nil, nil
 }
 
 // downPeer pairs b with a (reached through proxy), opens a stream, then

@@ -256,6 +256,9 @@ func New(opts Options) (*Node, error) {
 		netKick:           make(chan string, 8),
 		probeSem:          make(chan struct{}, maxProbes),
 	}
+	// The shared files page wears the owner's node name and panel.css too.
+	blobs.NodeName = func() string { return cfg.Snapshot().Name }
+	blobs.UserCSS = n.PanelCSS
 	ropts := runtime.Options{BinDir: filepath.Join(opts.DataDir, "bin"), ContainerRuntime: cfg.Snapshot().Runtime.ContainerRuntime}
 	n.helper = &snowflake.Helper{
 		DataDir: filepath.Join(opts.DataDir, "snowflake"),
@@ -816,10 +819,10 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 			}
 			break
 		}
-		target := fmt.Sprintf("127.0.0.1:%d", svc.LocalPort)
 		var err error
-		if out, err = net.DialTimeout("tcp", target, serviceDialTimeout); err != nil {
-			n.reject(c, fmt.Sprintf("service %q is not reachable on %s", req.Service, target))
+		if out, err = netutil.DialLocal(svc.LocalPort, serviceDialTimeout); err != nil {
+			n.reject(c, fmt.Sprintf("%s asked for %q, but nothing answers on 127.0.0.1:%d or [::1]:%d; is the app running?",
+				peers.Describe(p), req.Service, svc.LocalPort, svc.LocalPort))
 			return
 		}
 	}

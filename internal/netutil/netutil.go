@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Pipe copies bytes in both directions until either side closes, then closes
@@ -153,4 +154,20 @@ func ExpandSTUN(entry string) (string, error) {
 		return "", fmt.Errorf("stun %q: bad port", entry)
 	}
 	return entry, nil
+}
+
+// DialLocal connects to an app on this machine's loopback port: 127.0.0.1
+// first, then [::1]. Apps that listen on "localhost" (many Node and Bun
+// servers) often bind only the IPv6 loopback, and a service that answers
+// there must not look dead. Both addresses are loopback, so a service is
+// still never reachable from the network through this.
+func DialLocal(port int, timeout time.Duration) (net.Conn, error) {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+	if err == nil {
+		return c, nil
+	}
+	if c6, err6 := net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), timeout); err6 == nil {
+		return c6, nil
+	}
+	return nil, err
 }

@@ -13,6 +13,7 @@ package blob
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,14 @@ var (
 // temp file and are renamed into place, so readers never see partial data.
 type Store struct {
 	Dir string
+
+	// NodeName, if set, supplies the owner's node name for the shared files
+	// page header. UserCSS, if set, supplies the owner's panel.css, which the
+	// page appends after the shared base so the owner's restyling covers what
+	// their peers see too. Both are called per request; set them before the
+	// store is shared between goroutines.
+	NodeName func() string
+	UserCSS  func() []byte
 
 	mu sync.Mutex // guards the metadata file
 }
@@ -330,19 +339,32 @@ func (s *Store) Browser() http.Handler {
 			if e.Name != "" {
 				link += "/" + url.PathEscape(e.Name)
 			}
-			rows = append(rows, listRow{Name: name, Link: link, Hash: e.Hash, Size: humanSize(e.Size), When: e.Modified.Format("2 Jan 2006 15:04")})
+			rows = append(rows, listRow{Name: name, Link: link, Hash: e.Hash, Short: e.Hash[:12] + "…", Size: humanSize(e.Size), When: e.Modified.Format("2 Jan 2006 15:04")})
 		}
+		node := ""
+		if s.NodeName != nil {
+			node = s.NodeName()
+		}
+		var user []byte
+		if s.UserCSS != nil {
+			user = s.UserCSS()
+		}
+		css := pageCSS(user)
+		sum := sha256.Sum256([]byte(css))
 		h := w.Header()
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+		// The one <style> block is allowed by its hash: no 'unsafe-inline',
+		// no script at all, nothing fetched. img-src data: is the favicon.
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+
+			"'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		listPage.Execute(w, listData{Tokens: template.CSS(web.Tokens()), CSS: filesCSS, Rows: rows})
+		listPage.Execute(w, listData{CSS: template.CSS(css), Icon: template.URL(favicon()), Node: node, Rows: rows})
 	})
 	return mux
 }
 
-type listRow struct{ Name, Link, Hash, Size, When string }
+type listRow struct{ Name, Link, Hash, Short, Size, When string }
 
 func humanSize(n int64) string {
 	switch {
@@ -357,69 +379,90 @@ func humanSize(n int64) string {
 	}
 }
 
-// filesCSS is the page's own rules. Every colour, the font and the base size
-// come from the panel's tokens (web.Tokens, inlined next to this), so the
-// page follows the panel's look and themes. No JS and nothing external: the
-// page is served to peers and visitors under a CSP that allows inline style
-// only.
-const filesCSS = `
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:var(--size)/1.55 var(--mono);-webkit-text-size-adjust:100%}
-a{color:var(--accent)}
-code{font-family:var(--mono);font-size:.93em}
-header{border-bottom:1px solid var(--line);padding:14px 0}
-.brand{display:flex;align-items:center;gap:8px;font-size:1.1em;color:var(--accent);max-width:52em;margin:0 auto;padding:0 16px}
-.sun{width:18px;height:18px;flex:none}
-.brand .muted{font-size:.9em}
-.muted{color:var(--muted)}
-main{max-width:52em;margin:0 auto;padding:20px 16px 48px}
-h1{font-size:1.25em;line-height:1.3;margin:0 0 6px}
-.lede{margin:0 0 18px;color:var(--muted)}
-.lede b{color:var(--ok);font-weight:700}
-ul{list-style:none;margin:0;padding:0}
-.file{border-top:1px solid var(--line);padding:14px 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:center}
-.file:last-child{border-bottom:1px solid var(--line)}
-.name{font-weight:700;overflow-wrap:anywhere;word-break:break-word}
-.meta{color:var(--muted);font-size:.9em}
-.hash{grid-column:1/-1;color:var(--muted);font-size:.8em;overflow-wrap:anywhere;word-break:break-all}
-.actions{display:flex;gap:8px}
-.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:6px 16px;border:1px solid var(--accent);border-radius:2px;color:var(--accent);font-weight:700;text-decoration:none;white-space:nowrap}
-.button:hover,.button.primary{background:var(--accent);color:var(--accent-ink)}
-.button.primary:hover{filter:brightness(1.1)}
-.button.ghost{color:var(--ink);border-color:var(--line);font-weight:400}
-.button.ghost:hover{background:var(--panel-2);color:var(--ink);border-color:var(--muted)}
-.button:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
-.empty{border:1px dashed var(--line);padding:28px 16px;text-align:center;color:var(--muted)}
-.empty b{display:block;color:var(--ink);margin-bottom:4px}
-@media (max-width:560px){
- .file{grid-template-columns:minmax(0,1fr)}
- .actions .button{flex:1}
+// pageCSS is the whole <style> block: the panel's own base (web.Base: tokens,
+// typography, buttons, the row card, empty states), the page's few layout
+// rules, then the owner's panel.css if there is one. The page's CSP names the
+// hash of exactly this text.
+func pageCSS(user []byte) string {
+	var b strings.Builder
+	b.WriteString(web.Base())
+	b.WriteString(pageRules)
+	// A stylesheet cannot close the element it sits in; refuse one that tries
+	// (the CSP already stops scripts, this keeps the markup intact too).
+	if u := string(user); u != "" && !strings.Contains(u, "<") {
+		b.WriteString("\n/* panel.css */\n")
+		b.WriteString(u)
+	}
+	return b.String()
+}
+
+// favicon is the panel's icon as a data: URL, so the page fetches nothing.
+func favicon() string {
+	b, err := web.FS.ReadFile("icon.svg")
+	if err != nil {
+		return ""
+	}
+	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(b)
+}
+
+// pageRules is what the shared page adds to the panel's base: a header and a
+// centred column (the panel's own shell is a sidebar, which a visitor page
+// has no use for), and the fingerprint line. Everything else (buttons, the
+// .rows/.file card, .empty, .tag) is the panel's, so there is nothing to keep
+// in step by hand. Only tokens: no colour or font is written here.
+const pageRules = `
+body { overflow-x: visible; }
+.top { background: var(--panel); border-bottom: 1px solid var(--line); }
+.top > div, main { max-width: 60rem; margin: 0 auto; }
+.top > div { padding: 12px 20px; }
+.brand b { font-size: 1em; }
+main { padding: 28px 20px 72px; }
+h1 { margin-bottom: 6px; }
+.lede { margin: 0 0 20px; }
+.lede b { color: var(--ok); }
+.file { align-items: flex-start; }
+.file .fname { display: block; }
+.file .meta { margin-top: 2px; }
+.fp { margin-top: 6px; }
+.fp summary { cursor: pointer; color: var(--muted); }
+.fp summary:hover { color: var(--ink); }
+.fp .full { display: block; margin-top: 4px; user-select: all; overflow-wrap: anywhere; word-break: break-all; }
+@media (max-width: 760px) {
+  .top > div { padding: 10px 16px; }
+  main { padding: 20px 16px 48px; }
+  .file { padding: 12px 14px; }
+  .file .button { flex: 1; min-height: 44px; }
 }
 `
 
 // listPage is rendered with html/template, which escapes every value. The
-// page opts into the panel's "system" theme, so it follows the visitor's
-// light or dark setting with the same tokens and no script.
+// page opts into the panel's "system" theme: a visitor cannot see the owner's
+// per-browser choice, so it follows the visitor's own light or dark setting
+// with the panel's tokens and no script.
 var listPage = template.Must(template.New("files").Parse(`<!doctype html>
 <html lang="en" data-theme="system"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
-<title>Shared files · Sol</title>
-<style>{{.Tokens}}{{.CSS}}</style></head><body>
-<header><div class="brand"><svg class="sun" viewBox="0 0 64 64" aria-hidden="true" fill="currentColor"><circle cx="32" cy="32" r="8"/><g fill="none" stroke="currentColor" stroke-linecap="round"><path stroke-width="5" d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/><path stroke-width="5" d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></svg><b>sol</b><span class="muted">shared files</span></div></header>
+<link rel="icon" href="{{.Icon}}" type="image/svg+xml">
+<title>Shared files · {{if .Node}}{{.Node}}{{else}}Sol{{end}}</title>
+<style>{{.CSS}}</style></head><body>
+<header class="top"><div class="brand"><svg class="sun" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="8" fill="currentColor" stroke="none"/><g fill="none" stroke="currentColor" stroke-linecap="round"><path stroke-width="5" d="M15.26 34.95A17 17 0 1 1 29.05 48.74"/><path stroke-width="5" d="M57.61 27.49A26 26 0 1 1 36.51 6.39"/></g></svg><b>sol</b>{{if .Node}}<span class="muted">{{.Node}}</span>{{end}}</div></header>
 <main>
 <h1>Shared files</h1>
-<p class="lede"><b>Verified connection.</b> Shared from a Sol node; only its peers can open this page. The fingerprint (SHA-256) under each file lets you check that what you downloaded is exactly what was shared.</p>
-{{if .Rows}}<ul>{{range .Rows}}
-<li class="file">
-  <div><div class="name">{{.Name}}</div><div class="meta">{{.Size}} · {{.When}}</div></div>
-  <div class="actions"><a class="button ghost" href="{{.Link}}">Open</a><a class="button primary" href="{{.Link}}?download">Download</a></div>
-  <code class="hash" title="SHA-256">{{.Hash}}</code>
-</li>{{end}}</ul>{{else}}<div class="empty"><b>No files shared yet.</b>Add some in the Sol panel on your node (Files tab).</div>{{end}}
+<p class="lede"><b>Verified connection.</b> Shared from a Sol node; only its peers can open this page. The fingerprint (SHA-256) of each file lets you check that what you downloaded is exactly what was shared.</p>
+{{if .Rows}}<div class="rows">{{range .Rows}}
+<div class="file">
+  <div class="grow"><b class="fname">{{.Name}}</b>
+    <div class="meta muted small">{{.Size}} · {{.When}}</div>
+    <details class="fp small"><summary>SHA-256 <code title="SHA-256">{{.Short}}</code></summary><code class="full">{{.Hash}}</code></details></div>
+  <div class="actions"><a class="button ghost small" href="{{.Link}}">Open</a><a class="button small" href="{{.Link}}?download">Download</a></div>
+</div>{{end}}</div>{{else}}<div class="empty"><p><b>No files shared yet.</b></p><p class="muted">Add some in the Sol panel on your node (Files screen).</p></div>{{end}}
 </main></body></html>`))
 
-// listData is what listPage renders. Tokens is the panel's own token block.
+// listData is what listPage renders.
 type listData struct {
-	Tokens, CSS template.CSS
-	Rows        []listRow
+	CSS  template.CSS
+	Icon template.URL
+	Node string
+	Rows []listRow
 }

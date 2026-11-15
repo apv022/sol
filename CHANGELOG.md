@@ -115,6 +115,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
+- **Apps that listen on `localhost` over IPv6 now work.** A service whose app binds only `[::1]`
+  (many Node and Bun servers, e.g. opencode) gave peers an empty reply and showed as not
+  running; Sol now tries `127.0.0.1` and then `[::1]`, both loopback only. The node's log names
+  the peer and both addresses when nothing answers.
+- A crash in direct mode when a WireGuard stream was reset before it was set up (macOS CI), and
+  such streams are now always tied to their peer so they are cut when the tunnel dies.
+- The shared files page now uses the panel's own stylesheet base (header with the node name,
+  rows, buttons), follows the visitor's light or dark setting, applies the owner's `panel.css`,
+  and uses a hash-based CSP instead of `'unsafe-inline'` styles.
 - **Security updates:** builds use Go 1.27.4 (fixes GO-2026-6859 in `net/http`), and
   `golang.org/x/crypto` and `golang.org/x/net` are updated past every open advisory. Building
   from source now needs Go 1.26+. CI runs `govulncheck` on every push and weekly, and a release

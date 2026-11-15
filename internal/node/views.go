@@ -19,6 +19,7 @@ import (
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/events"
+	"github.com/apv022/sol/internal/netutil"
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/transport"
@@ -87,7 +88,7 @@ func (n *Node) Services() []api.ServiceView {
 			out[i].Running = n.siteHandler(out[i].Name) != nil
 			continue
 		}
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", out[i].LocalPort), 300*time.Millisecond)
+		c, err := netutil.DialLocal(out[i].LocalPort, 300*time.Millisecond)
 		if err == nil {
 			c.Close()
 			out[i].Running = true
