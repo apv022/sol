@@ -126,6 +126,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
+- A service renamed while a peer was opening it no longer cuts that new stream.
 - **Direct connections stay direct on slower machines.** Opening a stream over a live
   WireGuard tunnel sent a punch, which made an initiating peer reset its session, and the TCP
   connect only got what the handshake left of its time budget. Both made dials fall back to

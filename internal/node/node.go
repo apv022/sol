@@ -807,16 +807,31 @@ func (n *Node) learnShares(id string) {
 }
 
 func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
-	if !p.Shared(req.Service) {
+	// Check the share and register the stream in one step under renameMu: a
+	// rename renames registered streams, so from here on n.conns[c].service
+	// is the service's current name. (Registering later let a rename slip in
+	// between, and the stream was then checked, and cut, under its old name.)
+	n.renameMu.RLock()
+	cur, ok := n.peers.Lookup(req.Key)
+	if !ok || !cur.Shared(req.Service) {
+		n.renameMu.RUnlock()
 		n.reject(c, fmt.Sprintf("%s asked for %q, which isn't shared with it", peers.Describe(p), truncate(req.Service, 40)))
 		return
+	}
+	first := n.track(c, connInfo{peer: p.ID, service: req.Service, since: time.Now().UTC()})
+	n.renameMu.RUnlock()
+	defer n.untrack(c)
+	current := func() string {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.conns[c].service
 	}
 	var out net.Conn      // an app: the connection to its local port
 	var site http.Handler // a site: the node serves it itself
 	switch req.Service {
 	case peers.Inbox, peers.Files:
 	default:
-		svc, ok := n.cfg.Service(req.Service)
+		svc, ok := n.cfg.Service(current())
 		if !ok {
 			n.reject(c, fmt.Sprintf("%s asked for %q, which no longer exists", peers.Describe(p), truncate(req.Service, 40)))
 			return
@@ -846,17 +861,14 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 		return
 	}
 	n.peers.Touch(p.ID)
-	if n.track(c, connInfo{peer: p.ID, service: req.Service, since: time.Now().UTC()}) {
-		n.log.Add(events.KindConnect, fmt.Sprintf("%s connected to %s (signature verified)", peers.Describe(p), req.Service))
+	if first {
+		n.log.Add(events.KindConnect, fmt.Sprintf("%s connected to %s (signature verified)", peers.Describe(p), current()))
 	}
-	defer n.untrack(c)
-	// Close the race with a removal that happened after Lookup. A rename
-	// meanwhile renamed the tracked connection too: check under that name.
+	// Close the race with an unshare or removal that happened meanwhile. A
+	// rename renamed the registered stream too, so check under that name.
 	n.renameMu.RLock()
-	n.mu.Lock()
-	svcName := n.conns[c].service
-	n.mu.Unlock()
-	cur, ok := n.peers.Lookup(req.Key)
+	svcName := current()
+	cur, ok = n.peers.Lookup(req.Key)
 	n.renameMu.RUnlock()
 	if !ok || !cur.Shared(svcName) {
 		closeAll()
