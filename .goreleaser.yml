@@ -22,5 +22,10 @@ archives:
 checksum:
   name_template: checksums.txt
 
+release:
+  # v0.1.0-rc1 and the like are published as pre-releases, so install.sh
+  # (which follows "latest") never picks one up.
+  prerelease: auto
+
 changelog:
   use: github-native

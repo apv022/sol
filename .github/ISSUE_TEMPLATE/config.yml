@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/apv022/sol/security/advisories/new
+    about: Please don't open a public issue for security problems.
+  - name: Question, or "is this a good idea?"
+    url: https://github.com/apv022/sol/discussions
+    about: Ask in Discussions. No question is too basic.
+  - name: The Android app
+    url: https://github.com/apv022/sol-mobile/issues
+    about: Problems specific to Sol for Android.

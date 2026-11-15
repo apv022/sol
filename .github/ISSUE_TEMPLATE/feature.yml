@@ -1,0 +1,19 @@
+name: Idea or feature request
+description: Something Sol should do, or do better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. "I want my partner to open our photo library from her phone" beats "add a gateway".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: textarea
+    id: today
+    attributes:
+      label: What do you do today instead?

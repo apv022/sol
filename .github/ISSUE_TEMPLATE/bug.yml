@@ -1,0 +1,35 @@
+name: Bug report
+description: Something doesn't work the way the docs say
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problem? Please **don't** file it here: use
+        [Report a vulnerability](https://github.com/apv022/sol/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Sol version and OS
+      description: "`sol version`, and e.g. Ubuntu 24.04 / macOS 15 / Windows 11"
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: How were the machines connected?
+      options: [Tor, "Direct mode (WireGuard)", "Direct mode (TLS)", "LAN transport", Not sure]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did, what you expected, what happened
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "`sol logs -n 60` from the machine(s) involved. Remove pairing links and any onion address you don't want public."
+      render: text

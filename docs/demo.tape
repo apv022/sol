@@ -1,7 +1,8 @@
 # Record the README demo GIF with https://github.com/charmbracelet/vhs :
 #   vhs docs/demo.tape
-# Prepare first: `sol` running here and on a machine called "home" that shares a
-# "navidrome" service with this one, and a fresh pairing link from "home" in $LINK.
+# Prepare first: `sol` running here and on a machine called "home" that has a
+# "navidrome" service, and a fresh pairing link from "home" (`sol invite`) in $LINK.
+# On "home", share it once the pairing below is done: sol share <this machine> navidrome
 Output docs/demo.gif
 Set FontSize 18
 Set Width 1100
@@ -12,6 +13,9 @@ Type "sol pair '$LINK'"
 Sleep 500ms
 Enter
 Sleep 40s
+Type "sol peers -r"
+Enter
+Sleep 15s
 Type "sol open home"
 Enter
 Sleep 30s
