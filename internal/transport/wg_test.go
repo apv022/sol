@@ -422,3 +422,46 @@ func TestWireGuardStreamOnResetSessionIsCut(t *testing.T) {
 		t.Fatalf("stream on a dead, reset tunnel still open after %s", wait)
 	}
 }
+
+// Dialing over a live tunnel sends no punch. An initiating peer takes a
+// punch to mean the other side lost its session and resets its own, which
+// stalled the very dial that sent it (seen on slower machines, where the
+// punch came after the one-second guard in onPunch).
+func TestWireGuardDialOnLiveTunnelDoesNotReset(t *testing.T) {
+	a, aAddr := startWG(t)
+	b, bAddr := startWG(t)
+	a.SetPeer(bAddr)
+	b.SetPeer(aAddr)
+	init, resp, initAddr := a, b, aAddr
+	if !a.initiator(a.peers[b.pub]) {
+		init, resp, initAddr = b, a, bAddr
+	}
+	upOn := func(w, other *WG) bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.peers[other.pub].up
+	}
+	c, err := resp.Dial(context.Background(), initAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	for end := time.Now().Add(5 * time.Second); !upOn(init, resp) || !upOn(resp, init); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the loops never marked the tunnel up")
+		}
+	}
+	time.Sleep(1100 * time.Millisecond) // past onPunch's one-second guard
+	c, err = resp.Dial(context.Background(), initAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	time.Sleep(300 * time.Millisecond) // a punch would have arrived by now
+	init.mu.Lock()
+	reset := !init.peers[resp.pub].lastRst.IsZero()
+	init.mu.Unlock()
+	if reset {
+		t.Fatal("a dial over a live tunnel made the initiating peer reset its session")
+	}
+}

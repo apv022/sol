@@ -601,12 +601,14 @@ func (w *WG) configureLocked(p *wgPeer) {
 }
 
 // Dial opens a TCP stream to the peer's node through the tunnel, waiting up
-// to WGDialTimeout for a handshake if there is no tunnel yet.
+// to WGDialTimeout for a handshake if there is no tunnel yet, and up to
+// WGDialTimeout more for the stream itself.
 func (w *WG) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if err := w.SetPeer(addr); err != nil {
 		return nil, err
 	}
 	pub, _, _ := ParseWGAddr(addr)
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, WGDialTimeout)
 	defer cancel()
 	w.mu.Lock()
@@ -618,15 +620,21 @@ func (w *WG) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if len(p.cands) == 0 {
 		return nil, errors.New("no direct path: no usable address")
 	}
-	// Punch first. The responder answers with a punch, which makes us (or,
-	// if we are the responder, the peer) start the handshake through the
-	// freshly opened NATs. If no answer comes (no NAT in the way, or a lost
-	// packet), the initiator starts it anyway after a moment.
-	w.punch(p)
+	// Without a tunnel, punch first. The responder answers with a punch,
+	// which makes us (or, if we are the responder, the peer) start the
+	// handshake through the freshly opened NATs. If no answer comes (no NAT
+	// in the way, or a lost packet), the initiator starts it anyway after a
+	// moment. Never punch through a live tunnel: an initiating peer takes a
+	// punch to mean we lost the session and resets its own (onPunch), which
+	// would stall this very dial.
+	fresh := w.fresh(pub)
+	if !fresh {
+		w.punch(p)
+	}
 	w.mu.Lock()
 	start := w.initiator(p)
 	w.mu.Unlock()
-	if start {
+	if start && !fresh {
 		go func() {
 			select {
 			case <-ctx.Done():
@@ -644,7 +652,14 @@ func (w *WG) Dial(ctx context.Context, addr string) (net.Conn, error) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	c, err := tnet.DialContextTCPAddrPort(ctx, netip.AddrPortFrom(p.ip, tunnelNodePort))
+	// The stream gets a budget of its own, not what the handshake left: a
+	// handshake that just completed can leave a fraction of a second, and
+	// the first SYN, sent while the session settles, may need tcp's 1 s
+	// retransmit (seen on slower machines, which then fell back for no
+	// reason).
+	tctx, tcancel := context.WithTimeout(parent, WGDialTimeout)
+	defer tcancel()
+	c, err := tnet.DialContextTCPAddrPort(tctx, netip.AddrPortFrom(p.ip, tunnelNodePort))
 	if err != nil {
 		return nil, fmt.Errorf("no direct path: %w", err)
 	}

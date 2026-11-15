@@ -278,6 +278,15 @@ func TestWireGuardSilentTunnelIsCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	// The stream itself must ride the tunnel, or cutting the tunnel can't
+	// end it (a dial that stalled on WireGuard falls back to clearnet).
+	for _, p := range b.Peers() {
+		for _, cv := range p.Connections {
+			if p.ID == aOnB.ID && cv.Outbound && cv.Service == "_inbox" && cv.Via != "wg" {
+				t.Fatalf("the stream went via %q, not the tunnel", cv.Via)
+			}
+		}
+	}
 	udp.Drop(true)
 	// Cut once nothing is heard for silent, noticed on the transport's
 	// next 500 ms tick; the rest is margin for a slow, raced runner. The

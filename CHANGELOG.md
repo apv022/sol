@@ -126,6 +126,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
+- **Direct connections stay direct on slower machines.** Opening a stream over a live
+  WireGuard tunnel sent a punch, which made an initiating peer reset its session, and the TCP
+  connect only got what the handshake left of its time budget. Both made dials fall back to
+  Tor or clearnet for no reason (and failed the macOS CI). A live tunnel is no longer punched,
+  and the stream gets its own budget.
 - **Apps that listen on `localhost` over IPv6 now work.** A service whose app binds only `[::1]`
   (many Node and Bun servers, e.g. opencode) gave peers an empty reply and showed as not
   running; Sol now tries `127.0.0.1` and then `[::1]`, both loopback only. The node's log names
