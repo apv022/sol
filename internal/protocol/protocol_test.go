@@ -76,18 +76,18 @@ func TestWrongNodeDetected(t *testing.T) {
 // readHello reads the node's hello from a raw client connection.
 func readHello(t *testing.T, c net.Conn) (nodePub, nonce []byte) {
 	t.Helper()
-	c.Write([]byte(magic))
+	c.Write(prefix(Supported()))
 	h := make([]byte, helloSize)
 	if _, err := io.ReadFull(c, h); err != nil {
 		t.Fatal(err)
 	}
-	return h[4:36], h[36:]
+	return h[prefixSize : prefixSize+32], h[prefixSize+32:]
 }
 
 // sign returns the base64 signature over req for one callee and nonce.
 func sign(t *testing.T, id *identity.Identity, pub, nonce []byte, req *Request) string {
 	t.Helper()
-	msg, err := signedMessage(pub, nonce, req)
+	msg, err := signedMessage(pub, nonce, negotiated{Version, Supported(), Supported()}, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,8 +258,9 @@ func TestEmptyDirectSignsLikeNone(t *testing.T) {
 	id, _ := identity.Generate()
 	callee, _ := identity.Generate()
 	nonce := make([]byte, nonceSize)
-	a, _ := signedMessage(callee.Public(), nonce, &Request{Op: OpList, Direct: map[string]string{}})
-	b, _ := signedMessage(callee.Public(), nonce, &Request{Op: OpList})
+	nv := negotiated{Version, Supported(), Supported()}
+	a, _ := signedMessage(callee.Public(), nonce, nv, &Request{Op: OpList, Direct: map[string]string{}})
+	b, _ := signedMessage(callee.Public(), nonce, nv, &Request{Op: OpList})
 	if string(a) != string(b) {
 		t.Fatal("empty and absent Direct sign differently")
 	}
@@ -270,7 +271,7 @@ func TestEmptyDirectSignsLikeNone(t *testing.T) {
 // handshake, not malformed bytes: the node logs it quietly.
 func TestTruncatedHandshakeIsNotMalformed(t *testing.T) {
 	node, _ := identity.Generate()
-	for name, send := range map[string][]byte{"partial magic": []byte("SO"), "magic then partial frame": []byte("SOL1\x00\x40{")} {
+	for name, send := range map[string][]byte{"partial magic": []byte("SO"), "magic then partial frame": append(prefix(Supported()), "\x00\x40{"...)} {
 		c, s := net.Pipe()
 		errc := make(chan error, 1)
 		go func() { _, err := ReadRequest(s, node); errc <- err; s.Close() }()

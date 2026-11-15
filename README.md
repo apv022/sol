@@ -227,8 +227,9 @@ The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
   fault-injection tests (`internal/faultnet`), have not yet run on macOS or Windows CI.
 - **No real-device mobile verification.** The Android app is checked on an emulator only. Battery,
   Doze and mobile-data switching are untested on a real phone (see sol-mobile's docs).
-- **The wire protocol still changes in place** (pre-release). Versioning is planned before the
-  first public release, so until then, update both machines together.
+- **The wire protocol is versioned from v0.1.0** (protocol version 1). Nodes from before that
+  speak an unversioned format and can't talk to it, so update every machine once. After that, a
+  peer on an incompatible version shows as such, saying which machine to update.
 - **Direct mode:** opt-in; two machines behind symmetric NATs stay on Tor (Sol runs no relays).
 - **Tor is not bundled** in release binaries; install it separately. Windows has no autostart yet.
 - **No independent security review** yet.

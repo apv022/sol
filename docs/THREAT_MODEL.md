@@ -16,6 +16,8 @@ says plainly what is and isn't protected in the current build. The longer design
 | Port scanners and HTTP probes | The client must speak first with magic bytes; anything else gets no reply | `protocol.ReadRequest` |
 | A replayed handshake | Every connection signs a fresh 32-byte nonce from the node | `protocol` |
 | A man in the middle changing the target service, or swapping in their own address or key while pairing | The signature covers op, service, secret, the joiner's whole card, the callee's key, and the nonce | `protocol.signedMessage` |
+| A man in the middle forcing an older protocol version (downgrade) | Both version ranges, as each side sent and received them, and the negotiated version are signed; a rewritten hello breaks the signature | `protocol.signedMessage`, `protocol.Negotiate` |
+| A caller on an incompatible Sol learning about the node | It gets only the 8-byte hello prefix (magic and version range) that every Sol caller gets first, then the connection closes: no key, no nonce, no reply to a request | `protocol.ReadRequest` |
 | A peer opening more than you meant to share | Each peer reaches only the services in its own share list. New peers get the inbox only. Unsharing closes its open connections to that service | `node.handleConnect`, `Node.SetShare` |
 | A stolen or lost machine | Unpair it on any of your other machines. Its live connections close at once, in both directions, and its Tor key is removed from the onion | `node` hooks, `peers.Peers.Remove` |
 | A peer filling your disk or sending something nasty | Received files are capped (4 GiB each, 20 GiB in total), stored by hash, named safely, kept off your shared-files page, and served with a `sandbox` CSP. Browsers can't be tricked into sending (PUT only, `Origin` refused) | `node/inbox.go`, `blob` |
@@ -37,6 +39,15 @@ says plainly what is and isn't protected in the current build. The longer design
 | A hostile `panel.css` | It is served under the panel's CSP, so it can restyle the panel but not run script or load anything from elsewhere. Only your own user can write it | `api.userCSS` |
 
 ## What is NOT protected (yet, or ever)
+
+- **The version range in the hello is visible before authentication.** Anyone who can reach the
+  node and sends the Sol magic learns which protocol versions it speaks, and so roughly which
+  Sol release it runs. Over Tor that is only holders of a client-auth key (peers); on direct TLS
+  only dialers who already know the node ID; WireGuard answers only peers. It's what lets a
+  dialer say "update Sol" without the callee answering a refused request. The "incompatible"
+  verdict itself is unauthenticated: someone on the path could fake one, but they could just as
+  well drop the connection, and a fake verdict can't make the two nodes use an older version
+  (the version is signed).
 
 - **Your paired peers, and a STUN server if you choose one, learn your public IP.** With direct
   mode on, the node asks its paired peers which address its packets come from (peer

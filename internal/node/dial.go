@@ -179,17 +179,20 @@ func (n *Node) dialOnce(ctx context.Context, p config.Peer, req protocol.Request
 		// the caller's context still ends it early, so a path that went
 		// silent between dial and handshake doesn't hold a probe or redial.
 		stop := context.AfterFunc(dctx, func() { conn.Close() })
-		err = protocol.ClientHandshake(conn, n.id, p.NodeID, req)
+		err = n.opts.Protocol.ClientHandshake(conn, n.id, p.NodeID, req)
 		if !stop() && err == nil {
 			err = fmt.Errorf("handshake cut short: %w", dctx.Err())
 		}
 		cancel()
 		if err != nil {
 			conn.Close()
-			if isFast(addr) && !errors.Is(err, protocol.ErrRejected) && blameDirect(ctx, attempt) {
+			if isFast(addr) && !errors.Is(err, protocol.ErrRejected) && !errors.Is(err, protocol.ErrIncompatible) && blameDirect(ctx, attempt) {
 				// TLS worked but the path breaks (a middlebox, ...)
 				n.directFailed(p.ID, addr, explain(err))
 				n.noteFallback(p.ID, t.Name()+" failed: "+explain(err))
+			}
+			if errors.Is(err, protocol.ErrIncompatible) {
+				return nil, n.noteIncompatible(p, err) // the same on every path
 			}
 			if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
 				return nil, err // the peer answered; another path will not help
@@ -233,8 +236,9 @@ func (n *Node) dial(ctx context.Context, p config.Peer, req protocol.Request, re
 		if conn, err = n.dialOnce(ctx, p, req); err == nil {
 			return conn, nil
 		}
-		if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) || ctx.Err() != nil {
-			return nil, err
+		if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) ||
+			errors.Is(err, protocol.ErrIncompatible) || ctx.Err() != nil {
+			return nil, err // retrying can't help (an incompatible peer needs an update)
 		}
 		if attempt < attempts {
 			n.log.Add(events.KindTransport, fmt.Sprintf("can't reach %s yet (%s); retrying in %s", nameOr(p), explain(err), n.opts.DialRetryDelay))

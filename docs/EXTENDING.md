@@ -110,6 +110,7 @@ authenticated stream, which is all it needs per browser request.
 
 ## Changing the protocol
 
-Sol is pre-release: change the handshake in place, update [PROTOCOL.md](PROTOCOL.md) and the
-tests, and re-pair. From the first public release on, follow "Versioning" in PROTOCOL.md (new magic
-bytes, and branch on the ClientHello in `protocol.ReadRequest`).
+The handshake is versioned (protocol version 1 is locked). Never change a version in place: follow
+"Versioning" in [PROTOCOL.md](PROTOCOL.md). Raise `protocol.MaxVersion`, keep version 1's code, and
+branch on the negotiated version after the hellos in `protocol.ReadRequest` and
+`ClientHandshake`; the 8-byte hello prefix stays as it is. Add tests for old/new pairs both ways.

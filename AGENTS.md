@@ -52,8 +52,9 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 3. **Never log secrets**: pairing secrets, keys, Tor client-auth keys, request bodies.
 4. **The panel stays loopback-only** with the Host check and CSRF. Don't loosen `api.guard`.
 5. **Escape everything in the panel**: every API value goes through `esc()` in `web/app.js`.
-6. **Protocol changes:** Sol is pre-release, so change the handshake in place and update
-   `docs/PROTOCOL.md` and the tests. From the first public release, version it instead.
+6. **Protocol changes:** the handshake is versioned from v0.1.0 (`protocol.MinVersion`..`MaxVersion`,
+   negotiated in the hellos; pairing links carry `v`). Never change a version in place: add a new
+   one, keep the old one's code, and update `docs/PROTOCOL.md` ("Versioning") and the tests.
 7. Files with secrets are `0600`, directories `0700`, config writes go through `config.WriteFileAtomic`.
 8. **Be honest about stubs.** Unbuilt features return `ErrNotImplemented` or an audit `skip`, never fake success.
 9. Godoc on every exported identifier; a package doc comment in every package explaining its job

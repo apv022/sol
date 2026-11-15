@@ -3,6 +3,7 @@ package pairing
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,14 +73,45 @@ func TestLinkRoundTrip(t *testing.T) {
 func TestParseLinkRejects(t *testing.T) {
 	id, _ := identity.Generate()
 	for _, s := range []string{
-		"https://pair?node=x",
-		"sol://pair?node=bad&s=x&clearnet=h:1",
-		"sol://pair?node=" + id.NodeID() + "&clearnet=h:1",            // no secret
-		"sol://pair?node=" + id.NodeID() + "&s=x",                     // no address
-		"sol://pair?node=" + id.NodeID() + "&s=x&auth.tor=only-a-key", // access but no address
+		"https://pair?v=1&node=x",
+		"sol://pair?v=1&node=bad&s=x&clearnet=h:1",
+		"sol://pair?v=1&node=" + id.NodeID() + "&clearnet=h:1",            // no secret
+		"sol://pair?v=1&node=" + id.NodeID() + "&s=x",                     // no address
+		"sol://pair?v=1&node=" + id.NodeID() + "&s=x&auth.tor=only-a-key", // access but no address
 	} {
 		if _, err := ParseLink(s); err == nil {
 			t.Errorf("accepted %q", s)
+		}
+	}
+}
+
+func TestLinkVersion(t *testing.T) {
+	id, _ := identity.Generate()
+	base := "sol://pair?node=" + id.NodeID() + "&s=x&clearnet=h:1"
+	if !strings.Contains(Link{NodeID: id.NodeID(), Secret: "x", Addrs: map[string]string{"clearnet": "h:1"}}.String(), "v=1") {
+		t.Fatal("String doesn't write v=1")
+	}
+	if _, err := ParseLink(base + "&v=1"); err != nil {
+		t.Fatalf("v=1: %v", err)
+	}
+	for _, v := range []string{"2", "99"} {
+		_, err := ParseLink(base + "&v=" + v)
+		if !errors.Is(err, ErrLinkVersion) || !strings.Contains(err.Error(), "update Sol") {
+			t.Errorf("v=%s: want ErrLinkVersion, got %v", v, err)
+		}
+	}
+	// A newer link is reported as newer even if the rest is a format we
+	// can't parse (no node, no secret).
+	if _, err := ParseLink("sol://pair?v=7&whatever=1"); !errors.Is(err, ErrLinkVersion) {
+		t.Errorf("future link with unknown fields: %v", err)
+	}
+	for _, v := range []string{"", "0", "-1", "abc", "1.0", "01x"} {
+		s := base
+		if v != "" {
+			s += "&v=" + v
+		}
+		if _, err := ParseLink(s); err == nil || errors.Is(err, ErrLinkVersion) {
+			t.Errorf("v=%q: want a plain error, got %v", v, err)
 		}
 	}
 }

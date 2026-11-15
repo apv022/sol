@@ -5,8 +5,8 @@ node (the caller) opens a stream to the other (the callee) over any transport an
 handshake. The implementation is [`internal/protocol`](../internal/protocol/protocol.go); how peers
 are created and what they may open is in [PEERS.md](PEERS.md).
 
-Sol is pre-release, so this format changes in place. From the first public release on, any change
-needs a new magic (see Versioning).
+This page specifies **protocol version 1**, locked for v0.1.0. A locked version never changes;
+a change is a new version, negotiated as described under Versioning.
 
 ## Goals
 
@@ -16,6 +16,9 @@ needs a new magic (see Versioning).
 - **No clocks, no replay cache.** Every connection gets a fresh random challenge.
 - **Silent to scanners.** The caller speaks first, and the callee sends nothing to anything that
   doesn't open with the Sol magic bytes.
+- **Predictable across versions.** Nodes on different Sol releases agree on the highest protocol
+  version both speak, or each learns which side has to update, without the callee ever sending
+  a rejection.
 - **Transport-agnostic.** The handshake runs on any byte stream (Tor, I2P, clearnet, or a future
   direct path). Transport-specific data (addresses, access keys) only appears inside maps keyed by
   transport name.
@@ -24,10 +27,11 @@ needs a new magic (see Versioning).
 
 ```
 caller                                   callee
-  |  ClientHello  "SOL1"                  |
+  |  ClientHello  "SOLH" | min | max      |
   |-------------------------------------->|   anything else: close, send nothing
   |                                       |
-  |  Hello  "SOL1" | callee_pub | nonce   |
+  |  Hello  "SOLH" | min | max            |   no common version: only these 8 bytes, then close
+  |         | callee_pub | nonce          |
   |<--------------------------------------|   callee_pub: 32-byte ed25519 key
   |                                       |   nonce:      32 fresh random bytes
   |  Request  u16 len | JSON              |
@@ -42,11 +46,41 @@ caller                                   callee
 All integers are big-endian. A frame is a 2-byte length (1 to 8192) followed by that many bytes.
 The whole handshake must finish within 45 seconds.
 
+`min` and `max` are 2-byte unsigned integers: the inclusive range of protocol versions the sender
+speaks (this build: `1`..`1`). A range is valid when `1 <= min <= max`; a ClientHello with an
+invalid range is treated like a non-Sol client (closed, nothing sent), and a Hello with one is
+`ErrMalformed` to the caller. The first 8 bytes of both hellos (magic, `min`, `max`) are the
+same in every protocol version, past and future. Everything after them is defined by the
+negotiated version; this page describes version 1.
+
+### Negotiation
+
+Each side computes the same thing from the two ranges: the negotiated version is
+`min(caller.max, callee.max)` if that is at least `max(caller.min, callee.min)`, otherwise there
+is none.
+
+- **A common version exists.** The callee sends its full Hello. The caller puts the negotiated
+  version in `Request.v` and signs it together with both ranges (below). The callee checks that
+  `v` is exactly the version it computed itself.
+- **No common version.** The callee sends only the 8-byte Hello prefix and closes. That prefix is
+  exactly what every Sol caller receives first anyway, so an incompatible caller learns nothing
+  a compatible one doesn't (it learns less: no key, no nonce), and the callee still sends nothing
+  that depends on who the caller is or what it asked for. The caller sees the callee's range and
+  stops before sending a request, with `ErrIncompatible` saying which side is older:
+  "alpha runs an older Sol (protocol 1; this node needs 2 or newer). Update Sol on alpha", or
+  "... runs a newer Sol ... Update Sol on this machine".
+
+Why the version travels in the hello and not in peer records or pairing cards: a peer's version
+changes whenever it updates, without anything being re-exchanged, and the hello is the one
+message that reaches the caller before any decision is made. Putting the callee's range in the
+existing first bytes means the dialer can always tell "update Sol" apart from "rejected" without
+the callee ever replying to a request it refuses (AGENTS.md rule 2).
+
 ### Request (JSON)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `v` | int | `1` |
+| `v` | int | The negotiated protocol version (`1`) |
 | `op` | string | `connect`, `pair`, `list`, or `unpair` |
 | `service` | string | Target service for `connect` |
 | `secret` | string | One-time pairing secret for `pair` |
@@ -63,8 +97,16 @@ joiner issued for the inviter, e.g. the Tor client-auth private key).
 The caller signs this byte string, where `lp(x)` is a 2-byte length followed by `x`:
 
 ```
-lp("sol handshake") | lp(callee_pub) | lp(nonce) | lp(op) | lp(service) | lp(secret) | lp(card_json)
+lp("sol handshake") | lp(versions) | lp(callee_pub) | lp(nonce) | lp(op) | lp(service) | lp(secret)
+  | lp(card_json) | lp(direct_json)
 ```
+
+`versions` is 10 bytes, five 2-byte integers: the negotiated version, the caller's `min` and
+`max` (as in its ClientHello), and the callee's `min` and `max` (as in its Hello). Each side uses
+what it sent itself and what it received, so if anyone on the path rewrote either hello (say, to
+make both sides settle on an older version with a known weakness), the two sides disagree on
+these bytes and the signature fails. `direct_json` is the `direct` map of a `list` request
+(sorted keys), or empty.
 
 `card_json` is `encoding/json`'s encoding of the card (deterministic: struct order, sorted map
 keys), or empty when there is no card. Covering `callee_pub` and `nonce` means a signature works
@@ -227,9 +269,14 @@ Removing a peer drops its key and republishes the onion.
 ## Pairing link
 
 ```
-sol://pair?node=<node id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port>&auth.tor=<key>
+sol://pair?v=1&node=<node id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port>&auth.tor=<key>
 ```
 
+`v` is the link format version (`1`) and is checked before anything else: a link with a higher
+`v` fails with "this pairing link was made by a newer Sol; update Sol on this machine" whatever
+the rest holds, and a link without `v` (from a pre-release Sol) or with a non-numeric one is
+refused as invalid. The link format is versioned separately from the handshake, since it is read
+by people and other apps (QR codes, the Android app) and changes for different reasons.
 `node` and `s` are required, plus at least one address. Every parameter other than `v`, `node`,
 `name` and `s` names a transport: `<transport>=<address>` or `auth.<transport>=<credential>`
 (for example `direct=sol-direct:...`). The
@@ -237,7 +284,24 @@ link is a password: it is single use and expires after 10 minutes.
 
 ## Versioning
 
-Until the first public release, the format changes in place and everyone re-pairs. After that, a
-breaking change must use new magic bytes (for example `SOL2`) so that old nodes reject new callers
-silently rather than misparsing them. Nodes may support several versions by branching on the
-ClientHello.
+The protocol is versioned from v0.1.0, and version 1 is the format on this page. Rules:
+
+- **Never change a version in place.** Any change to the bytes after the hello prefix, the
+  request fields, the signed message, or the meaning of a reply is a new version number.
+- **The hello prefix never changes.** `"SOLH" | min | max` is how every version, old or new,
+  learns the other side's range. Don't change the magic again: it would make old nodes treat new
+  ones as scanners, and they could not say "update Sol".
+- **Support a range.** A release adds a version by raising `protocol.MaxVersion` and keeping the
+  older one's code, and drops one only on purpose by raising `protocol.MinVersion` (say, a
+  release or two later, or for a security fix). Code after the hellos branches on the negotiated
+  version.
+- **Additive JSON fields** that old nodes can ignore (unknown fields are ignored) still need a new
+  version if they are signed, because the signed message is fixed per version.
+- **Pairing links** carry their own `v` (above); a new link format raises it.
+
+A dialer that finds a peer incompatible logs it once (again only if the peer's range changes),
+shows it on the peer ("alpha runs an older Sol; update Sol on alpha"), fails user dials at once
+with that message (no retries, no other paths), and the liveness supervisor redials such a peer
+only at its slowest pace (5 minutes), so the peer's update is noticed without a restart. The
+callee logs an incompatible caller at most once an hour per version range; it can't say which
+peer it was, since nothing about the caller is authenticated before the request.

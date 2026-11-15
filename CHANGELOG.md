@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Versioned handshake (protocol version 1, locked for v0.1.0).** Both hellos carry the sender's
+  supported version range and the nodes use the highest version both speak. The negotiated
+  version and both ranges are signed, so a man in the middle can't force a downgrade. A peer that
+  speaks no common version shows as incompatible in the panel and `sol peers` ("alpha runs an
+  older Sol; update Sol on alpha"), is logged once, fails dials at once instead of retrying, and
+  is checked back only at the slowest redial pace. The callee still sends nothing to a caller it
+  refuses: an incompatible caller gets only the 8-byte hello prefix every Sol caller gets.
+- Pairing links carry a format version (`v=1`); a link from a newer Sol says "update Sol" instead
+  of failing to parse.
 - **Edit a service in place** (panel: Edit on each service; `sol service edit <name> [--port N]
   [--http|--tcp] [--rename NEW]`, `sol site edit <name> [--folder DIR] [--record|--no-record]`;
   `PATCH /api/services/{name}`). New connections use the new port at once; open streams keep
@@ -95,6 +104,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Stubs with documented seams: I2P transport, Docker provider, gateway, directory checker.
 
 ### Changed
+- The handshake's magic is now `SOLH` with a version range, replacing the unversioned `SOL1`:
+  nodes from before this change can't talk to nodes after it (update both; pairings are kept).
+  Pairing links without `v` are refused.
 - Panel polish: the leak check's "skip" badges were invisible (a class clash with the skip link), the
   sidebar no longer squashes in short landscape windows, the tabs-on-top layout keeps Appearance on the
   first row, stopped peers show a visible hollow dot, and the system bars on phones follow the bar colour.

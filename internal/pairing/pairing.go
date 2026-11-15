@@ -24,6 +24,7 @@ import (
 	"maps"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,15 @@ const DefaultTTL = 10 * time.Minute
 
 // LinkScheme is the URL scheme of pairing links.
 const LinkScheme = "sol"
+
+// LinkVersion is the pairing link format this build writes and reads (the
+// link's "v" parameter). A link with a newer version gets ErrLinkVersion,
+// so the user is told to update instead of seeing a parse error.
+const LinkVersion = 1
+
+// ErrLinkVersion means a pairing link was made by a Sol whose link format
+// this build doesn't know.
+var ErrLinkVersion = errors.New("this pairing link was made by a newer Sol; update Sol on this machine and try again")
 
 // ErrInvalidToken is returned for unknown, expired, or already-used secrets.
 var ErrInvalidToken = errors.New("invalid or expired pairing token")
@@ -146,9 +156,9 @@ func (m *Manager) purgeLocked() {
 
 // Link is everything another node needs to pair with the inviter.
 //
-//	sol://pair?node=<id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port>&auth.tor=<key>
+//	sol://pair?v=1&node=<id>&name=<name>&s=<secret>&tor=<onion>&clearnet=<host:port>&auth.tor=<key>
 //
-// Every parameter that isn't one of the fixed ones names a transport: a bare
+// "v" is the link format (LinkVersion) and is required. Every parameter that isn't one of the fixed ones names a transport: a bare
 // "<transport>=" is an address and "auth.<transport>=" a credential, so a new
 // transport needs no change here.
 type Link struct {
@@ -167,6 +177,7 @@ var fixed = []string{"v", "node", "name", "s"}
 // String encodes the link.
 func (l Link) String() string {
 	q := url.Values{}
+	q.Set("v", strconv.Itoa(LinkVersion))
 	q.Set("node", l.NodeID)
 	if l.Name != "" {
 		q.Set("name", l.Name)
@@ -185,7 +196,8 @@ func (l Link) String() string {
 	return LinkScheme + "://pair?" + q.Encode()
 }
 
-// ParseLink decodes a pairing link.
+// ParseLink decodes a pairing link. The version is checked first, so a link
+// from a newer Sol fails with ErrLinkVersion whatever else it holds.
 func ParseLink(s string) (Link, error) {
 	u, err := url.Parse(strings.TrimSpace(s))
 	if err != nil {
@@ -195,6 +207,16 @@ func ParseLink(s string) (Link, error) {
 		return Link{}, errors.New("not a sol://pair link")
 	}
 	q := u.Query()
+	switch v := q.Get("v"); {
+	case v == "":
+		return Link{}, errors.New("this pairing link has no version: it was made by a pre-release Sol. Update Sol on the other machine and make a new link")
+	case v == strconv.Itoa(LinkVersion):
+	default:
+		if n, err := strconv.Atoi(v); err == nil && n > LinkVersion {
+			return Link{}, fmt.Errorf("%w (link version %d, this Sol reads %d)", ErrLinkVersion, n, LinkVersion)
+		}
+		return Link{}, errors.New("not a valid pairing link: bad version")
+	}
 	l := Link{
 		NodeID: q.Get("node"),
 		Name:   q.Get("name"),

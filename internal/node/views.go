@@ -355,11 +355,29 @@ func (n *Node) Peers() []api.PeerView {
 			return !v.Connections[i].Outbound
 		})
 		v.Path = n.peerPath(p)
+		v.Incompatible = n.compatView(p)
 		v.State = n.peerState(p.ID, len(v.Connections) > 0, v.Path)
+		if v.Incompatible != nil && v.State != "connected" {
+			v.State = "incompatible"
+		}
 		v.Online = v.State == "connected" || v.State == "idle"
 		out = append(out, v)
 	}
 	return out
+}
+
+// compatView reports a protocol version mismatch with p, or nil.
+func (n *Node) compatView(p config.Peer) *api.CompatView {
+	link, _ := n.PeerLink(p.ID)
+	ie := link.Incompatible
+	if ie == nil {
+		return nil
+	}
+	v := &api.CompatView{Update: "self", Peer: ie.Remote.String(), Local: ie.Local.String(), Detail: incompatText(nameOr(p), ie) + "."}
+	if ie.PeerOlder() {
+		v.Update = "peer"
+	}
+	return v
 }
 
 // peerState is the peer's truthful state, consistent with its tunnels: a

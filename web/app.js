@@ -220,6 +220,9 @@ function viaBadge(via, extra = "") {
   return `<span class="via ${esc(p.cls)}" title="${esc(p.means)}">${esc(p.label)}${extra ? ` <span class="via-x">${esc(extra)}</span>` : ""}</span>`;
 }
 
+// Who must update Sol when a peer and this node share no protocol version.
+const compatTitle = p => p.incompatible.update === "peer" ? `Update Sol on ${p.name}` : "Update Sol on this machine";
+
 // The path block of a peer: which way its connections go, what that means,
 // and, when direct mode could be faster but isn't carrying them, why not and
 // what fixes it (PeerView.path, worked out by the node).
@@ -234,7 +237,14 @@ function pathBlock(p) {
       <p class="muted small">This machine hasn't connected to ${esc(p.name)} since it started.${path.next
         ? ` The next connection tries ${esc(pathOf(path.next).label)} first.` : ""}</p>`;
   }
-  if (path.down) {
+  if (p.incompatible) {
+    // It answered, but speaks no protocol version this node does: only an
+    // update fixes it, so this replaces "not reachable".
+    html += `<div class="why"><b>${esc(compatTitle(p))}</b>
+      <p>${esc(p.incompatible.detail)}</p>
+      <p class="muted small">Protocol versions: ${esc(p.name)} ${esc(p.incompatible.peer)}, this machine ${esc(p.incompatible.local)}.</p>
+      <div class="actions start"><button class="ghost small" data-action="refresh-peer" data-arg="${esc(p.id)}">Check again</button></div></div>`;
+  } else if (path.down) {
     const redial = path.redial_in ? new Date(Date.now() + path.redial_in * 1000).toISOString() : "";
     html += `<div class="why"><b>Not reachable right now</b>
       <p>${esc(p.name)} didn't answer. Sol keeps trying${redial ? `; next try in ${untilSpan(redial)}` : ""}.</p></div>`;
@@ -482,7 +492,7 @@ function renderSidebar() {
     `<span class="chip ${esc(t.state)}" title="${esc(pathOf(t.name).label + ": " + (t.detail || t.state))}"><span class="dot ${esc(t.state)}"></span>${esc(pathShort(t.name))}</span>`).join("");
   $("side-peers").innerHTML = state.peers.length ? state.peers.map(p => {
     const path = p.path || {};
-    const label = path.via && (path.live || p.online) ? pathShort(path.via) : p.online ? "online" : "idle";
+    const label = p.incompatible ? "update Sol" : path.via && (path.live || p.online) ? pathShort(path.via) : p.online ? "online" : "idle";
     return `<button class="side-peer ${p.id === onlyPeer ? "active" : ""}" data-action="show-peer" data-arg="${esc(p.id)}"
       title="${esc(p.name)}"><span class="dot ${p.online ? "ready" : "stopped"}"></span><span class="name">${esc(p.name)}</span>
       <span class="path">${esc(label)}</span></button>`;
@@ -514,8 +524,9 @@ function renderHome() {
     return `<button class="peer-row" data-action="show-peer" data-arg="${esc(p.id)}">
       <span class="dot ${p.online ? "ready" : "stopped"}"></span>
       <span class="pr-main"><b>${esc(p.name)}</b>
-        <span class="muted small">${p.state === "connected" ? "connected now" : p.online ? "reachable, idle" : "last seen " + esc(ago(p.last_seen))}${theirs.length ? " · shares " + esc(theirs.join(", ")) : ""}</span></span>
-      ${path.via ? viaBadge(path.via) : ""}${path.reason && path.reason !== "direct_off" ? `<span class="flag" title="${esc(path.detail || "")}">!</span>` : ""}
+        <span class="muted small">${p.incompatible ? esc(compatTitle(p)) : p.state === "connected" ? "connected now" : p.online ? "reachable, idle" : "last seen " + esc(ago(p.last_seen))}${theirs.length ? " · shares " + esc(theirs.join(", ")) : ""}</span></span>
+      ${path.via ? viaBadge(path.via) : ""}${p.incompatible ? `<span class="flag" title="${esc(p.incompatible.detail || "")}">!</span>`
+        : path.reason && path.reason !== "direct_off" ? `<span class="flag" title="${esc(path.detail || "")}">!</span>` : ""}
     </button>`;
   }).join("")}</div>`
     : `<div class="empty"><p>No peers yet. Pair another machine that runs Sol to open each other's apps and send files.</p>
@@ -761,7 +772,7 @@ function renderPeers() {
     return `<article class="card device ${p.online ? "online" : ""}">
       <div class="card-head"><h3><span class="dot ${p.online ? "ready" : "stopped"}"></span>${esc(p.name)}</h3>
         <button class="ghost small danger-text" data-action="unpair" data-arg="${esc(p.id)}">Unpair</button></div>
-      <p class="${p.online ? "okline" : "muted"} small">${p.state === "connected" ? "✓ Connected and verified" : p.state === "idle" ? "Reachable, nothing open right now · last seen " + esc(ago(p.last_seen)) : p.state === "unreachable" ? "Unreachable right now · last seen " + esc(ago(p.last_seen)) : "Not connected · last seen " + esc(ago(p.last_seen))}</p>
+      <p class="${p.online ? "okline" : "muted"} small">${p.state === "connected" ? "✓ Connected and verified" : p.state === "idle" ? "Reachable, nothing open right now · last seen " + esc(ago(p.last_seen)) : p.state === "unreachable" ? "Unreachable right now · last seen " + esc(ago(p.last_seen)) : p.state === "incompatible" ? "Can't connect: it runs an incompatible Sol version" : "Not connected · last seen " + esc(ago(p.last_seen))}</p>
 
       <div class="pathbox">${pathBlock(p)}</div>
 

@@ -160,12 +160,27 @@ type PeerView struct {
 	// State is "connected" (a verified connection is open either way, and
 	// every one passed the signed handshake with this peer's key), "idle"
 	// (nothing open right now, but the last attempt or probe reached it, or
-	// a tunnel to it works), "unreachable" (the last redial failed) or
-	// "unknown" (nothing has reached it since this node started).
+	// a tunnel to it works), "unreachable" (the last redial failed),
+	// "incompatible" (it answered, but speaks no protocol version this node
+	// does; see Incompatible) or "unknown" (nothing has reached it since
+	// this node started).
 	State       string           `json:"state"`
 	Connections []ConnectionView `json:"connections"`
 	// Path is how this node reaches the peer, and why not a faster way.
 	Path PathView `json:"path"`
+	// Incompatible is set while the peer and this node share no protocol
+	// version, so one of them must update Sol.
+	Incompatible *CompatView `json:"incompatible,omitempty"`
+}
+
+// CompatView says why a peer and this node can't talk: their Sol versions
+// speak no common protocol version.
+type CompatView struct {
+	// Update is who must update Sol: "peer" (it is older) or "self".
+	Update string `json:"update"`
+	Peer   string `json:"peer"`   // the peer's protocol versions, "1" or "1-3"
+	Local  string `json:"local"`  // this node's
+	Detail string `json:"detail"` // one plain sentence for the panel and CLI
 }
 
 // PathView says which transport carries this node's connections to a peer

@@ -352,6 +352,9 @@ func (n *Node) controlView(p config.Peer, refreshErr error) control.PeerView {
 		}
 	}
 	n.mu.Unlock()
+	if c := n.compatView(p); c != nil {
+		v.Incompatible = c.Detail
+	}
 	if refreshErr != nil {
 		v.Error = refreshErr.Error()
 	} else if v.ID != "" && n.recentlyReached(p.ID) {

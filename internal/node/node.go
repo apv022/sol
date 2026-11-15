@@ -91,6 +91,10 @@ type Options struct {
 	// Liveness tunes how dead peer paths are detected and recovered
 	// (liveness.go); the zero value means the defaults.
 	Liveness Liveness
+	// Protocol is the handshake version range this node speaks; the zero
+	// value means this build's (protocol.Supported). Tests set it to stand
+	// in for an older or newer Sol.
+	Protocol protocol.Versions
 }
 
 // Node is a Sol node.
@@ -131,8 +135,9 @@ type Node struct {
 	lastGood map[string]string // peer id -> address that last worked
 	// peer id -> last refreshDirect (dial.go)
 	lastDirectRefresh map[string]time.Time
-	directFail        map[string]directFailure // failKey -> last failed direct address
-	links             map[string]*peerLink     // peer id -> liveness state (liveness.go)
+	directFail        map[string]directFailure        // failKey -> last failed direct address
+	links             map[string]*peerLink            // peer id -> liveness state (liveness.go)
+	incompatSeen      map[protocol.Versions]time.Time // caller range -> last logged (compat.go)
 
 	netKick  chan string   // network-change signals for the supervisor (liveness.go)
 	probeSem chan struct{} // caps concurrent liveness probes
@@ -691,7 +696,14 @@ func (n *Node) reject(c net.Conn, why string) {
 }
 
 func (n *Node) handleConn(c net.Conn) {
-	req, err := protocol.ReadRequest(c, n.id)
+	req, err := n.opts.Protocol.ReadRequest(c, n.id)
+	if errors.Is(err, protocol.ErrIncompatible) {
+		// The caller got our hello prefix (our version range) and nothing
+		// more; it reports the mismatch on its side.
+		c.Close()
+		n.logIncompatibleCaller(err)
+		return
+	}
 	if errors.Is(err, protocol.ErrNoData) {
 		c.Close() // a reachability probe (e.g. Tor's self-check); not worth logging
 		return

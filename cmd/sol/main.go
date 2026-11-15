@@ -472,6 +472,9 @@ func runPeers(ctx context.Context, args []string) error {
 		if p.Online {
 			state = "online"
 		}
+		if p.Incompatible != "" {
+			state = "incompatible"
+		}
 		fmt.Printf("%s  (%s, %s)\n", p.Name, p.ID, state)
 		var theirs []string
 		for _, s := range p.Services {
@@ -483,7 +486,9 @@ func runPeers(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("  shares with you: %s\n", listOrNone(theirs))
 		fmt.Printf("  you share:       %s\n", listOrNone(mine))
-		if p.Error != "" {
+		if p.Incompatible != "" {
+			fmt.Printf("  incompatible:    %s\n", p.Incompatible)
+		} else if p.Error != "" {
 			fmt.Printf("  couldn't refresh: %s\n", p.Error)
 		}
 	}

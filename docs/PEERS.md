@@ -57,6 +57,15 @@ the callee sends its key and a nonce, the caller signs. The callee then checks:
 
 Otherwise it closes without sending a byte. `op` is one of `connect`, `pair`, `list`, `unpair`.
 
+Peers can run different Sol releases (a desktop and the Android app update at different times).
+The two hellos carry each side's protocol version range and the handshake uses the highest
+version both speak. If they share none, the peer shows as **incompatible** in the panel and in
+`sol peers`, saying which machine to update ("alpha runs an older Sol; update Sol on alpha"), the
+node logs it once, and it checks back only every few minutes instead of retrying. Nothing is lost:
+once one side updates, the next attempt connects. Pairing links carry a format version too; a
+link from a newer Sol says to update instead of failing to parse. Details: PROTOCOL.md,
+"Versioning".
+
 ## Built-in services
 
 | Name | What | Shared by default |

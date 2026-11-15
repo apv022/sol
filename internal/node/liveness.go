@@ -149,6 +149,10 @@ type peerLink struct {
 	fallback   string // why the last connection didn't go direct
 	fallbackAt time.Time
 
+	// incompat: the last handshake found no common protocol version
+	// (compat.go). Cleared when a handshake succeeds again.
+	incompat *protocol.IncompatibleError
+
 	busy bool // a probe for this peer is running
 }
 
@@ -171,12 +175,18 @@ func (n *Node) noteReached(id, addr, via string) {
 		return
 	}
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	l := n.linkLocked(id)
 	l.via, l.addr, l.lastOK = via, addr, time.Now()
 	l.down, l.lastErr, l.redialWait = false, "", 0
+	wasIncompat := l.incompat != nil
+	l.incompat = nil
 	if isFast(addr) {
 		l.fallback, l.fallbackAt = "", time.Time{}
+	}
+	n.mu.Unlock()
+	if wasIncompat {
+		p, _ := n.peers.Get(id)
+		n.log.Add(events.KindTransport, nameOr(p)+" now runs a compatible Sol; connections work again")
 	}
 }
 
@@ -426,7 +436,10 @@ func (n *Node) probe(p config.Peer, addr string) error {
 	// the probe's shorter one wins by closing the stream.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	if err := protocol.ClientHandshake(conn, n.id, p.NodeID, protocol.Request{Op: protocol.OpList}); err != nil {
+	if err := n.opts.Protocol.ClientHandshake(conn, n.id, p.NodeID, protocol.Request{Op: protocol.OpList}); err != nil {
+		if errors.Is(err, protocol.ErrIncompatible) {
+			return n.noteIncompatible(p, err)
+		}
 		return orTimeout(ctx, err)
 	}
 	if _, err := protocol.ReadPeerInfo(conn); err != nil {
@@ -462,9 +475,9 @@ func (n *Node) checkPaths(p config.Peer, addrs []string) {
 			}
 			continue
 		}
-		if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) {
+		if errors.Is(err, protocol.ErrRejected) || errors.Is(err, protocol.ErrWrongNode) || errors.Is(err, protocol.ErrIncompatible) {
 			n.mu.Unlock()
-			continue // the peer answered: the path works (it may have unpaired)
+			continue // the peer answered: the path works (it may have unpaired, or updated)
 		}
 		l.misses[addr]++
 		dead := l.misses[addr] >= lv.Misses
@@ -525,6 +538,11 @@ func (n *Node) redial(p config.Peer) {
 	}
 	l.lastErr = explain(err)
 	l.redialWait = min(max(l.redialWait*2, lv.RedialMin), lv.RedialMax)
+	if errors.Is(err, protocol.ErrIncompatible) {
+		// Only an update fixes this: check back at the slowest pace, which
+		// still notices the update without a restart.
+		l.lastErr, l.redialWait = err.Error(), lv.RedialMax
+	}
 	l.redialAt = time.Now().Add(jitter(l.redialWait))
 }
 
@@ -533,6 +551,9 @@ func (n *Node) probeDirect(p config.Peer, addr string) {
 	err := n.probe(p, addr)
 	if n.ctx.Err() != nil {
 		return
+	}
+	if errors.Is(err, protocol.ErrIncompatible) {
+		return // the path works; the peer needs an update
 	}
 	if err != nil && !errors.Is(err, protocol.ErrRejected) {
 		n.directFailed(p.ID, addr, explain(err))
@@ -597,6 +618,9 @@ type PeerLink struct {
 	// Direct describes the peer's direct paths ("wg", "direct") this node
 	// has had trouble with; a path that isn't listed is preferred.
 	Direct map[string]DirectPath
+	// Incompatible is set when the last handshake with the peer found no
+	// common protocol version: one side must update Sol.
+	Incompatible *protocol.IncompatibleError
 }
 
 // DirectPath is the state of one direct path that failed.
@@ -639,6 +663,10 @@ func (n *Node) PeerLink(id string) (PeerLink, bool) {
 			out.NextRedial = l.redialAt
 		}
 		out.Fallback, out.FallbackAt = l.fallback, l.fallbackAt
+		if l.incompat != nil {
+			cp := *l.incompat
+			out.Incompatible = &cp
+		}
 	}
 	for _, kind := range []string{"wg", "direct"} {
 		a := p.Addrs[kind]

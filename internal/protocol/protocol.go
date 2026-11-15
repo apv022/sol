@@ -5,14 +5,23 @@
 // connection is a raw byte pipe to the requested service. The full
 // specification, including the byte layout, is in docs/PROTOCOL.md.
 //
-//	caller -> callee : ClientHello = "SOL1"
-//	callee -> caller : Hello       = "SOL1" | callee ed25519 pubkey (32) | nonce (32)
+//	caller -> callee : ClientHello = "SOLH" | min u16 | max u16
+//	callee -> caller : Hello       = "SOLH" | min u16 | max u16 | callee ed25519 pubkey (32) | nonce (32)
 //	caller -> callee : Request     = uint16 length | JSON {v, op, service, pubkey, sig, ...}
 //	callee -> caller : 0x01 (OK), optionally followed by a JSON frame
 //	                   or the callee closes the connection without sending anything.
 //
 // The caller speaks first, so anything that is not a Sol node (port
 // scanners, HTTP probes) gets no bytes back at all.
+//
+// Both hellos open with the same 8 bytes, fixed for every protocol version:
+// the magic and the sender's supported version range. Each side picks the
+// highest version both speak (Negotiate). When the ranges don't overlap the
+// callee sends only those 8 bytes, which every Sol caller gets anyway, and
+// closes; the caller reports an *IncompatibleError that says which side must
+// update. The negotiated version and both ranges are covered by the
+// signature, so a man in the middle who rewrites a hello to force an older
+// version breaks the signature.
 //
 // The signature covers a domain-separation tag, the callee's public key, the
 // fresh nonce, and every request field (including the pairing card), so a
@@ -23,8 +32,8 @@
 // signed. Deciding whether the key is a peer is the caller's job (see
 // internal/node).
 //
-// Sol is pre-release: this format changes in place until the first public
-// release, after which changes need a new magic (see docs/PROTOCOL.md).
+// The protocol is versioned from v0.1.0. Version 1 is locked: never change
+// a version in place, add a new one (docs/PROTOCOL.md, "Versioning").
 package protocol
 
 import (
@@ -44,8 +53,56 @@ import (
 	"github.com/apv022/sol/internal/identity"
 )
 
-// Version is the protocol version carried in Request.V.
-const Version = 1
+// The protocol versions this build speaks. Raise MaxVersion when adding a
+// version; raise MinVersion only to drop an old one on purpose.
+const (
+	MinVersion = 1
+	MaxVersion = 1
+)
+
+// Version is the newest protocol version this build speaks.
+const Version = MaxVersion
+
+// Versions is an inclusive range of protocol versions. The zero value means
+// this build's range (MinVersion..MaxVersion).
+//
+// A version above MaxVersion runs the version 1 layout: such ranges exist
+// only in tests that exercise negotiation. A real version 2 branches on the
+// negotiated version.
+type Versions struct {
+	Min, Max uint16
+}
+
+// Supported returns this build's range.
+func Supported() Versions { return Versions{MinVersion, MaxVersion} }
+
+func (v Versions) orDefault() Versions {
+	if v == (Versions{}) {
+		return Supported()
+	}
+	return v
+}
+
+// Valid reports whether v is a usable range: 1 <= Min <= Max.
+func (v Versions) Valid() bool { return v.Min >= 1 && v.Min <= v.Max }
+
+// String renders v as "1" or "1-3".
+func (v Versions) String() string {
+	if v.Min == v.Max {
+		return fmt.Sprint(v.Min)
+	}
+	return fmt.Sprintf("%d-%d", v.Min, v.Max)
+}
+
+// Negotiate returns the highest version both ranges contain, or false when
+// they don't overlap.
+func Negotiate(a, b Versions) (uint16, bool) {
+	lo, hi := max(a.Min, b.Min), min(a.Max, b.Max)
+	if !a.Valid() || !b.Valid() || hi < lo {
+		return 0, false
+	}
+	return hi, true
+}
 
 // Operations a caller can request.
 const (
@@ -56,9 +113,10 @@ const (
 )
 
 const (
-	magic        = "SOL1"
+	magic        = "SOLH"
+	prefixSize   = len(magic) + 4 // magic | min u16 | max u16, in both hellos
 	nonceSize    = 32
-	helloSize    = len(magic) + ed25519.PublicKeySize + nonceSize
+	helloSize    = prefixSize + ed25519.PublicKeySize + nonceSize
 	maxFrameSize = 8 << 10
 	replyOK      = 0x01
 	sigDomain    = "sol handshake"
@@ -77,6 +135,9 @@ var (
 	ErrWrongNode    = errors.New("node identity does not match the expected node id")
 	ErrBadSignature = errors.New("bad handshake signature")
 	ErrMalformed    = errors.New("malformed handshake")
+	// ErrIncompatible means the two nodes share no protocol version. The
+	// error is an *IncompatibleError, which says which side is older.
+	ErrIncompatible = errors.New("incompatible Sol versions")
 	// ErrNoData means the other side connected and closed without sending
 	// anything (reachability probes, including the node's own self-check).
 	ErrNoData = errors.New("connection closed before any data")
@@ -98,6 +159,63 @@ func readErr(err error) error {
 	return fmt.Errorf("%w: %v", ErrMalformed, err)
 }
 
+// IncompatibleError is returned when the two sides' version ranges don't
+// overlap. Local is this node's range, Remote the other node's (as it
+// announced it in its hello).
+type IncompatibleError struct {
+	Local, Remote Versions
+}
+
+// PeerOlder reports whether the other node is the one that must update.
+func (e *IncompatibleError) PeerOlder() bool { return e.Remote.Max < e.Local.Min }
+
+func (e *IncompatibleError) Error() string {
+	if e.PeerOlder() {
+		return fmt.Sprintf("the other node runs an older Sol (protocol %s, this node needs %d or newer): update Sol there", e.Remote, e.Local.Min)
+	}
+	return fmt.Sprintf("the other node runs a newer Sol (protocol %s, this node speaks up to %d): update Sol here", e.Remote, e.Local.Max)
+}
+
+// Is makes errors.Is(err, ErrIncompatible) match.
+func (e *IncompatibleError) Is(target error) bool { return target == ErrIncompatible }
+
+// prefix encodes the fixed start of both hellos.
+func prefix(v Versions) []byte {
+	b := make([]byte, prefixSize)
+	copy(b, magic)
+	binary.BigEndian.PutUint16(b[4:], v.Min)
+	binary.BigEndian.PutUint16(b[6:], v.Max)
+	return b
+}
+
+// parsePrefix decodes the fixed start of a hello. A wrong magic or an
+// invalid range is ErrMalformed.
+func parsePrefix(b []byte) (Versions, error) {
+	if string(b[:len(magic)]) != magic {
+		return Versions{}, fmt.Errorf("%w: not a sol node", ErrMalformed)
+	}
+	v := Versions{binary.BigEndian.Uint16(b[4:]), binary.BigEndian.Uint16(b[6:])}
+	if !v.Valid() {
+		return Versions{}, fmt.Errorf("%w: bad version range %d-%d", ErrMalformed, v.Min, v.Max)
+	}
+	return v, nil
+}
+
+// negotiated is what both sides sign about versions: the version in use
+// and both ranges as each side announced them.
+type negotiated struct {
+	version        uint16
+	caller, callee Versions
+}
+
+func (n negotiated) bytes() []byte {
+	b := make([]byte, 10)
+	for i, x := range []uint16{n.version, n.caller.Min, n.caller.Max, n.callee.Min, n.callee.Max} {
+		binary.BigEndian.PutUint16(b[2*i:], x)
+	}
+	return b
+}
+
 // Card is how a joining node introduces itself when pairing: its name, how
 // to reach it, and the credential it issued for the inviter, each keyed by
 // transport name (docs/PEERS.md).
@@ -109,7 +227,7 @@ type Card struct {
 
 // Request is the caller's handshake message.
 type Request struct {
-	V       int    `json:"v"`
+	V       int    `json:"v"` // the negotiated version; set by ClientHandshake
 	Op      string `json:"op"`
 	Service string `json:"service,omitempty"`
 	Secret  string `json:"secret,omitempty"` // pair: one-time pairing secret
@@ -148,7 +266,7 @@ type PeerInfo struct {
 
 // signedMessage builds the exact bytes that are signed. Each variable-length
 // field is length-prefixed so that field boundaries cannot be shifted.
-func signedMessage(calleePub ed25519.PublicKey, nonce []byte, r *Request) ([]byte, error) {
+func signedMessage(calleePub ed25519.PublicKey, nonce []byte, nv negotiated, r *Request) ([]byte, error) {
 	var card []byte
 	if r.Card != nil {
 		// encoding/json is deterministic (struct order, sorted map keys), and
@@ -164,6 +282,7 @@ func signedMessage(calleePub ed25519.PublicKey, nonce []byte, r *Request) ([]byt
 		b.Write(s)
 	}
 	lp([]byte(sigDomain))
+	lp(nv.bytes())
 	lp(calleePub)
 	lp(nonce)
 	lp([]byte(r.Op))
@@ -181,22 +300,44 @@ func signedMessage(calleePub ed25519.PublicKey, nonce []byte, r *Request) ([]byt
 	return b.Bytes(), nil
 }
 
-// ReadRequest runs the callee side of the handshake: it sends Hello, reads
-// the request, and verifies its signature. On error the caller must close
-// conn without writing anything.
+// ReadRequest is Versions.ReadRequest with this build's range.
 func ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
+	return Versions{}.ReadRequest(conn, self)
+}
+
+// ReadRequest runs the callee side of the handshake speaking versions v: it
+// sends Hello, reads the request, and verifies its signature. On error the
+// caller must close conn without writing anything more.
+//
+// A caller whose range doesn't overlap v gets only the fixed hello prefix
+// (magic and v, the first bytes every Sol caller gets) and an
+// *IncompatibleError is returned. Anything that isn't a Sol ClientHello,
+// including one with an invalid range, gets nothing.
+func (v Versions) ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
+	v = v.orDefault()
 	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
 	defer conn.SetDeadline(time.Time{})
 
-	clientHello := make([]byte, len(magic))
+	clientHello := make([]byte, prefixSize)
 	if n, err := io.ReadFull(conn, clientHello); err != nil {
 		if n == 0 && errors.Is(err, io.EOF) {
 			return nil, ErrNoData
 		}
+		if n >= len(magic) && string(clientHello[:len(magic)]) != magic {
+			return nil, fmt.Errorf("%w: not a sol node", ErrMalformed)
+		}
 		return nil, readErr(err)
 	}
-	if string(clientHello) != magic {
-		return nil, fmt.Errorf("%w: not a sol node", ErrMalformed)
+	callerV, err := parsePrefix(clientHello)
+	if err != nil {
+		return nil, err
+	}
+	version, ok := Negotiate(callerV, v)
+	if !ok {
+		if _, err := conn.Write(prefix(v)); err != nil {
+			return nil, err
+		}
+		return nil, &IncompatibleError{Local: v, Remote: callerV}
 	}
 
 	nonce := make([]byte, nonceSize)
@@ -204,7 +345,7 @@ func ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
 		return nil, err
 	}
 	hello := make([]byte, 0, helloSize)
-	hello = append(hello, magic...)
+	hello = append(hello, prefix(v)...)
 	hello = append(hello, self.Public()...)
 	hello = append(hello, nonce...)
 	if _, err := conn.Write(hello); err != nil {
@@ -219,8 +360,8 @@ func ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
 	if err := json.Unmarshal(frame, &req); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
-	if req.V != Version {
-		return nil, fmt.Errorf("%w: unsupported version %d", ErrMalformed, req.V)
+	if req.V != int(version) {
+		return nil, fmt.Errorf("%w: request version %d, negotiated %d", ErrMalformed, req.V, version)
 	}
 	switch req.Op {
 	case OpConnect, OpList, OpUnpair:
@@ -239,7 +380,7 @@ func ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: bad sig encoding", ErrMalformed)
 	}
-	msg, err := signedMessage(self.Public(), nonce, &req)
+	msg, err := signedMessage(self.Public(), nonce, negotiated{version, callerV, v}, &req)
 	if err != nil || !identity.Verify(req.Key, msg, sig) {
 		return nil, ErrBadSignature
 	}
@@ -264,37 +405,57 @@ func Accept(conn net.Conn, body any) error {
 	return writeFrame(conn, data)
 }
 
-// ClientHandshake runs the caller side. It checks that the callee's key
-// matches wantNodeID (pass "" to skip, only safe when the transport itself
-// authenticates the callee), signs req with self, and waits for OK.
+// ClientHandshake is Versions.ClientHandshake with this build's range.
+func ClientHandshake(conn net.Conn, self *identity.Identity, wantNodeID string, req Request) error {
+	return Versions{}.ClientHandshake(conn, self, wantNodeID, req)
+}
+
+// ClientHandshake runs the caller side speaking versions v. It checks that
+// the callee's key matches wantNodeID (pass "" to skip, only safe when the
+// transport itself authenticates the callee), signs req with self, and
+// waits for OK. When the callee's range doesn't overlap v it returns an
+// *IncompatibleError without sending the request.
 //
 // For OpPair and OpList, follow up with ReadPeerInfo.
-func ClientHandshake(conn net.Conn, self *identity.Identity, wantNodeID string, req Request) error {
+func (v Versions) ClientHandshake(conn net.Conn, self *identity.Identity, wantNodeID string, req Request) error {
+	v = v.orDefault()
 	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
 	defer conn.SetDeadline(time.Time{})
 
-	if _, err := conn.Write([]byte(magic)); err != nil {
+	if _, err := conn.Write(prefix(v)); err != nil {
 		return err
 	}
-	hello := make([]byte, helloSize)
-	if _, err := io.ReadFull(conn, hello); err != nil {
+	pre := make([]byte, prefixSize)
+	if _, err := io.ReadFull(conn, pre); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return ErrRejected
 		}
 		return err
 	}
-	if string(hello[:len(magic)]) != magic {
-		return fmt.Errorf("%w: not a sol node", ErrMalformed)
+	calleeV, err := parsePrefix(pre)
+	if err != nil {
+		return err
 	}
-	calleePub := ed25519.PublicKey(hello[len(magic) : len(magic)+ed25519.PublicKeySize])
-	nonce := hello[len(magic)+ed25519.PublicKeySize:]
+	version, ok := Negotiate(v, calleeV)
+	if !ok {
+		return &IncompatibleError{Local: v, Remote: calleeV}
+	}
+	rest := make([]byte, helloSize-prefixSize)
+	if _, err := io.ReadFull(conn, rest); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return ErrRejected
+		}
+		return err
+	}
+	calleePub := ed25519.PublicKey(rest[:ed25519.PublicKeySize])
+	nonce := rest[ed25519.PublicKeySize:]
 	if wantNodeID != "" && identity.NodeID(calleePub) != wantNodeID {
 		return ErrWrongNode
 	}
 
-	req.V = Version
+	req.V = int(version)
 	req.PubKey = identity.EncodePublicKey(self.Public())
-	msg, err := signedMessage(calleePub, nonce, &req)
+	msg, err := signedMessage(calleePub, nonce, negotiated{version, v, calleeV}, &req)
 	if err != nil {
 		return err
 	}

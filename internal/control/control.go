@@ -169,6 +169,9 @@ type PeerView struct {
 	Services []Service `json:"services"` // what it lets us open
 	Online   bool      `json:"online"`
 	Error    string    `json:"error,omitempty"` // why a refresh failed
+	// Incompatible is set while the peer and this node share no protocol
+	// version: one sentence saying which side must update Sol.
+	Incompatible string `json:"incompatible,omitempty"`
 }
 
 // Tunnel is a peer's service the node keeps reachable on 127.0.0.1.
