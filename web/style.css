@@ -41,7 +41,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* buttons and flex rows set display, which would beat the attribute */
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--ink); font: var(--size)/1.55 var(--mono); min-height: 100vh;
   overflow-x: hidden; -webkit-tap-highlight-color: transparent; }
 h1, h2, h3, h4 { line-height: 1.3; margin: 0 0 6px; font-weight: 700; }
@@ -58,8 +58,8 @@ ul.plain { list-style: none; padding: 0; margin: 6px 0; }
 kbd { font: inherit; color: var(--muted); }
 .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.skip { position: absolute; left: -999px; top: 8px; z-index: 50; background: var(--accent); color: var(--accent-ink); padding: 8px 12px; }
-.skip:focus { left: 8px; }
+.skip-link { position: absolute; left: -999px; top: 8px; z-index: 50; background: var(--accent); color: var(--accent-ink); padding: 8px 12px; }
+.skip-link:focus { left: 8px; }
 .android .desktop-only { display: none !important; }
 svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .sun { color: var(--accent); stroke: none; }
@@ -93,13 +93,14 @@ svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; s
 .nav button:hover { color: var(--ink); background: none; }
 .nav button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
 .side-machines { display: none; }
-.side-foot { display: flex; gap: 12px; align-items: center; justify-content: flex-end; }
+.side-foot { display: flex; gap: 12px; align-items: center; justify-content: flex-end; grid-row: 1; grid-column: 3; }
 
 @media (min-width: 761px) {
   :root[data-layout="side"] .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
   :root[data-layout="side"] .side { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
     display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 20px 14px;
     border-bottom: 0; border-right: 1px solid var(--line); }
+  :root[data-layout="side"] .side > * { flex: none; } /* short landscape windows: scroll the sidebar, don't squash it */
   :root[data-layout="side"] .side-status { flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px;
     border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
   :root[data-layout="side"] .side-status:hover { border-color: var(--muted); }
@@ -235,7 +236,7 @@ progress::-moz-progress-bar { background: var(--warn); }
 .state { font-size: .9em; color: var(--muted); }
 .state.ok { color: var(--ok); } .state.warn { color: var(--warn); } .state.bad { color: var(--bad); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted); flex: none; }
-.dot.ready { background: var(--ok); } .dot.starting { background: var(--warn); } .dot.failed { background: var(--bad); } .dot.stopped { background: var(--line); }
+.dot.ready { background: var(--ok); } .dot.starting { background: var(--warn); } .dot.failed { background: var(--bad); } .dot.stopped { background: none; border: 1px solid var(--muted); }
 .badge { display: inline-block; padding: 0 6px; font-size: .86em; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); }
 .badge.pass { color: var(--ok); border-color: var(--ok); } .badge.fail { color: var(--bad); border-color: var(--bad); }
 .tag { display: inline-block; font-size: .84em; padding: 0 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); }
@@ -301,7 +302,7 @@ label.inline select { margin: 0; width: auto; flex: 1; min-width: 200px; }
 .effects li { margin: 3px 0; }
 .choice-card .effects { color: var(--muted); }
 .disclosure { margin-top: 14px; }
-.disclosure > summary { cursor: pointer; color: var(--muted); padding: 6px 0; list-style-position: outside; }
+.disclosure > summary { cursor: pointer; list-style-position: inside; color: var(--muted); padding: 6px 0;  }
 .disclosure > summary:hover { color: var(--ink); }
 #advanced { border-top: 1px solid var(--line); padding-top: 6px; }
 .setting { padding: 12px 0; border-top: 1px solid var(--line); }

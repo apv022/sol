@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	"github.com/apv022/sol/internal/identity"
@@ -79,7 +80,23 @@ var (
 	// ErrNoData means the other side connected and closed without sending
 	// anything (reachability probes, including the node's own self-check).
 	ErrNoData = errors.New("connection closed before any data")
+	// ErrTruncated means the stream ended or timed out part-way through the
+	// handshake (the path was cut, or held bytes never arrived). Nothing
+	// that did arrive was invalid, so this is not ErrMalformed; callers log
+	// it quietly. It relaxes no check: the handshake still fails.
+	ErrTruncated = errors.New("connection closed during handshake")
 )
+
+// readErr classifies a failed handshake read: EOF, unexpected EOF and
+// timeouts are ErrTruncated, anything else ErrMalformed.
+func readErr(err error) error {
+	var ne net.Error
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return fmt.Errorf("%w: %v", ErrTruncated, err)
+	}
+	return fmt.Errorf("%w: %v", ErrMalformed, err)
+}
 
 // Card is how a joining node introduces itself when pairing: its name, how
 // to reach it, and the credential it issued for the inviter, each keyed by
@@ -176,7 +193,7 @@ func ReadRequest(conn net.Conn, self *identity.Identity) (*Request, error) {
 		if n == 0 && errors.Is(err, io.EOF) {
 			return nil, ErrNoData
 		}
-		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, readErr(err)
 	}
 	if string(clientHello) != magic {
 		return nil, fmt.Errorf("%w: not a sol node", ErrMalformed)
@@ -332,7 +349,7 @@ func writeFrame(w io.Writer, data []byte) error {
 func readFrame(r io.Reader) ([]byte, error) {
 	var hdr [2]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, readErr(err)
 	}
 	n := int(binary.BigEndian.Uint16(hdr[:]))
 	if n == 0 || n > maxFrameSize {
@@ -340,7 +357,7 @@ func readFrame(r io.Reader) ([]byte, error) {
 	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, readErr(err)
 	}
 	return buf, nil
 }

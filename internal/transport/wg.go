@@ -172,6 +172,12 @@ func NewWG(listenAddr, keyPath string, advertise, stun []string) *WG {
 // it re-learns the address, punches towards every peer right away and pokes
 // the live tunnels (an authenticated packet from the new address makes the
 // peer's WireGuard roam to it). Bursts are debounced.
+//
+// It deliberately does not call device.BindUpdate: the bind is the default
+// wildcard socket (0.0.0.0 and ::, never a specific address), which the
+// kernel keeps valid across interface and route changes, and wireguard-go
+// drops a cached source address by itself when a send fails with EINVAL. A
+// rebind would only close the socket the peers already know the port of.
 func (w *WG) NetworkChanged(string) {
 	select {
 	case w.netCh <- struct{}{}:

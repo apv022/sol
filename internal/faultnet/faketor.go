@@ -31,7 +31,7 @@ import (
 //   - reads the torrc it is given (SocksPort, ControlPort, CookieAuthFile),
 //     writes the cookie, and answers AUTHENTICATE, TAKEOWNERSHIP, GETINFO
 //     status/bootstrap-phase, ADD_ONION, DEL_ONION, ONION_CLIENT_AUTH_ADD /
-//     _REMOVE and SETEVENTS;
+//     _REMOVE, HSFETCH and SETEVENTS;
 //   - exits when the control connection that took ownership closes, or when
 //     the process that owns it is gone;
 //   - carries SOCKS connections to "<id>.onion" to the target of the fake
@@ -72,6 +72,11 @@ type TorPlan struct {
 	// trouble ("Clock skew ..."), with Reason as its REASON= code.
 	Warning string `json:"warning,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// StuckFetch makes this tor's descriptor lookups hang, as when the
+	// circuit to the one directory tor asked stalls: a SOCKS connection to
+	// an onion waits until the controller sends HSFETCH for it (which then
+	// "answers" with HS_DESC RECEIVED), or until the client gives up.
+	StuckFetch bool `json:"stuck_fetch,omitempty"`
 }
 
 // FakeTor controls the fake tors started from one directory.
@@ -167,7 +172,8 @@ type fakeTor struct {
 	mu      sync.Mutex
 	onions  map[string]string // service id -> target
 	conns   map[net.Conn]struct{}
-	events  []*textproto.Conn // connections that asked for HS_DESC events
+	events  []*textproto.Conn        // connections that asked for HS_DESC events
+	fetched map[string]chan struct{} // StuckFetch: closed once HSFETCH asked for the onion
 	dropped bool
 	exit    chan int
 }
@@ -183,8 +189,10 @@ func runFakeTor(dir string, args []string) int {
 	if f, err := os.Open(torrc); err == nil {
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
-			if k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), " "); ok {
-				conf[k] = strings.TrimSpace(v)
+			// The first value of the first line for a key, like tor's
+			// first port; flags such as ExtendedErrors are ignored.
+			if f := strings.Fields(sc.Text()); len(f) >= 2 && conf[f[0]] == "" {
+				conf[f[0]] = f[1]
 			}
 		}
 		f.Close()
@@ -433,6 +441,17 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 			}
 			reply("250 OK")
 			go ft.upload(sid)
+		case "HSFETCH":
+			sid := strings.TrimSuffix(strings.Fields(rest + " x")[0], ".onion")
+			reply("250 OK")
+			ft.mu.Lock()
+			if ch := ft.fetchedLocked(sid); !isClosed(ch) {
+				close(ch)
+			}
+			for _, tp := range ft.events {
+				tp.PrintfLine("650 HS_DESC RECEIVED %s NO_AUTH $FAKEDIR descid", sid)
+			}
+			ft.mu.Unlock()
 		case "DEL_ONION":
 			ft.mu.Lock()
 			delete(ft.onions, rest)
@@ -443,6 +462,29 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 			reply("510 Unrecognized command %q", cmd)
 		}
 	}
+}
+
+func isClosed(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// fetchedLocked is the channel HSFETCH for sid closes (StuckFetch); ft.mu
+// is held.
+func (ft *fakeTor) fetchedLocked(sid string) chan struct{} {
+	if ft.fetched == nil {
+		ft.fetched = map[string]chan struct{}{}
+	}
+	ch, ok := ft.fetched[sid]
+	if !ok {
+		ch = make(chan struct{})
+		ft.fetched[sid] = ch
+	}
+	return ch
 }
 
 // upload reports sid's descriptor as uploaded once bootstrap is done, to
@@ -489,6 +531,19 @@ func (ft *fakeTor) serveSOCKS(ln net.Listener) {
 			if !isOnion || ft.progress() < 100 {
 				fail(1)
 				return
+			}
+			if ft.plan.StuckFetch {
+				ft.mu.Lock()
+				fetched := ft.fetchedLocked(sid)
+				ft.mu.Unlock()
+				// Hang like a stalled directory fetch until HSFETCH; give up
+				// like tor's SocksTimeout otherwise.
+				select {
+				case <-fetched:
+				case <-time.After(time.Minute):
+					fail(6) // TTL expired
+					return
+				}
 			}
 			// The onion is up while the fake tor that published it is alive.
 			b, err := os.ReadFile(ft.onionFile(sid))

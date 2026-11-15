@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -263,4 +264,27 @@ func TestEmptyDirectSignsLikeNone(t *testing.T) {
 		t.Fatal("empty and absent Direct sign differently")
 	}
 	_ = id
+}
+
+// A path cut mid-handshake (or held bytes that never arrive) is a truncated
+// handshake, not malformed bytes: the node logs it quietly.
+func TestTruncatedHandshakeIsNotMalformed(t *testing.T) {
+	node, _ := identity.Generate()
+	for name, send := range map[string][]byte{"partial magic": []byte("SO"), "magic then partial frame": []byte("SOL1\x00\x40{")} {
+		c, s := net.Pipe()
+		errc := make(chan error, 1)
+		go func() { _, err := ReadRequest(s, node); errc <- err; s.Close() }()
+		go io.Copy(io.Discard, c) // the callee's Hello
+		go func() { c.Write(send); c.Close() }()
+		err := <-errc
+		if !errors.Is(err, ErrTruncated) || errors.Is(err, ErrMalformed) {
+			t.Fatalf("%s: want ErrTruncated only, got %v", name, err)
+		}
+	}
+	if !errors.Is(readErr(os.ErrDeadlineExceeded), ErrTruncated) {
+		t.Fatal("a deadline is a truncated handshake")
+	}
+	if !errors.Is(readErr(errors.New("boom")), ErrMalformed) {
+		t.Fatal("other read errors stay malformed")
+	}
 }

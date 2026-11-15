@@ -9,7 +9,27 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `sol network-changed [reason]` tells the running node that the network changed (the Android app
   runs it on every default-network change), so it re-checks its connections at once.
 
+### Fixed
+- **First contact over Tor is fast again.** Reaching a new onion often took minutes: tor's lookup
+  of the onion's descriptor from one directory sometimes hangs, and tor waited 120 s
+  (`SocksTimeout`) before giving up, while further dials only joined the hung lookup. `Tor.Dial`
+  now asks tor to fetch from another directory (`HSFETCH`) when no descriptor has arrived after 8 s,
+  the torrc sets `SocksTimeout 45` and `ExtendedErrors`, and a failed dial is retried after 5 s
+  instead of 20 s. Measured over 6 new onions each: median 89 s → 17 s from publish to first
+  connection. A joining node publishes the key it issues to the inviter before the pairing dial,
+  so pairing no longer re-publishes its onion right when the inviter first dials it.
+- SOCKS extended error codes from F1 on were named off by one (F5 said "missing client
+  authorization" for "wrong client authorization").
+- A peer probe cut mid-handshake (or whose held bytes never arrive) no longer logs "handshake failed:
+  malformed request"; truncated or timed-out handshakes are a debug-level "connection closed during
+  handshake". Genuinely malformed bytes are still rejected and logged as before.
+- A peer with a working tunnel no longer shows "Not connected": the panel's peer state is now connected,
+  reachable-but-idle, unreachable or unknown, matching its tunnels and link.
+
 ### Changed
+- Panel polish: the leak check's "skip" badges were invisible (a class clash with the skip link), the
+  sidebar no longer squashes in short landscape windows, the tabs-on-top layout keeps Appearance on the
+  first row, stopped peers show a visible hollow dot, and the system bars on phones follow the bar colour.
 - Settings can no longer leave the node unusable: turning off the last transport, an invalid port,
   or a port used twice is refused with a plain message next to the control.
 - `Tor.WaitReady` keeps waiting after tor is marked failed (the supervisor keeps retrying) until

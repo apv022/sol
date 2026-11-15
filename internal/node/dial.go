@@ -260,10 +260,12 @@ func explain(err error) string {
 	msg := err.Error()
 	var ne net.Error
 	switch {
-	case errors.As(err, &ne) && ne.Timeout(), strings.Contains(msg, "i/o timeout"):
+	case errors.As(err, &ne) && ne.Timeout(), strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "TTL expired"):
 		return "Tor timed out finding it"
 	case strings.Contains(msg, "descriptor not found"), strings.Contains(msg, "host unreachable"):
 		return "its .onion isn't visible yet; this is normal for a minute or two after it starts"
+	case strings.Contains(msg, "service introduction"), strings.Contains(msg, "rendezvous failed"):
+		return "Tor found it but could not connect yet; it may have just restarted or changed its address keys"
 	case strings.Contains(msg, "client authorization"):
 		return "Tor rejected this node's access key"
 	case strings.Contains(msg, "connection refused"):
@@ -364,6 +366,23 @@ func (n *Node) Pair(ctx context.Context, link string) (config.Peer, error) {
 		card.Access[t] = a.Secret
 		accessIn[t] = a.Authorize
 	}
+	// Publish the key we issue the inviter now, not after pairing: changing
+	// an onion's client keys re-publishes it (new introduction points, a
+	// new descriptor), and doing that while the pairing dial runs means the
+	// new descriptor has spread by the time the inviter first dials us. With
+	// the peer added, its key is in the set already, so nothing changes then.
+	n.mu.Lock()
+	n.joinSeq++
+	join := n.joinSeq
+	n.joining[join] = accessIn
+	n.mu.Unlock()
+	defer func() {
+		n.mu.Lock()
+		delete(n.joining, join)
+		n.mu.Unlock()
+		n.refreshNodePublication(false) // a no-op unless pairing failed
+	}()
+	n.refreshNodePublication(false)
 	n.log.Add(events.KindPair, fmt.Sprintf("pairing with %s…", inviter.Name))
 
 	conn, err := n.dial(ctx, inviter, protocol.Request{Op: protocol.OpPair, Secret: l.Secret, Card: card}, true)

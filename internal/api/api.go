@@ -141,9 +141,14 @@ type PeerView struct {
 	Services []config.RemoteService `json:"services"` // what it lets us open
 	Added    time.Time              `json:"added"`
 	LastSeen time.Time              `json:"last_seen"`
-	// Online is true while there is at least one open connection either way.
-	// Every connection passed the signed handshake with this peer's key.
-	Online      bool             `json:"online"`
+	// Online is true while the peer is reachable: State "connected" or "idle".
+	Online bool `json:"online"`
+	// State is "connected" (a verified connection is open either way, and
+	// every one passed the signed handshake with this peer's key), "idle"
+	// (nothing open right now, but the last attempt or probe reached it, or
+	// a tunnel to it works), "unreachable" (the last redial failed) or
+	// "unknown" (nothing has reached it since this node started).
+	State       string           `json:"state"`
 	Connections []ConnectionView `json:"connections"`
 	// Path is how this node reaches the peer, and why not a faster way.
 	Path PathView `json:"path"`

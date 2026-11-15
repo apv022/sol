@@ -64,8 +64,11 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 
 ## Gotchas
 
-- Tor needs ~30 s to bootstrap and a new onion can take a minute to become reachable. Dialing a
-  peer retries (`Options.DialAttempts`), and the real-Tor e2e test retries pairing.
+- Tor needs ~30 s to bootstrap; a new onion is usually reachable seconds after its first
+  `HS_DESC UPLOADED`. What made first contact take minutes was a descriptor fetch from one
+  directory hanging until tor's `SocksTimeout`: `Tor.Dial` hedges with `HSFETCH` and the torrc
+  lowers `SocksTimeout` to 45 s (`transport/tordial.go`). Don't remove either without measuring.
+  Dialing a peer retries (`Options.DialAttempts`), and the real-Tor e2e test retries pairing.
 - Changing an onion's client-auth keys means DEL_ONION + ADD_ONION with the same key
   (`Tor.addOnion`). `node.refreshNodePublication` skips this when the key set hasn't changed, so
   pairing doesn't bounce live connections.

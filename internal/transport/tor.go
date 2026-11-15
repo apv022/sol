@@ -68,8 +68,9 @@ type Tor struct {
 	socksAddr  string
 	ctrl       *torControl
 	proc       *runtime.Proc
-	onions     map[string]*onion // publication ID -> onion
-	clientKeys map[string]string // service ID -> private key (connect side)
+	onions     map[string]*onion    // publication ID -> onion
+	clientKeys map[string]string    // service ID -> private key (connect side)
+	descGot    map[string]time.Time // service ID -> last HS_DESC RECEIVED (tordial.go)
 	stopping   bool
 	cancel     context.CancelFunc
 
@@ -240,7 +241,10 @@ func (t *Tor) launch(ctx, runCtx context.Context) error {
 	cookie := filepath.Join(dataDir, "control_auth_cookie")
 	os.Remove(cookie) // never authenticate with a stale cookie
 	lines := []string{
-		"SocksPort " + socks,
+		// ExtendedErrors: tor says why an onion dial failed (descriptor
+		// not found, intro failed, bad client auth: socksError) instead
+		// of a generic failure.
+		"SocksPort " + socks + " ExtendedErrors",
 		"ControlPort " + control,
 		"CookieAuthentication 1",
 		"CookieAuthFile " + cookie,
@@ -249,6 +253,9 @@ func (t *Tor) launch(ctx, runCtx context.Context) error {
 		"__OwningControllerProcess " + strconv.Itoa(os.Getpid()),
 		// The node is the reason this tor runs: never let it go dormant.
 		"DormantCanceledByStartup 1",
+		// A hung descriptor fetch or circuit fails after this instead of
+		// 120 s, so the dial is retried sooner (tordial.go).
+		fmt.Sprintf("SocksTimeout %d", int(torSocksTimeout.Seconds())),
 	}
 	lines = append(lines, t.ExtraConfig...)
 	torrc := strings.Join(append(lines, ""), "\n")
@@ -856,7 +863,7 @@ func (t *Tor) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if socks == "" {
 		return nil, errors.New("tor is not running")
 	}
-	return dialSOCKS5(ctx, socks, addr)
+	return t.dialOnion(ctx, socks, addr)
 }
 
 func (t *Tor) Status() Status {

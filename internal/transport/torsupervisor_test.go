@@ -147,8 +147,10 @@ func TestTorOfflineIsNotAStall(t *testing.T) {
 	if err := s.start(t); err != nil {
 		t.Fatal(err)
 	}
-	st := waitStatus(t, s.Tor, "offline", func(st Status) bool { return st.Phase == PhaseOffline })
-	if st.WaitingFor != "a network connection" || st.Progress != 40 {
+	// Offline is reported from the first poll on; wait until bootstrap
+	// has also reached the scripted stall (a slow machine polls earlier).
+	st := waitStatus(t, s.Tor, "offline at the stall", func(st Status) bool { return st.Phase == PhaseOffline && st.Progress == 40 })
+	if st.WaitingFor != "a network connection" {
 		t.Fatalf("offline reported as %+v", st)
 	}
 	time.Sleep(2 * bootstrapStall)

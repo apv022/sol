@@ -103,16 +103,24 @@ func socksError(code byte) string {
 		return "connection refused"
 	case 6:
 		return "TTL expired (onion service unreachable)"
+	// Tor's extended errors (SocksPort ExtendedErrors, tor's
+	// socks-extensions.txt).
 	case 0xF0:
 		return "onion service descriptor not found"
-	case 0xF3:
+	case 0xF1:
+		return "onion service descriptor is invalid"
+	case 0xF2:
 		return "onion service introduction failed"
-	case 0xF4:
+	case 0xF3:
 		return "onion service rendezvous failed"
-	case 0xF5:
+	case 0xF4:
 		return "missing onion client authorization"
-	case 0xF6:
+	case 0xF5:
 		return "wrong onion client authorization"
+	case 0xF6:
+		return "invalid onion address"
+	case 0xF7:
+		return "onion service introduction timed out"
 	default:
 		return fmt.Sprintf("error code %d", code)
 	}

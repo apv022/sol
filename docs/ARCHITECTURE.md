@@ -99,11 +99,14 @@ and removing the peer on either side closes it.
    `pairing.NewToken(access)`. `refreshNodePublication` republishes A's onion with the token's
    key authorized. The `sol://pair` link carries A's addresses and the secret halves.
 2. B: `Node.Pair(link)` installs A's access (`ClientAuthorizer`), issues its own access for A,
-   and sends `OpPair` with the secret and a signed card `{name, addrs, access}`.
+   publishes its onion with that key authorized right away (`Node.joining`, so the new descriptor
+   spreads while the pairing dial runs), and sends `OpPair` with the secret and a signed card
+   `{name, addrs, access}`.
 3. A: `handlePair` burns the token, saves B (`AccessIn` from the token, `Addrs`/`AccessOut` from
    the card), installs B's access, and replies with `PeerInfo`. It then asks B what it shares
    (`learnShares`), retrying while B saves the pairing.
-4. B saves A. Saving fires `OnChange`, so B republishes its onion with A's key authorized.
+4. B saves A. Saving fires `OnChange`; A's key is already published (step 2), so B's onion is not
+   re-published again. If pairing fails, the key is withdrawn.
 
 ### Sending a file (`sol send server notes.pdf`)
 
@@ -279,6 +282,14 @@ Sol.
   slow one stalls it. Two failed self-checks in a row mark the node unreachable, and four restart
   tor (at most every 10 minutes).
   The node drops the probe's empty connection silently (`protocol.ErrNoData`).
+- **Reaching an onion** (`transport/tordial.go`): tor first fetches the onion's descriptor from
+  one directory. Measured, that answers in 3 to 5 s or hangs until `SocksTimeout` (120 s by
+  default), and more SOCKS requests only join the hung fetch. So `Tor.Dial` sends `HSFETCH`
+  when no `HS_DESC RECEIVED` for that address arrived within `hsFetchAfter` (8 s; then every
+  10 s, at most 3): tor asks another directory and the first descriptor serves the waiting
+  connection. The torrc sets `SocksTimeout 45` (a whole first contact took 9 to 14 s), and
+  `ExtendedErrors`, so a failure says why (descriptor not found, introduction failed, ...).
+  The node retries a failed dial after 5 s (`Options.DialRetryDelay`), 6 attempts.
 
 ### Helping the Tor network
 

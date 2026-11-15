@@ -83,7 +83,9 @@ type Options struct {
 	// Inbox limits; zero means the defaults above.
 	InboxMaxFile, InboxMaxTotal int64
 	// Dial retry policy for reaching a peer whose onion may still be
-	// publishing; zero means 6 attempts, 20 seconds apart.
+	// publishing; zero means 6 attempts, 5 seconds apart. A Tor attempt
+	// that fails asks a different directory next time (tor does not re-ask
+	// one for 15 minutes), so a long pause between attempts buys nothing.
 	DialAttempts   int
 	DialRetryDelay time.Duration
 	// Liveness tunes how dead peer paths are detected and recovered
@@ -115,6 +117,12 @@ type Node struct {
 	sites    map[string]*siteServer // by service name (sites.go)
 	public   map[string]*publicService
 	lastAuth map[string]string // transport -> client-auth key set last published for the node
+	// joining holds, per Pair in progress, the access keys it issues to the
+	// inviter (transport -> public half). They are published before the
+	// pairing dial, so the inviter can reach this node as soon as pairing
+	// ends (dial.go Pair).
+	joining  map[int]map[string]string
+	joinSeq  int
 	lastGood map[string]string // peer id -> address that last worked
 	// peer id -> last refreshDirect (dial.go)
 	lastDirectRefresh map[string]time.Time
@@ -207,7 +215,7 @@ func New(opts Options) (*Node, error) {
 		opts.DialAttempts = 6
 	}
 	if opts.DialRetryDelay <= 0 {
-		opts.DialRetryDelay = 20 * time.Second
+		opts.DialRetryDelay = 5 * time.Second
 	}
 	if err := os.MkdirAll(opts.DataDir, 0o700); err != nil {
 		return nil, err
@@ -238,6 +246,7 @@ func New(opts Options) (*Node, error) {
 		sites:    map[string]*siteServer{},
 		public:   map[string]*publicService{},
 		lastAuth: map[string]string{},
+		joining:  map[int]map[string]string{},
 		lastGood: map[string]string{},
 		tunnels:  map[int]*tunnel{},
 
@@ -504,8 +513,9 @@ func (n *Node) shutdown(panelSrv *http.Server) {
 }
 
 // refreshNodePublication (re)publishes the node listener on every usable
-// transport with that transport's access keys: the ones issued to peers plus
-// the ones held by pending pairing tokens. A transport whose key set is
+// transport with that transport's access keys: the ones issued to peers, the
+// ones held by pending pairing tokens, and the ones a Pair in progress has
+// issued to its inviter. A transport whose key set is
 // unchanged is skipped, unless force is set.
 func (n *Node) refreshNodePublication(force bool) {
 	if n.nodeAddr == "" {
@@ -523,6 +533,13 @@ func (n *Node) refreshNodePublication(force bool) {
 				keys = append(keys, a.Authorize)
 			}
 		}
+		n.mu.Lock()
+		for _, j := range n.joining {
+			if k := j[name]; k != "" {
+				keys = append(keys, k)
+			}
+		}
+		n.mu.Unlock()
 		sort.Strings(keys)
 		keys = slices.Compact(keys)
 		sig := strings.Join(keys, ",")
@@ -665,6 +682,13 @@ func (n *Node) handleConn(c net.Conn) {
 	req, err := protocol.ReadRequest(c, n.id)
 	if errors.Is(err, protocol.ErrNoData) {
 		c.Close() // a reachability probe (e.g. Tor's self-check); not worth logging
+		return
+	}
+	if errors.Is(err, protocol.ErrTruncated) {
+		// The path was cut mid-handshake (e.g. a liveness probe), or held
+		// bytes never came: nothing was invalid, so don't alarm the log.
+		c.Close()
+		slog.Debug("connection closed during handshake", "err", err)
 		return
 	}
 	if err != nil {

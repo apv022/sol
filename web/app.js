@@ -173,7 +173,8 @@ function applyLook() {
   if (look.accent) root.style.setProperty("--accent", look.accent);
   else root.style.removeProperty("--accent");
   // The browser (and Android) colour the system bars from theme-color.
-  const bg = getComputedStyle(root).getPropertyValue("--bg").trim();
+  // The tab bar and top bar are --panel, so the bars must be too, or a strip of another shade shows.
+  const bg = getComputedStyle(root).getPropertyValue("--panel").trim();
   if (bg) document.querySelector('meta[name="theme-color"]').content = bg;
 }
 function saveLook() {
@@ -508,7 +509,7 @@ function renderHome() {
     return `<button class="peer-row" data-action="show-peer" data-arg="${esc(p.id)}">
       <span class="dot ${p.online ? "ready" : "stopped"}"></span>
       <span class="pr-main"><b>${esc(p.name)}</b>
-        <span class="muted small">${p.online ? "connected now" : "last seen " + esc(ago(p.last_seen))}${theirs.length ? " · shares " + esc(theirs.join(", ")) : ""}</span></span>
+        <span class="muted small">${p.state === "connected" ? "connected now" : p.online ? "reachable, idle" : "last seen " + esc(ago(p.last_seen))}${theirs.length ? " · shares " + esc(theirs.join(", ")) : ""}</span></span>
       ${path.via ? viaBadge(path.via) : ""}${path.reason && path.reason !== "direct_off" ? `<span class="flag" title="${esc(path.detail || "")}">!</span>` : ""}
     </button>`;
   }).join("")}</div>`
@@ -692,7 +693,7 @@ function renderPeers() {
     return `<article class="card device ${p.online ? "online" : ""}">
       <div class="card-head"><h3><span class="dot ${p.online ? "ready" : "stopped"}"></span>${esc(p.name)}</h3>
         <button class="ghost small danger-text" data-action="unpair" data-arg="${esc(p.id)}">Unpair</button></div>
-      <p class="${p.online ? "okline" : "muted"} small">${p.online ? "✓ Connected and verified" : "Not connected · last seen " + esc(ago(p.last_seen))}</p>
+      <p class="${p.online ? "okline" : "muted"} small">${p.state === "connected" ? "✓ Connected and verified" : p.state === "idle" ? "Reachable, nothing open right now · last seen " + esc(ago(p.last_seen)) : p.state === "unreachable" ? "Unreachable right now · last seen " + esc(ago(p.last_seen)) : "Not connected · last seen " + esc(ago(p.last_seen))}</p>
 
       <div class="pathbox">${pathBlock(p)}</div>
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/transport"
@@ -153,5 +154,27 @@ func TestOptionImpactReportsRefusedChange(t *testing.T) {
 	}
 	if o := option(n, "tor"); o.Value != "on" {
 		t.Fatal("impact changed the setting")
+	}
+}
+
+func TestPeerStateTruthfulWithTunnel(t *testing.T) {
+	n, p := pathNode(t)
+	n.tunnels = map[int]*tunnel{}
+	state := func() string { return n.peerState(p.ID, false, n.peerPath(p)) }
+	if s := state(); s != "unknown" {
+		t.Fatalf("nothing known: %s", s)
+	}
+	tn := &tunnel{cfg: config.Tunnel{Port: 9000, Peer: p.ID, Service: "web"}}
+	n.tunnels[9000] = tn
+	tn.record("tor", nil) // the tunnel to the peer works, but no stream is open
+	if s := state(); s != "idle" {
+		t.Fatalf("ready tunnel must be idle, got %s", s)
+	}
+	n.links = map[string]*peerLink{p.ID: {down: true, downSince: time.Now(), redialAt: time.Now().Add(time.Minute)}}
+	if s := state(); s != "unreachable" {
+		t.Fatalf("down link: %s", s)
+	}
+	if s := n.peerState(p.ID, true, api.PathView{}); s != "connected" {
+		t.Fatalf("open connection: %s", s)
 	}
 }

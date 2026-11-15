@@ -222,11 +222,43 @@ func (n *Node) Peers() []api.PeerView {
 			}
 			return !v.Connections[i].Outbound
 		})
-		v.Online = len(v.Connections) > 0
 		v.Path = n.peerPath(p)
+		v.State = n.peerState(p.ID, len(v.Connections) > 0, v.Path)
+		v.Online = v.State == "connected" || v.State == "idle"
 		out = append(out, v)
 	}
 	return out
+}
+
+// peerState is the peer's truthful state, consistent with its tunnels: a
+// tunnel whose last use worked proves the peer is reachable even when no
+// stream is open at this instant, so it is "idle", never "not connected".
+// A failed redial wins over stale evidence of an older success.
+func (n *Node) peerState(id string, hasConns bool, path api.PathView) string {
+	if hasConns {
+		return "connected"
+	}
+	if path.Down {
+		return "unreachable"
+	}
+	link, _ := n.PeerLink(id)
+	if path.Live || !link.LastOK.IsZero() {
+		return "idle"
+	}
+	n.tmu.Lock()
+	list := make([]*tunnel, 0, len(n.tunnels))
+	for _, t := range n.tunnels {
+		if t.cfg.Peer == id {
+			list = append(list, t)
+		}
+	}
+	n.tmu.Unlock()
+	for _, t := range list {
+		if v := n.tunnelView(t); !v.LastOK.IsZero() && v.LastError == "" {
+			return "idle"
+		}
+	}
+	return "unknown"
 }
 
 // peerPath works out how this node reaches p: the transport in use (or the

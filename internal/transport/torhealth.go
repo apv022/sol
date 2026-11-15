@@ -234,6 +234,7 @@ func (t *Tor) noteEvent(line string) {
 	switch f[1] {
 	case "HS_DESC":
 		t.noteDescEvent(line)
+		t.noteDescReceived(f)
 	case "STATUS_GENERAL":
 		t.noteStatusGeneral(f[3], line)
 	}
