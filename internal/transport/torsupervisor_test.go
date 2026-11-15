@@ -170,20 +170,38 @@ func TestTorExitRestartsWithBackoff(t *testing.T) {
 	s := newSupervised(t, faultnet.TorPlan{StallAt: 30, ExitAfterMS: 150})
 	setVar(t, &torRetryBase, 60*time.Millisecond)
 	setVar(t, &torRetryMax, 240*time.Millisecond)
+	// Each retry is recorded as it is announced: Notify runs on the
+	// supervisor right after it entered the wait, so no retry can slip
+	// between two polls on a slow runner (a 60 ms wait easily did).
+	var retries []Status
+	s.Notify = func(msg string) {
+		st := s.Tor.Status()
+		s.mu.Lock()
+		s.notices = append(s.notices, msg)
+		if st.Phase == PhaseRetrying {
+			retries = append(retries, st)
+		}
+		s.mu.Unlock()
+	}
 	s.start(t) // may fail if the fake dies first: retried either way
 
-	waits := map[int]time.Duration{}
-	for len(waits) < 4 {
-		st := waitStatus(t, s.Tor, "retrying", func(st Status) bool { return st.Phase == PhaseRetrying && waits[st.Attempt] == 0 })
+	var got []Status
+	for end := time.Now().Add(15 * time.Second); len(got) < 4; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("timed out waiting for 4 retries; got %+v", got)
+		}
+		s.mu.Lock()
+		got = append([]Status(nil), retries...)
+		s.mu.Unlock()
+	}
+	want := []time.Duration{60 * time.Millisecond, 120 * time.Millisecond, 240 * time.Millisecond, 240 * time.Millisecond}
+	for i, w := range want {
+		st := got[i]
 		if st.RetryAt.IsZero() || st.WaitingFor == "" || st.Problem == "" || st.State == StateReady {
 			t.Fatalf("retrying reported as %+v", st)
 		}
-		waits[st.Attempt] = st.RetryAt.Sub(st.PhaseSince).Round(10 * time.Millisecond)
-	}
-	want := map[int]time.Duration{2: 60 * time.Millisecond, 3: 120 * time.Millisecond, 4: 240 * time.Millisecond, 5: 240 * time.Millisecond}
-	for a, w := range want {
-		if waits[a] != w {
-			t.Errorf("attempt %d waited %v, want %v (all: %v)", a, waits[a], w, waits)
+		if st.Attempt != i+2 || st.RetryAt.Sub(st.PhaseSince) != w {
+			t.Errorf("retry %d: attempt %d waited %v, want attempt %d waiting %v", i, st.Attempt, st.RetryAt.Sub(st.PhaseSince), i+2, w)
 		}
 	}
 	if !s.noticed("exited") {

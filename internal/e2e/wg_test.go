@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,16 +86,25 @@ func TestWireGuardUnpairCutsTheTunnel(t *testing.T) {
 // tunnel heals by itself, through the fallback path's address refresh.
 func TestWireGuardHealsAfterPeerRestart(t *testing.T) {
 	node.SetRefreshDirectEvery(t, 0)
-	clearnetB := fmt.Sprintf("127.0.0.1:%d", freePort(t)) // so a can still find b by the fallback
+	// b keeps its clearnet port across the restart, so a can still find it
+	// by the fallback. The first b picks a free one itself: a port taken
+	// from freePort can be grabbed by another listener before b binds it,
+	// and b would then come up with no clearnet address at all.
+	clearnetB := "127.0.0.1:0"
 	a := wgNode(t, "alpha")
 	bDir := t.TempDir()
 	startB := func() *testNode {
-		return startNode(t, bDir, "beta", func(o *node.Options) {
+		cn := transport.NewClearnet(clearnetB, "")
+		n := startNode(t, bDir, "beta", func(o *node.Options) {
 			o.Transports = []transport.Transport{
 				transport.NewWG("127.0.0.1:0", filepath.Join(bDir, "wg.key"), nil, nil),
-				transport.NewClearnet(clearnetB, ""),
+				cn,
 			}
 		})
+		if clearnetB = cn.Status().Addresses["node"]; clearnetB == "" {
+			t.Fatal("b came up without a clearnet address")
+		}
+		return n
 	}
 	b := startB()
 	bOnA, _ := pair(t, a, b)
@@ -104,7 +112,7 @@ func TestWireGuardHealsAfterPeerRestart(t *testing.T) {
 		t.Fatalf("before: %q", via)
 	}
 	b.stop()
-	startB() // same data dir, new UDP port
+	startB() // same data dir and clearnet port, new UDP port
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if viaOf(t, a, bOnA.ID, "_inbox") == "wg" {

@@ -130,8 +130,8 @@ type WG struct {
 	note    string               // shown in Status (e.g. a port fallback)
 	peers   map[[32]byte]*wgPeer
 	stopped chan struct{}
-	conns   map[[32]byte]map[net.Conn]struct{} // open tunnel streams, per peer
-	netCh   chan struct{}                      // NetworkChanged signals for loop
+	conns   map[[32]byte]map[net.Conn]time.Time // open tunnel streams, per peer: when tracked
+	netCh   chan struct{}                       // NetworkChanged signals for loop
 }
 
 type wgPeer struct {
@@ -164,7 +164,7 @@ func (w *WG) initiator(p *wgPeer) bool { return bytes.Compare(w.pub[:], p.pub[:]
 func NewWG(listenAddr, keyPath string, advertise, stun []string) *WG {
 	return &WG{ListenAddr: listenAddr, keyPath: keyPath, Advertise: advertise, STUN: stun,
 		allowLoopback: netutil.IsLoopbackListen(listenAddr), state: StateStopped, peers: map[[32]byte]*wgPeer{},
-		conns: map[[32]byte]map[net.Conn]struct{}{}, netCh: make(chan struct{}, 1)}
+		conns: map[[32]byte]map[net.Conn]time.Time{}, netCh: make(chan struct{}, 1)}
 }
 
 // NetworkChanged implements NetworkWatcher: after a network change the
@@ -191,10 +191,10 @@ func (w *WG) track(pub [32]byte, c net.Conn) net.Conn {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.conns[pub] == nil {
-		w.conns[pub] = map[net.Conn]struct{}{}
+		w.conns[pub] = map[net.Conn]time.Time{}
 	}
 	tc := &wgConn{Conn: c, w: w, pub: pub}
-	w.conns[pub][tc] = struct{}{}
+	w.conns[pub][tc] = time.Now()
 	return tc
 }
 
@@ -512,6 +512,10 @@ func (w *WG) SetPeer(addr string) error {
 			cands = append(cands, c)
 		}
 	}
+	// A tunnel that just came up is fresh before loop marks it up. Punching
+	// then would make an initiating peer drop the session it just made
+	// (onPunch), and reconfiguring would reset the endpoint it roamed to.
+	fresh := w.fresh(pub)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if pub == w.pub {
@@ -526,7 +530,7 @@ func (w *WG) SetPeer(addr string) error {
 	if changed {
 		p.cands, p.idx = cands, 0
 	}
-	if w.dev != nil && (changed || !p.up) {
+	if w.dev != nil && (changed || (!p.up && !fresh)) {
 		p.nextTry, p.misses = time.Now().Add(wgTryEvery), 0
 		w.configureLocked(p)
 		go w.punch(p) // right away: the other side may be punching towards us now
@@ -837,6 +841,7 @@ func (w *WG) loop(stopped chan struct{}) {
 				nextSTUN = time.Now().Add(publicEvery)
 			}
 		}
+		statsAt := time.Now()
 		stats := w.stats()
 		now := time.Now()
 		var punch, poke []*wgPeer
@@ -848,26 +853,35 @@ func (w *WG) loop(stopped chan struct{}) {
 		}
 		for _, p := range w.peers {
 			st := stats[p.pub]
-			if st.rx != p.rx || st.hs.After(p.rxAt) {
-				p.rx, p.rxAt = st.rx, now // heard from it
+			if st.rx > p.rx || st.hs.After(p.rxAt) {
+				p.rxAt = now // heard from it
 			}
+			p.rx = st.rx // drops to 0 when the device forgets the peer: not "heard"
 			live := now.Sub(st.hs) < wgFresh && now.Sub(p.rxAt) < wgSilent
 			if live {
 				p.lastHS, p.misses = st.hs, 0
 			}
+			silent := !p.rxAt.IsZero() && now.Sub(p.rxAt) >= wgSilent
 			if live != p.up { // turn keepalives on with the tunnel, off without
-				if p.up && now.Sub(st.hs) < wgFresh {
-					// Gone silent with a session that looks fine: the path
-					// died. Its streams would hang; cut them so the node
-					// falls back, and punch again.
+				if p.up && silent {
 					slog.Debug("wireguard: tunnel went silent", "since", p.rxAt)
-					for c := range w.conns[p.pub] {
-						cut = append(cut, c)
-					}
 					p.lastHS = time.Time{}
 				}
 				p.up = live
 				w.configureLocked(p)
+			}
+			if !live && silent {
+				// Nothing heard for wgSilent: the path died. Its streams
+				// would hang; cut them so the node falls back. This holds
+				// however the tunnel stopped counting as up (silence seen
+				// by this loop, or a session reset in onPunch), so no
+				// stream outlives a dead tunnel. A stream tracked after
+				// the stats were read belongs to a handshake they missed.
+				for c, at := range w.conns[p.pub] {
+					if at.Before(statsAt) {
+						cut = append(cut, c)
+					}
+				}
 			}
 			if live || len(p.cands) == 0 || now.Before(p.nextTry) {
 				continue

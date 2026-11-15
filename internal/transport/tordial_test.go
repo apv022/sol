@@ -53,8 +53,13 @@ func TestTorDialHedgesAStuckDescriptorFetch(t *testing.T) {
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("hedged dial took %s", d)
 	}
-	if !b.descSince(onionServiceID(addr), start) {
-		t.Fatal("the HS_DESC RECEIVED event was not recorded")
+	// The event comes on tor's second control connection, read by its own
+	// goroutine: it may be handled just after the SOCKS reply that it
+	// unblocked, so give that reader a moment instead of racing it.
+	for end := time.Now().Add(5 * time.Second); !b.descSince(onionServiceID(addr), start); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the HS_DESC RECEIVED event was not recorded")
+		}
 	}
 }
 

@@ -416,7 +416,9 @@ func (t *Tor) supervise(runCtx context.Context, launchErr error) {
 		if launchFails >= failedAfter {
 			t.state = StateFailed // honest: tor does not run here. Still retried.
 		}
-		t.retryAt = time.Now().Add(wait)
+		// One clock reading for both, so RetryAt-PhaseSince is the backoff.
+		now := time.Now()
+		t.retryAt = now.Add(wait)
 		t.detail = why + "; starting Tor again"
 		if wait >= time.Second {
 			t.detail += " in " + wait.Round(time.Second).String()
@@ -424,7 +426,7 @@ func (t *Tor) supervise(runCtx context.Context, launchErr error) {
 		if t.attempt > 1 {
 			t.detail += fmt.Sprintf(" (attempt %d)", t.attempt)
 		}
-		t.setPhaseLocked(PhaseRetrying)
+		t.phase, t.phaseSince = PhaseRetrying, now // a new wait even if the last one was too
 		detail := t.detail
 		t.mu.Unlock()
 		slog.Info("tor: " + detail)

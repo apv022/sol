@@ -235,7 +235,8 @@ func TestWallClockJumpTriggersRecovery(t *testing.T) {
 // transport itself (no keepalive heard for wgSilent): its streams are cut
 // and new connections fall back.
 func TestWireGuardSilentTunnelIsCut(t *testing.T) {
-	transport.SetWGLiveness(t, 1, 3*time.Second)
+	const silent = 3 * time.Second
+	transport.SetWGLiveness(t, 1, silent)
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +266,11 @@ func TestWireGuardSilentTunnelIsCut(t *testing.T) {
 	}
 	defer c.Close()
 	udp.Drop(true)
-	if err := closedWithin(c, 10*time.Second); err != nil {
+	// Cut once nothing is heard for silent, noticed on the transport's
+	// next 500 ms tick; the rest is margin for a slow, raced runner. The
+	// detection runs on the wall clock, so slowness adds ticks, not
+	// multiples of silent.
+	if err := closedWithin(c, 2*silent+2*time.Second); err != nil {
 		t.Fatalf("silent tunnel: %v", err)
 	}
 	c.Close() // what the app does when its stream ends

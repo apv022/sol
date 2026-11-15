@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -379,5 +380,45 @@ func TestReflectionPackets(t *testing.T) {
 		if isPublicAddr(netip.MustParseAddr(addr)) != public {
 			t.Errorf("isPublicAddr(%s) != %v", addr, public)
 		}
+	}
+}
+
+// A tunnel that stops counting as up some other way than this loop
+// noticing silence (here: the session reset onPunch does when the peer
+// punches) and then dies must still cut its streams once nothing is heard
+// for wgSilent. They used to hang until the node's own probes gave up.
+func TestWireGuardStreamOnResetSessionIsCut(t *testing.T) {
+	SetWGLiveness(t, 1, 1500*time.Millisecond)
+	a, aAddr := startWG(t)
+	b, bAddr := startWG(t)
+	a.SetPeer(bAddr)
+	b.SetPeer(aAddr)
+	c, err := a.Dial(context.Background(), bAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	pub, _, _ := ParseWGAddr(bAddr)
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		a.mu.Lock()
+		up := a.peers[pub].up
+		a.mu.Unlock()
+		if up {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the loop never marked the tunnel up")
+		}
+	}
+	b.Stop() // the path dies...
+	a.mu.Lock()
+	a.peers[pub].up = false // ...right as a punch resets the session (onPunch)
+	a.dev.IpcSet("public_key=" + hex.EncodeToString(pub[:]) + "\nremove=true\n")
+	a.mu.Unlock()
+	// wgSilent, plus a loop tick and a margin for a slow runner.
+	wait := wgSilent + 500*time.Millisecond + 3*time.Second
+	c.SetReadDeadline(time.Now().Add(wait))
+	if _, err := io.Copy(io.Discard, c); isTimeout(err) {
+		t.Fatalf("stream on a dead, reset tunnel still open after %s", wait)
 	}
 }

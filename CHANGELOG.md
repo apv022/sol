@@ -121,6 +121,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
   is refused if it finds anything.
 - `install.sh` installs the newest pre-release while no stable release exists, instead of
   failing with a broken download URL.
+- **A WireGuard tunnel that dies no longer leaves its streams hanging.** Streams were cut only
+  when the tunnel went silent while marked up; one that stopped counting as up another way (a
+  session reset by a peer's punch) and then died kept them open until the node's probes gave up.
+  Now any stream on a tunnel not heard from for the silence limit is cut, and a tunnel that just
+  came up is no longer punched (which made the initiating peer reset it). Tor's retry status
+  reports the exact backoff.
 - **First contact over Tor is fast again.** Reaching a new onion often took minutes: tor's lookup
   of the onion's descriptor from one directory sometimes hangs, and tor waited 120 s
   (`SocksTimeout`) before giving up, while further dials only joined the hung lookup. `Tor.Dial`
