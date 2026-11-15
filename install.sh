@@ -36,7 +36,13 @@ if [ -z "$tag" ]; then
   url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest") || url=
   case $url in
     */releases/tag/?*) tag=${url##*/tag/} ;;
-    *) die "no Sol release is published yet; build from source (go install github.com/$repo/cmd/sol@latest), or set SOL_VERSION to a pre-release from https://github.com/$repo/releases" ;;
+    *)
+      # Before the first stable release, take the newest pre-release (the API lists them too).
+      tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" 2>/dev/null |
+        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1) || tag=
+      [ -n "$tag" ] || die "no Sol release is published yet; build from source (go install github.com/$repo/cmd/sol@latest)"
+      say "No stable release yet; installing pre-release $tag."
+      ;;
   esac
 fi
 version=${tag#v}
