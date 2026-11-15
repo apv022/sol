@@ -37,7 +37,7 @@ async function api(path, opts = {}) {
   const r = await fetch(path, opts);
   const ct = r.headers.get("content-type") || "";
   const body = ct.includes("json") ? await r.json() : await r.text();
-  if (!r.ok) throw new Error((body && body.error) || `${path}: HTTP ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error((body && body.error) || `${path}: HTTP ${r.status}`), { status: r.status });
   return body;
 }
 const json = (method, body) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -331,6 +331,11 @@ document.addEventListener("click", e => {
     "copy-node-id": () => copy(state.status ? state.status.node_id : ""),
     "copy-pair-cmd": () => copy(`sol pair '${$("pair-link").textContent}'`),
     "remove-service": () => removeService(arg),
+    "edit-service": () => openEditService(arg),
+    "rename-file": () => renameFile(arg),
+    "replace-file": () => pickReplacement(arg),
+    "delete-file": () => deleteFile(arg),
+    "delete-received": () => deleteReceived(arg),
     "unpair": () => unpair(arg),
     "send-file": () => pickFilesFor(arg),
     "refresh-peer": () => refreshPeer(arg),
@@ -562,7 +567,8 @@ function renderServices() {
     const addrs = Object.entries(s.addresses || {});
     return `<div class="card service">
       <div class="card-head"><h3>${esc(s.name)}</h3>
-        <button class="ghost small danger-text" data-action="remove-service" data-arg="${esc(s.name)}">Remove</button></div>
+        <div class="actions"><button class="ghost small" data-action="edit-service" data-arg="${esc(s.name)}">Edit</button>
+        <button class="ghost small danger-text" data-action="remove-service" data-arg="${esc(s.name)}">Remove</button></div></div>
       ${s.dir
         ? (s.running
           ? `<p class="okline">● Serving the folder <code>${esc(s.dir)}</code></p>`
@@ -614,16 +620,63 @@ function setSiteMode(on) {
   f.local_port.required = !on; f.dir.required = on;
 }
 
+// editing is the service the dialog is changing, or null when it adds one.
+let editing = null;
+
+function serviceDialogMode(edit) {
+  editing = edit;
+  $("dlg-service-title").textContent = edit ? `Edit ${edit.name}` : "Add a service";
+  $("service-submit").textContent = edit ? "Save changes" : "Add service";
+  $("service-intro").hidden = !!edit;
+  $("templates").hidden = !!edit;
+  $("service-edit-note").hidden = !edit;
+  $("service-error").hidden = true;
+  $("service-submit").disabled = false;
+}
+
 function openServiceDialog() {
   const f = $("service-form");
   f.reset();
   setSiteMode(false);
-  $("service-error").hidden = true;
-  $("service-submit").disabled = false;
+  serviceDialogMode(null);
   $("templates").innerHTML = templates.map((t, i) =>
     `<button type="button" class="tpl" data-tpl="${i}"><b>${esc(t.label)}</b><span class="muted small">${esc(t.hint)}</span></button>`).join("");
   $("dlg-service").showModal();
 }
+
+// The same form, prefilled: only what the user changes is sent (PATCH).
+function openEditService(name) {
+  const s = state.services.find(x => x.name === name);
+  if (!s) return;
+  const f = $("service-form");
+  f.reset();
+  setSiteMode(!!s.dir);
+  serviceDialogMode(s);
+  f.name.value = s.name;
+  f.local_port.value = s.dir ? "" : s.local_port;
+  f.dir.value = s.dir || "";
+  f.protocol.value = s.protocol || "tcp";
+  f.visibility.value = s.visibility;
+  f.record.checked = !!s.record;
+  $("dlg-service").showModal();
+}
+
+// serviceChanges is the edit to send: the fields that differ from s.
+function serviceChanges(f, s) {
+  const e = {};
+  if (f.name.value !== s.name) e.name = f.name.value;
+  if (f.visibility.value !== s.visibility) e.visibility = f.visibility.value;
+  if (s.dir) {
+    if (f.dir.value.trim() !== s.dir) e.dir = f.dir.value.trim();
+  } else {
+    if (Number(f.local_port.value) !== s.local_port) e.local_port = Number(f.local_port.value);
+    if (f.protocol.value !== s.protocol) e.protocol = f.protocol.value;
+  }
+  const rec = (s.dir || f.protocol.value === "http") && f.record.checked;
+  if (rec !== !!s.record) e.record = rec;
+  return e;
+}
+
 $("templates").addEventListener("click", e => {
   const b = e.target.closest("[data-tpl]");
   if (!b) return;
@@ -641,6 +694,21 @@ $("service-form").addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   $("service-submit").disabled = true;
+  if (editing) {
+    const s = editing, e = serviceChanges(f, s);
+    try {
+      if (Object.keys(e).length) {
+        await api("/api/services/" + encodeURIComponent(s.name), json("PATCH", e));
+        toast(e.name ? `Renamed ${s.name} to ${e.name}` : `Saved ${s.name}`);
+      }
+      $("dlg-service").close();
+      refresh();
+    } catch (err) {
+      $("service-error").textContent = err.message;
+      $("service-error").hidden = false;
+    } finally { $("service-submit").disabled = false; }
+    return;
+  }
   try {
     const site = f.dir.required;
     await api("/api/services", json("POST", site
@@ -998,6 +1066,10 @@ $("join-form").addEventListener("submit", async e => {
 
 const playable = /\.(mp3|flac|ogg|opus|wav|m4a|aac|mp4|webm)$/i;
 
+// A file's id for the API: an owner file by its name (unique), an unnamed
+// one by its hash; a received file always by its hash.
+const fileRef = f => f.name || f.hash;
+
 function renderFiles() {
   if (!loaded) return;
   $("file-list").innerHTML = state.files.length ? `<div class="rows">${state.files.map(f => `
@@ -1008,26 +1080,75 @@ function renderFiles() {
       <div class="actions">
         ${playable.test(f.name || "") ? `<button class="ghost small" data-action="play" data-arg="${esc(f.hash)}">Play</button>` : ""}
         <a class="button ghost small" href="/blob/${esc(f.hash)}" download="${esc(f.name || f.hash)}">Download</a>
+        ${f.from ? "" : `<button class="ghost small" data-action="rename-file" data-arg="${esc(fileRef(f))}">Rename</button>
+        ${f.name ? `<button class="ghost small" data-action="replace-file" data-arg="${esc(f.name)}">Replace</button>` : ""}`}
         <button class="ghost small desktop-only" data-action="copy-text" data-arg="${esc(f.hash)}">Copy hash</button>
+        <button class="ghost small danger-text" data-action="${f.from ? "delete-received" : "delete-file"}" data-arg="${esc(f.from ? f.hash : fileRef(f))}">Delete</button>
       </div>
     </div>`).join("")}</div>`
     : `<div class="empty"><p class="muted">No files yet. Add some above, or ask a peer to send you one.</p></div>`;
 }
 
-function play(hash) {
-  const p = $("player");
-  p.src = "/blob/" + encodeURIComponent(hash);
-  p.hidden = false;
-  p.play().catch(fail);
+async function renameFile(ref) {
+  const f = state.files.find(x => !x.from && fileRef(x) === ref);
+  await ask({ title: "Rename file", yes: "Rename", input: { label: "New name", value: f ? f.name : "" },
+    html: `<p class="muted small">Peers see the new name the next time they open your shared files.</p>`,
+    run: async name => {
+      await api(`/api/files/${encodeURIComponent(ref)}/name`, json("PUT", { name }));
+      toast(`Renamed to ${name}`); refresh();
+    } });
+}
+
+async function deleteFile(ref) {
+  const f = state.files.find(x => !x.from && fileRef(x) === ref);
+  await ask({ title: `Delete ${f && f.name ? f.name : "this file"}?`, yes: "Delete", danger: true,
+    html: `<p>Peers no longer see it on your shared files page.</p>`,
+    run: async () => { await api("/api/files/" + encodeURIComponent(ref), { method: "DELETE" }); toast("Deleted"); refresh(); } });
+}
+
+async function deleteReceived(hash) {
+  const f = state.files.find(x => x.from && x.hash === hash);
+  await ask({ title: `Delete ${f && f.name ? f.name : "this file"}?`, yes: "Delete", danger: true,
+    html: `<p>It is removed from this machine. ${f ? esc(peerName(f.from)) : "The peer"} still has its own copy.</p>`,
+    run: async () => { await api("/api/inbox/" + encodeURIComponent(hash), { method: "DELETE" }); toast("Deleted"); refresh(); } });
+}
+
+// Replace: pick a file whose content takes over the shared file's name.
+function pickReplacement(name) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.addEventListener("change", () => { if (input.files[0]) storeFile(input.files[0], name, true).then(refresh); });
+  input.click();
+}
+
+// postFile uploads one file as the shared file called name (replace: that
+// file gets the new content).
+function postFile(file, name, replace) {
+  const fd = new FormData();
+  fd.append("name", name);
+  if (replace) fd.append("replace", "1");
+  fd.append("file", file, file.name);
+  return api("/api/files", { method: "POST", body: fd });
+}
+
+// storeFile is postFile for the screen: a taken name is offered as a
+// replacement instead of failing.
+async function storeFile(file, name, replace) {
+  try {
+    await postFile(file, name, replace);
+    toast(replace ? `Replaced ${name}` : `Stored ${name}`);
+  } catch (err) {
+    if (err.status !== 409 || replace) return fail(err);
+    await ask({ title: `Replace ${name}?`, yes: "Replace",
+      html: `<p>A shared file is already called <b>${esc(name)}</b>. Replace its content with the file you picked?</p>`,
+      run: async () => { await postFile(file, name, true); toast(`Replaced ${name}`); } });
+  }
 }
 
 async function upload(files) {
   for (const file of files) {
     $("upload-status").textContent = `Uploading ${file.name}…`;
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    try { await api("/api/files", { method: "POST", body: fd }); toast(`Stored ${file.name}`); }
-    catch (err) { fail(err); }
+    await storeFile(file, file.name, false);
   }
   $("upload-status").textContent = "";
   $("file-input").value = "";

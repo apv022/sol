@@ -64,10 +64,28 @@ Otherwise it closes without sending a byte. `op` is one of `connect`, `pair`, `l
 | `_inbox` | Receives files: `PUT /files/{name}`, answers with the SHA-256 | yes |
 | `_files` | The shared-files page (files the owner added in the panel) | no |
 
+The owner manages `_files` from the panel's Files screen or `sol files`: add, rename, replace
+(new content under the same name) and delete. A peer sees each change the next time it loads
+the page. Names are unique; the same bytes may be under several names, and are deleted from disk
+only when the last name (or inbox entry) referring to them goes.
+
 Received files go to the receiver's own files list marked "from <peer>". They are **not** shown
 on `_files` to other peers until the owner shares them. Limits: 4 GiB per file, 20 GiB total
 from peers. The sender hashes while it streams and checks the receiver's answer, so a file
 that arrives is the file that was sent.
+
+## Editing and renaming a service
+
+`sol service edit` (or Edit in the panel) changes a service in place. A new port or protocol
+applies to the next connection; streams already open keep going. A public service is published
+again under the same key, so its address does not change.
+
+Renaming changes the name on this node only, and **shares follow it**: every peer that could open
+`web` can open it as `site`. Peers are not told at once (the protocol has no push): they see the
+new name the next time they ask for this node's list (`sol peers -r`, the panel's refresh, or a
+reconnect that lists). Their tunnels and bookmarks to the old name stop working, since this node
+refuses names that no longer exist; they open the service again under its new name. Live streams
+opened before the rename stay up. The service keeps its onion and record keys under the new name.
 
 ## Running it
 

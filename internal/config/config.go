@@ -81,6 +81,39 @@ type Service struct {
 	Record bool `json:"record,omitempty"`
 }
 
+// ServiceEdit is a partial change to a service (UpdateService, the panel's
+// Edit form, `sol service edit`): nil fields keep their value.
+type ServiceEdit struct {
+	Name       *string `json:"name,omitempty"` // rename
+	LocalPort  *int    `json:"local_port,omitempty"`
+	Protocol   *string `json:"protocol,omitempty"`
+	Visibility *string `json:"visibility,omitempty"`
+	Dir        *string `json:"dir,omitempty"` // a site's folder
+	Record     *bool   `json:"record,omitempty"`
+}
+
+// Apply copies the set fields of e onto s.
+func (e ServiceEdit) Apply(s *Service) {
+	if e.Name != nil {
+		s.Name = *e.Name
+	}
+	if e.LocalPort != nil {
+		s.LocalPort = *e.LocalPort
+	}
+	if e.Protocol != nil {
+		s.Protocol = *e.Protocol
+	}
+	if e.Visibility != nil {
+		s.Visibility = *e.Visibility
+	}
+	if e.Dir != nil {
+		s.Dir = *e.Dir
+	}
+	if e.Record != nil {
+		s.Record = *e.Record
+	}
+}
+
 // Tunnel is a peer's service that this node keeps reachable on
 // 127.0.0.1:Port (docs/PEERS.md, "Tunnels"). Tunnels are saved so they come
 // back on the same port after a restart, and bookmarks keep working.
@@ -623,6 +656,51 @@ func (c *Config) SetServiceVisibility(name, visibility string) error {
 		c.Services[i].Visibility = visibility
 		return nil
 	})
+}
+
+// UpdateService changes the named service in place and saves: fn edits a
+// copy, which is validated exactly like a new service (and must not take
+// another service's name). Nothing changes when fn or validation fails.
+// A rename carries every peer's share along, so the peers that could open
+// the service under its old name can open it under the new one.
+func (c *Config) UpdateService(name string, fn func(*Service) error) (Service, error) {
+	var out Service
+	err := c.mutate(func() error {
+		i := slices.IndexFunc(c.Services, func(x Service) bool { return x.Name == name })
+		if i < 0 {
+			return fmt.Errorf("service %q: %w", name, ErrNotFound)
+		}
+		s := c.Services[i]
+		s.Transports = slices.Clone(s.Transports)
+		if err := fn(&s); err != nil {
+			return err
+		}
+		if err := validateService(s); err != nil {
+			return err
+		}
+		if s.Name != name {
+			if slices.ContainsFunc(c.Services, func(x Service) bool { return x.Name == s.Name }) {
+				return fmt.Errorf("service %q: %w", s.Name, ErrDuplicate)
+			}
+			for j := range c.Peers {
+				shares := make([]string, 0, len(c.Peers[j].Shares))
+				for _, sh := range c.Peers[j].Shares {
+					if sh == name {
+						sh = s.Name
+					}
+					shares = append(shares, sh)
+				}
+				c.Peers[j].Shares = shares
+			}
+		}
+		services := slices.Clone(c.Services) // the rollback copy shares the old backing array
+		services[i] = s
+		c.Services = services
+		out = s
+		out.Transports = slices.Clone(s.Transports)
+		return nil
+	})
+	return out, err
 }
 
 // ServiceList returns a copy of all services.

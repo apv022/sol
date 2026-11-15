@@ -66,19 +66,100 @@ func (n *Node) inboxHandler(p config.Peer) http.Handler {
 			http.Error(w, "could not store the file", http.StatusInternalServerError)
 			return
 		}
-		size := int64(0)
-		if f, err := n.blobs.Open(hash); err == nil {
-			if st, err := f.Stat(); err == nil {
-				size = st.Size()
-			}
-			f.Close()
-		}
+		size := n.blobSize(hash)
 		n.log.Add(events.KindFile, fmt.Sprintf("received %s (%s) from %s", name, humanBytes(size), peers.Describe(p)))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]any{"hash": hash, "size": size})
 	})
 	return mux
+}
+
+// blobSize is the size of a stored blob (0 if it can't be read).
+func (n *Node) blobSize(hash string) int64 {
+	f, err := n.blobs.Open(hash)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err == nil {
+		return st.Size()
+	}
+	return 0
+}
+
+// AddFile stores r as one of this node's shared files (the _files page)
+// called name. With replace, a file already called name gets the new
+// content; without, a taken name is refused (blob.Add). Peers that open
+// _files see the change on their next page load.
+func (n *Node) AddFile(r io.Reader, name string, replace bool) (string, error) {
+	hash, err := n.blobs.Add(r, name, replace)
+	if err != nil {
+		return "", err
+	}
+	verb := "file shared"
+	if replace {
+		verb = "shared file updated"
+	}
+	n.log.Add(events.KindFile, fmt.Sprintf("%s: %s (%s)", verb, cmp(blob.CleanName(name), short(hash)), humanBytes(n.blobSize(hash))))
+	return hash, nil
+}
+
+// RenameFile renames one of this node's shared files (ref: its name, or
+// the hash of an unnamed one).
+func (n *Node) RenameFile(ref, newName string) error {
+	if err := n.blobs.Rename(ref, newName); err != nil {
+		return err
+	}
+	n.log.Add(events.KindFile, fmt.Sprintf("shared file renamed: %s -> %s", ref, blob.CleanName(newName)))
+	return nil
+}
+
+// DeleteFile removes a file: one of this node's shared files (by name, or
+// the hash of an unnamed one) or, failing that, a file a peer sent (by its
+// hash, or its name when exactly one received file has it). The bytes stay
+// on disk while another name or the inbox still refers to them.
+func (n *Node) DeleteFile(ref string) error {
+	err := n.DeleteSharedFile(ref)
+	if !errors.Is(err, config.ErrNotFound) {
+		return err
+	}
+	list, lerr := n.blobs.List()
+	if lerr != nil {
+		return lerr
+	}
+	var match []string
+	for _, e := range list {
+		if e.From != "" && (e.Hash == ref || e.Name == ref) {
+			match = append(match, e.Hash)
+		}
+	}
+	switch len(match) {
+	case 0:
+		return fmt.Errorf("file %q: %w", ref, config.ErrNotFound)
+	case 1:
+		return n.DeleteReceived(match[0])
+	}
+	return fmt.Errorf("%d received files are called %q; remove one by its hash (sol files)", len(match), ref)
+}
+
+// DeleteSharedFile removes one of this node's shared files (by name, or
+// the hash of an unnamed one); see blob.Store.Delete.
+func (n *Node) DeleteSharedFile(ref string) error {
+	if err := n.blobs.Delete(ref); err != nil {
+		return err
+	}
+	n.log.Add(events.KindFile, "shared file deleted: "+ref)
+	return nil
+}
+
+// DeleteReceived removes a file a peer sent (by hash) from the inbox.
+func (n *Node) DeleteReceived(hash string) error {
+	if err := n.blobs.DeleteReceived(hash); err != nil {
+		return err
+	}
+	n.log.Add(events.KindFile, "received file deleted: "+short(hash))
+	return nil
 }
 
 // SendFile sends r to peer id's inbox under name and returns the SHA-256 of

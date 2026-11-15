@@ -6,6 +6,17 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Edit a service in place** (panel: Edit on each service; `sol service edit <name> [--port N]
+  [--http|--tcp] [--rename NEW]`, `sol site edit <name> [--folder DIR] [--record|--no-record]`;
+  `PATCH /api/services/{name}`). New connections use the new port at once; open streams keep
+  going. A public service keeps its address, also when renamed (its onion and record keys move
+  with it). A rename carries every peer's share along; peers see the new name after a refresh and
+  reopen it there. Refused edits change nothing.
+- **Shared files are now fully editable** (panel Files screen, `sol files [add|rename|rm]`, API
+  `PUT /api/files/{ref}/name`, `DELETE /api/files/{ref}`, `DELETE /api/inbox/{hash}`): add,
+  rename, replace (same name, new content) and delete; delete files peers sent too. The same bytes
+  can be shared under several names; they leave the disk only with their last name (or inbox
+  entry). Peers see changes on their next look at the shared files page.
 - `sol network-changed [reason]` tells the running node that the network changed (the Android app
   runs it on every default-network change), so it re-checks its connections at once.
 - `internal/faultnet`, a fault-injection test kit (scripted fake tor, TCP/SOCKS5 proxies that add latency or blackhole, reset or refuse connections), and tests that use it for the Tor supervisor and peer liveness. These have only been run on Linux so far.

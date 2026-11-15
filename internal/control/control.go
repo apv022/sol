@@ -15,6 +15,7 @@
 //	      keep running after the command exits)
 //	send  after an OK response, the client writes the file and closes its
 //	      write side; the server answers with a second Response holding the hash
+//	file-add  the same as send, into this node's own shared files
 package control
 
 import (
@@ -47,6 +48,12 @@ const (
 	OpServiceAdd    = "service-add"    // Service, Port or Dir, Visibility, Protocol, Record -> LocalService
 	OpServiceRemove = "service-remove" // Service
 	OpServiceVis    = "service-vis"    // Service, Visibility -> LocalService
+	OpServiceEdit   = "service-edit"   // Service, Edit -> LocalService (under its new name)
+
+	OpFiles      = "files"       // -> []File (shared files and the inbox)
+	OpFileAdd    = "file-add"    // Name, Replace; then the file bytes; then Sent
+	OpFileRename = "file-rename" // Name (a shared file's name or hash), Rename -> File
+	OpFileRemove = "file-remove" // Name (a shared file's name or hash, or a received file's)
 
 	OpConfig    = "config"     // -> Config (every setting)
 	OpConfigSet = "config-set" // Key, Value -> Config
@@ -83,6 +90,30 @@ type Request struct {
 	Set        string `json:"set,omitempty"`    // help-tor: "on" or "off"
 	Dir        string `json:"dir,omitempty"`    // a site: serve this folder (absolute path) instead of a port
 	Record     bool   `json:"record,omitempty"` // publish a signed service record
+
+	Edit    *ServiceEdit `json:"edit,omitempty"`    // service-edit: what changes
+	Rename  string       `json:"rename,omitempty"`  // file-rename: the new name
+	Replace bool         `json:"replace,omitempty"` // file-add: a file with that name gets the new content
+}
+
+// ServiceEdit is a partial change to a service: nil fields keep their value.
+type ServiceEdit struct {
+	Name       *string `json:"name,omitempty"` // rename
+	Port       *int    `json:"port,omitempty"`
+	Protocol   *string `json:"protocol,omitempty"`
+	Visibility *string `json:"visibility,omitempty"`
+	Dir        *string `json:"dir,omitempty"` // a site's folder (absolute path)
+	Record     *bool   `json:"record,omitempty"`
+}
+
+// File is one entry of OpFiles: one of this node's shared files, or a file
+// a peer sent (From is then that peer's name).
+type File struct {
+	Hash     string `json:"hash"`
+	Name     string `json:"name,omitempty"`
+	From     string `json:"from,omitempty"`
+	Size     int64  `json:"size"`
+	Modified string `json:"modified"` // RFC 3339
 }
 
 // MaxReasonLen caps the free-text reason of OpNetworkChanged.

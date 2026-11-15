@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/web"
 )
 
@@ -261,5 +262,126 @@ func TestFilesPageEmptyState(t *testing.T) {
 	defer srv.Close()
 	if page := httpGet(t, srv.URL+"/"); !strings.Contains(page, "No files shared yet") {
 		t.Fatal("no empty state")
+	}
+}
+
+// Owner files are CRUD by name; the bytes go only with their last reference.
+func TestRenameReplaceDeleteSharedHash(t *testing.T) {
+	s, _ := New(t.TempDir())
+	h, _ := s.Add(strings.NewReader("same bytes"), "a.txt", false)
+	if h2, err := s.Add(strings.NewReader("same bytes"), "b.txt", false); err != nil || h2 != h {
+		t.Fatalf("second name: %v", err)
+	}
+	if list := mustList(t, s); len(list) != 2 {
+		t.Fatalf("want two names for one hash, got %+v", list)
+	}
+	if _, err := s.Add(strings.NewReader("other"), "a.txt", false); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("taken name: want ErrDuplicate, got %v", err)
+	}
+	if err := s.Rename("a.txt", "b.txt"); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("rename onto a taken name: %v", err)
+	}
+	if err := s.Rename("a.txt", "c.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rename("nope", "d.txt"); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("rename unknown: %v", err)
+	}
+	// Deleting one name keeps the bytes for the other.
+	if err := s.Delete("c.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Has(h) {
+		t.Fatal("blob removed while b.txt still refers to it")
+	}
+	if list := mustList(t, s); len(list) != 1 || list[0].Name != "b.txt" {
+		t.Fatalf("after delete: %+v", list)
+	}
+	// Replacing moves the name to new bytes and drops the old ones.
+	nh, err := s.Add(strings.NewReader("new version"), "b.txt", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Has(h) || !s.Has(nh) {
+		t.Fatal("replace kept the old bytes or lost the new")
+	}
+	if list := mustList(t, s); len(list) != 1 || list[0].Hash != nh || list[0].Name != "b.txt" {
+		t.Fatalf("after replace: %+v", list)
+	}
+	if err := s.Delete("b.txt"); err != nil || s.Has(nh) {
+		t.Fatalf("delete last name: %v, still there: %v", err, s.Has(nh))
+	}
+	// An unnamed file is addressed by hash.
+	u, _ := s.Put(strings.NewReader("unnamed"))
+	if err := s.Rename(u, "named.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("named.txt"); err != nil || s.Has(u) {
+		t.Fatalf("delete renamed unnamed: %v", err)
+	}
+	if list := mustList(t, s); len(list) != 0 {
+		t.Fatalf("store not empty: %+v", list)
+	}
+}
+
+// The same bytes in the inbox and on the shared page: deleting either one
+// keeps the other, and the page never serves an inbox-only file.
+func TestDeleteSharedWithInbox(t *testing.T) {
+	s, _ := New(t.TempDir())
+	h, _ := s.PutLimited(strings.NewReader("hello"), "from-peer.txt", "peer1", 100)
+	if s.Shared(h) {
+		t.Fatal("received file counts as shared")
+	}
+	if _, err := s.Add(strings.NewReader("hello"), "mine.txt", false); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Shared(h) || len(mustList(t, s)) != 2 {
+		t.Fatalf("owner copy: %+v", mustList(t, s))
+	}
+	if err := s.Delete("mine.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Has(h) || s.Shared(h) {
+		t.Fatal("deleting the owner's name removed the inbox file, or left it shared")
+	}
+	if list := mustList(t, s); len(list) != 1 || list[0].From != "peer1" {
+		t.Fatalf("inbox entry lost: %+v", list)
+	}
+	if err := s.Delete(h); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("Delete must not reach inbox files: %v", err)
+	}
+	if err := s.DeleteReceived(h); err != nil || s.Has(h) {
+		t.Fatalf("DeleteReceived: %v, still there: %v", err, s.Has(h))
+	}
+	if err := s.DeleteReceived(h); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("second DeleteReceived: %v", err)
+	}
+	// Inbox delete keeps bytes the owner also shares.
+	h, _ = s.PutLimited(strings.NewReader("both"), "x", "peer1", 100)
+	s.Add(strings.NewReader("both"), "both.txt", false)
+	if err := s.DeleteReceived(h); err != nil || !s.Has(h) || !s.Shared(h) {
+		t.Fatalf("inbox delete took the owner's file: %v", err)
+	}
+}
+
+// A file the owner deletes disappears from the shared-files page at once.
+func TestBrowserReflectsDelete(t *testing.T) {
+	s, _ := New(t.TempDir())
+	h, _ := s.Add(strings.NewReader("gone soon"), "gone.txt", false)
+	srv := httptest.NewServer(s.Browser())
+	defer srv.Close()
+	if !strings.Contains(httpGet(t, srv.URL+"/"), "gone.txt") {
+		t.Fatal("not listed")
+	}
+	s.Rename("gone.txt", "renamed.txt")
+	if page := httpGet(t, srv.URL+"/"); !strings.Contains(page, "renamed.txt") || strings.Contains(page, "gone.txt") {
+		t.Fatal("rename not reflected")
+	}
+	s.Delete("renamed.txt")
+	if strings.Contains(httpGet(t, srv.URL+"/"), "renamed.txt") {
+		t.Fatal("deleted file still listed")
+	}
+	if resp, _ := http.Get(srv.URL + "/blob/" + h); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted file still served: %d", resp.StatusCode)
 	}
 }

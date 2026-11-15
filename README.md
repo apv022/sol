@@ -166,9 +166,12 @@ The panel is one web page served on `127.0.0.1`. Themes, accent colour and layou
 | `sol peers [-r]` | List peers and what each side shares (`-r` asks them now) |
 | `sol services` | List this machine's services and who may open each |
 | `sol service add <name> <port> [--http] [--public] [--share PEER]` | Add an app running on `127.0.0.1:<port>` (private unless `--public`) |
+| `sol service edit <name> [--port N] [--http\|--tcp] [--rename NEW]` | Change a service in place: peers keep their access and a public one keeps its address (also the panel's **Edit** button) |
 | `sol service remove\|public\|private <name>` | Remove a service, or change who can open it |
 | `sol site add <name> <folder> [--private] [--record] [--share PEER]` | Serve a folder as a website on its own `.onion` (public unless `--private`). Sol serves the files itself; `--record` adds a signed record of its addresses |
+| `sol site edit <name> [--folder DIR] [--record\|--no-record] [--rename NEW]` | Change a site in place |
 | `sol site remove <name>` | Stop serving it (the folder isn't touched) |
+| `sol files [add <file>… [--name N] [--replace] \| rename <name> <new> \| rm <name>…]` | List, add, rename, replace and delete your shared files (and delete files peers sent); the panel's Files screen does the same |
 | `sol share <peer> <service> [--off]` | Let a peer open a service (`_files` = your shared files page) |
 | `sol open <peer> [service…] [-L svc=PORT]` | Keep what a peer shares reachable on `127.0.0.1` (ports from 9000; saved, survive restarts) |
 | `sol tunnels`, `sol close <peer> [service]` | List tunnels and whether the peer answers; close them |
@@ -200,7 +203,7 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Static sites from a folder (`sol site add`), with an opt-in signed record of their addresses | ✅ |
 | Panel themes, layouts and your own `panel.css`; installable as an app window | ✅ |
 | Give back to Tor: opt-in Snowflake proxy (`sol snowflake on`) | ✅ needs `snowflake-proxy` on PATH · 🚧 not bundled |
-| Shared files page for peers, streaming, SHA-256 fingerprints | ✅ |
+| Shared files page for peers, streaming, SHA-256 fingerprints; add, rename, replace and delete from the panel or `sol files` | ✅ |
 | Direct mode over WireGuard: straight to a peer, punching through home routers (Tailscale-style), TLS where UDP is blocked, Tor otherwise | ✅ opt-in (`"direct": true`) · ❌ symmetric NATs stay on Tor (no relays) |
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |

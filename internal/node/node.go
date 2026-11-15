@@ -106,6 +106,11 @@ type Node struct {
 	started time.Time
 	ready   chan struct{}
 
+	// renameMu makes a service rename (config, shares and the names of live
+	// connections) one step for handleConnect's last share check, which
+	// would otherwise see the new shares with the old name and cut a stream.
+	renameMu sync.RWMutex
+
 	// Set in Run before ready is closed.
 	ctx         context.Context
 	nodeAddr    string
@@ -318,7 +323,7 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 		if prov, err := runtime.Select(snap.Runtime.ProviderOrder, "tor", ropts); err != nil {
 			ts = append(ts, transport.NewUnavailable("tor", err))
 		} else {
-			ts = append(ts, transport.NewTor(filepath.Join(dataDir, "tor"), prov))
+			ts = append(ts, transport.NewTor(torDir(dataDir), prov))
 		}
 	}
 	if snap.Transports.I2P {
@@ -351,6 +356,10 @@ func buildTransports(cfg *config.Config, dataDir string, id *identity.Identity) 
 	}
 	return ts, warnings
 }
+
+// torDir is the tor transport's data directory (its onion keys live in
+// <torDir>/onions/<publication id>.key).
+func torDir(dataDir string) string { return filepath.Join(dataDir, "tor") }
 
 // ID returns the node's identity.
 func (n *Node) ID() *identity.Identity { return n.id }
@@ -841,8 +850,15 @@ func (n *Node) handleConnect(c net.Conn, req *protocol.Request, p config.Peer) {
 		n.log.Add(events.KindConnect, fmt.Sprintf("%s connected to %s (signature verified)", peers.Describe(p), req.Service))
 	}
 	defer n.untrack(c)
-	// Close the race with a removal that happened after Lookup.
-	if cur, ok := n.peers.Lookup(req.Key); !ok || !cur.Shared(req.Service) {
+	// Close the race with a removal that happened after Lookup. A rename
+	// meanwhile renamed the tracked connection too: check under that name.
+	n.renameMu.RLock()
+	n.mu.Lock()
+	svcName := n.conns[c].service
+	n.mu.Unlock()
+	cur, ok := n.peers.Lookup(req.Key)
+	n.renameMu.RUnlock()
+	if !ok || !cur.Shared(svcName) {
 		closeAll()
 		return
 	}

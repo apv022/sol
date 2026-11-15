@@ -142,7 +142,10 @@ worked), `LastOK`, `Down`/`DownSince`/`NextRedial`/`LastError` (the peer couldn'
 `Node.Peers()` groups tracked streams into `api.PeerView.Connections` (inbound and outbound), so
 the panel can show a peer as "connected and verified". Every listed stream passed the handshake
 with that peer's key. `Node.Services()` probes each service's local port, so the panel can warn
-when the app isn't running. Files keep a name and sender in `blobs/.names.json`. The built-in
+when the app isn't running. Files keep their labels in `blobs/.names.json`: the owner's names
+for each blob (unique; one blob may have several) and, for a received file, its name and sender.
+A blob leaves the disk only with its last label (`blob.Store.Delete`, `DeleteReceived`, `Add`
+with replace); an unlabelled blob is an unnamed file of the owner's. The built-in
 `_files` service is `blob.Store.Browser()`, which lists and serves only the owner's own files. Blobs
 are served with `Content-Security-Policy: sandbox`, so an HTML file can't run scripts.
 
@@ -233,6 +236,17 @@ A peer receiving `unpair` runs the same removal.
 directly (`tcp`) or a local `proxy` instance (`http`, with header stripping for
 anonymous-public). Anonymous-public services are never published on clearnet.
 
+### Editing a service
+
+Panel `PATCH /api/services/{name}` or `sol service edit` → `Node.EditService`. The change is
+validated and saved by `config.UpdateService` (all or nothing; a rename rewrites every peer's
+`shares` in the same write). `handleConnect` reads the service per connection, so a new port or
+protocol needs nothing else. A public service is unpublished and published again (same key, same
+address) when anything it is published with changes; on a rename its keys
+(`tor/onions/svc-<name>.key`, `services/<name>.key`) move to the new name first, and live
+streams are relabelled under `renameMu`, so the last share check in `handleConnect` never sees
+half a rename. The node publication is not touched.
+
 ### Sites and signed records
 
 A **site** is a service with a folder (`dir`) instead of a port (`sol site add`). The node serves
@@ -318,7 +332,7 @@ the Tor Project's broker and relay and public STUN servers from this machine's I
 ├── autostart-unit          where `sol autostart on` wrote the systemd unit (Linux, if enabled)
 ├── services/<name>.key     ed25519 seed that signs one public service's record (0600)
 ├── panel.css               optional: your own styles for the panel, loaded after the built-in ones
-├── blobs/<sha256>          (+ .names.json: display name and sender per file)
+├── blobs/<sha256>          (+ .names.json: the owner's names per blob; a received file's name and sender)
 ├── bin/                    extracted bundled binaries
 ├── snowflake/              snowflake-proxy.log (only if "help the Tor network" is on)
 └── tor/                    torrc, tor.log, data/, onions/<id>.key

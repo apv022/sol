@@ -22,6 +22,7 @@ import (
 	"github.com/apv022/sol/internal/netutil"
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/peers"
+	"github.com/apv022/sol/internal/site"
 	"github.com/apv022/sol/internal/transport"
 )
 
@@ -150,6 +151,136 @@ func (n *Node) SetServiceVisibility(name, visibility string) error {
 	}
 	n.log.Add(events.KindService, fmt.Sprintf("service %s is now %s", name, visibility))
 	return nil
+}
+
+// EditService implements api.Backend: it changes a service in place, with
+// as little disruption as it can.
+//
+//   - Port, protocol, folder, record flag: saved, and every new connection
+//     uses them (handleConnect reads the service per connection). Streams
+//     already open keep going until they close. A public service is
+//     re-published under the same key, so its address doesn't change.
+//   - Visibility: as SetServiceVisibility (publish or unpublish).
+//   - Rename: peers' shares here follow the new name, live streams stay up,
+//     and the service keeps its onion and record keys, so a public address
+//     stays the same. Peers learn the new name the next time they ask for
+//     this node's list (docs/PEERS.md); their saved tunnels to the old name
+//     stop working until they open the service again under its new name.
+//
+// The node's own publication is not touched, so no peer connection drops.
+func (n *Node) EditService(name string, e config.ServiceEdit) (config.Service, error) {
+	old, ok := n.cfg.Service(name)
+	if !ok {
+		return config.Service{}, fmt.Errorf("service %q: %w", name, config.ErrNotFound)
+	}
+	want := old
+	e.Apply(&want)
+	if want.Dir != "" && want.Dir != old.Dir {
+		// A folder that can't be served is refused before anything changes.
+		_, closer, err := site.Handler(want.Dir)
+		if err != nil {
+			if u := errors.Unwrap(err); u != nil {
+				err = u
+			}
+			return old, fmt.Errorf("site %q: can't read the folder %s: %w", want.Name, want.Dir, err)
+		}
+		closer.Close()
+	}
+	n.renameMu.Lock()
+	updated, err := n.cfg.UpdateService(name, func(s *config.Service) error { e.Apply(s); return nil })
+	if err != nil {
+		n.renameMu.Unlock()
+		return old, err
+	}
+	renamed := updated.Name != name
+	if renamed {
+		n.mu.Lock()
+		for c, ci := range n.conns {
+			if ci.service == name && !ci.outbound {
+				ci.service = updated.Name
+				n.conns[c] = ci
+			}
+		}
+		n.mu.Unlock()
+	}
+	n.renameMu.Unlock()
+	if updated.Dir != "" && (renamed || updated.Dir != old.Dir) {
+		if renamed {
+			n.closeSite(name)
+		}
+		if err := n.openSite(updated); err != nil {
+			n.log.Add(events.KindService, err.Error())
+		}
+	}
+	public := func(s config.Service) bool { return s.Visibility != config.VisibilityPrivate }
+	republish := renamed || old.Visibility != updated.Visibility || old.LocalPort != updated.LocalPort ||
+		old.Protocol != updated.Protocol || old.Dir != updated.Dir || old.Record != updated.Record
+	if republish && (public(old) || public(updated)) {
+		n.unpublishService(name)
+	}
+	if renamed {
+		n.moveServiceKeys(name, updated.Name)
+	}
+	if republish && public(updated) && n.ctx != nil {
+		n.publishService(updated)
+	}
+	n.log.Add(events.KindService, "service "+describeEdit(old, updated))
+	return updated, nil
+}
+
+// describeEdit words what changed for the log: "web: port 80 -> 8080".
+func describeEdit(old, s config.Service) string {
+	var parts []string
+	if old.Name != s.Name {
+		parts = append(parts, "renamed to "+s.Name)
+	}
+	if old.LocalPort != s.LocalPort {
+		parts = append(parts, fmt.Sprintf("port %d -> %d", old.LocalPort, s.LocalPort))
+	}
+	if old.Protocol != s.Protocol {
+		parts = append(parts, old.Protocol+" -> "+s.Protocol)
+	}
+	if old.Visibility != s.Visibility {
+		parts = append(parts, "now "+s.Visibility)
+	}
+	if old.Dir != s.Dir {
+		parts = append(parts, "folder "+s.Dir)
+	}
+	if old.Record != s.Record {
+		parts = append(parts, fmt.Sprintf("signed record %s", map[bool]string{true: "on", false: "off"}[s.Record]))
+	}
+	if len(parts) == 0 {
+		return old.Name + ": nothing changed"
+	}
+	return old.Name + ": " + strings.Join(parts, ", ")
+}
+
+// moveServiceKeys carries a renamed service's keys (its onion key and the
+// key that signs its record) to the new name, so its public address and
+// record identity survive the rename. A key already saved under the new
+// name (a removed service's: keys outlive services) is kept aside, never
+// deleted.
+func (n *Node) moveServiceKeys(from, to string) {
+	for _, k := range []struct{ dir, prefix string }{
+		{filepath.Join(torDir(n.opts.DataDir), "onions"), "svc-"},
+		{filepath.Join(n.opts.DataDir, "services"), ""},
+	} {
+		src := filepath.Join(k.dir, k.prefix+from+".key")
+		dst := filepath.Join(k.dir, k.prefix+to+".key")
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if _, err := os.Stat(dst); err == nil {
+			aside := fmt.Sprintf("%s.replaced-%d", dst, time.Now().Unix())
+			if err := os.Rename(dst, aside); err != nil {
+				n.log.Add(events.KindService, "renaming "+from+": keeping its key failed: "+err.Error())
+				continue
+			}
+		}
+		if err := os.Rename(src, dst); err != nil {
+			n.log.Add(events.KindService, "renaming "+from+": moving its key failed, so its public address will change: "+err.Error())
+		}
+	}
 }
 
 // SetShare lets peer id open service (built-ins included), or stops it.

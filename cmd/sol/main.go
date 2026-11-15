@@ -12,8 +12,10 @@
 //	sol unpair <peer>                remove a peer (and tell it)
 //	sol services                     list this node's services
 //	sol service add <name> <port>    add a service (--http, --public, --share PEER)
+//	sol service edit <name> [...]    change a service in place (port, protocol, name)
 //	sol service remove <name>        remove a service
 //	sol site add <name> <folder>     publish a folder as a website on its own .onion
+//	sol files [ls|add|rename|rm]     your shared files (and the files peers sent you)
 //	sol name [NEW]                   show or change this node's name
 //	sol audit, sol version
 //
@@ -76,6 +78,11 @@ Your services (apps on this machine):
   sol service add <name> <port> [--http] [--public | --anonymous] [--share PEER ...]
                               add an app running on 127.0.0.1:<port>. Private by default:
                               only peers you share it with can open it. --share does that now.
+  sol service edit <name> [--port N] [--http | --tcp] [--rename NEW]
+                              change it in place: peers keep their access, and a public
+                              service keeps its address. New connections use the new port.
+                              Peers see a new name after they refresh (sol peers -r) and
+                              reopen it there (sol open); their old tunnel stops working.
   sol service remove <name>   remove it (the app itself isn't touched)
   sol service public <name>   give it its own .onion anyone can open in Tor Browser
   sol service private <name>  back to peers you share it with only
@@ -85,7 +92,19 @@ Your services (apps on this machine):
                               lists folders, and hides dotfiles and file dates.
                               --record also publishes a signed record at /.well-known/sol.json
                               that ties the site's addresses to one key (it shows the site runs Sol).
+  sol site edit <name> [--folder DIR] [--record | --no-record] [--rename NEW]
+                              change it in place (public: same address)
   sol site remove <name>      stop serving it (the folder isn't touched)
+
+Your shared files (the "_files" page peers you share it with can open):
+  sol files                   list them, and the files peers sent you
+  sol files add <file>... [--name N] [--replace]
+                              share files. A name already in use is refused unless
+                              --replace: then that file gets the new content.
+  sol files rename <name> <new>
+                              rename one (peers see it on their next look)
+  sol files rm <name>...      delete; the bytes go once no other name uses them. Also
+                              removes a file a peer sent (by its name or hash).
 
 Use your peers:
   sol peers [-r]              list peers; -r asks each one what it shares now
@@ -137,7 +156,7 @@ func main() {
 		"stop": runStop, "restart": runRestart, "network-changed": runNetworkChanged, "logs": runLogs, "config": runConfig,
 		"invite": runInvite, "pair": runPair, "peers": runPeers, "share": runShare,
 		"open": runOpen, "tunnels": runTunnels, "close": runClose, "send": runSend, "unpair": runUnpair, "name": runName,
-		"services": runServices, "service": runService, "site": runSite,
+		"services": runServices, "service": runService, "site": runSite, "files": runFiles,
 		"status": runStatus, "audit": runAudit, "autostart": runAutostart, "snowflake": runSnowflake,
 		"gateway": func(ctx context.Context, _ []string) error { return gateway.Run(ctx) },
 	}
@@ -764,13 +783,18 @@ func shareWith(ctx context.Context, path string, s *control.LocalService, share 
 // folder the node serves itself.
 func runSite(ctx context.Context, args []string) error {
 	const usageSite = "usage: sol site add <name> <folder> [--private | --anonymous] [--record] [--share PEER]\n" +
+		"       sol site edit <name> [--folder DIR] [--record | --no-record] [--rename NEW]\n" +
 		"       sol site remove <name>"
-	var private, anon, rec bool
+	var private, anon, rec, noRec bool
+	var folder, rename string
 	var share shareFlags
 	data, pos := flags("site", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&private, "private", false, "only peers you share it with can open it (no .onion of its own)")
 		fs.BoolVar(&anon, "anonymous", false, "public, with extra leak protection (experimental)")
 		fs.BoolVar(&rec, "record", false, "publish a signed record at "+record.Path+" (shows the site runs Sol)")
+		fs.BoolVar(&noRec, "no-record", false, "edit: stop publishing the signed record")
+		fs.StringVar(&folder, "folder", "", "edit: serve this folder instead")
+		fs.StringVar(&rename, "rename", "", "edit: give it this name")
 		fs.Var(&share, "share", "share it with this peer right away (repeatable)")
 	})
 	if len(pos) < 2 {
@@ -817,6 +841,32 @@ func runSite(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("Removed the site %s. The folder wasn't touched.\n", pos[1])
 		return nil
+	case "edit":
+		if len(pos) != 2 || (rec && noRec) {
+			return errors.New(usageSite)
+		}
+		e := control.ServiceEdit{}
+		if folder != "" {
+			dir, err := filepath.Abs(folder)
+			if err != nil {
+				return err
+			}
+			if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+				return fmt.Errorf("%s isn't a folder", dir)
+			}
+			e.Dir = &dir
+		}
+		if rec || noRec {
+			e.Record = &rec
+		}
+		if private || anon {
+			vis := config.VisibilityPrivate
+			if anon {
+				vis = config.VisibilityAnonymousPublic
+			}
+			e.Visibility = &vis
+		}
+		return editService(ctx, path, pos[1], e, rename)
 	}
 	return errors.New(usageSite)
 }
@@ -829,11 +879,17 @@ func (s *shareFlags) Set(v string) error { *s = append(*s, v); return nil }
 
 func runService(ctx context.Context, args []string) error {
 	const usageService = "usage: sol service add <name> <port> [--http] [--public | --anonymous] [--share PEER]\n" +
+		"       sol service edit <name> [--port N] [--http | --tcp] [--rename NEW]\n" +
 		"       sol service remove|public|private <name>"
-	var http, public, anon bool
+	var http, tcp, public, anon bool
+	var port int
+	var rename string
 	var share shareFlags
 	data, pos := flags("service", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&http, "http", false, "it's a web app (lets Sol strip server headers when public)")
+		fs.BoolVar(&tcp, "tcp", false, "edit: it's not a web app (plain TCP)")
+		fs.IntVar(&port, "port", 0, "edit: the app now listens on 127.0.0.1:<port>")
+		fs.StringVar(&rename, "rename", "", "edit: give it this name")
 		fs.BoolVar(&public, "public", false, "give it its own .onion anyone can open")
 		fs.BoolVar(&anon, "anonymous", false, "public, with extra leak protection (experimental)")
 		fs.Var(&share, "share", "share it with this peer right away (repeatable)")
@@ -890,8 +946,165 @@ func runService(ctx context.Context, args []string) error {
 		}
 		printService(s)
 		return nil
+	case "edit":
+		if len(pos) != 2 || (http && tcp) || public || anon {
+			return errors.New(usageService)
+		}
+		e := control.ServiceEdit{}
+		if port != 0 {
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("%d isn't a port number (1-65535)", port)
+			}
+			e.Port = &port
+		}
+		if http || tcp {
+			proto := config.ProtocolTCP
+			if http {
+				proto = config.ProtocolHTTP
+			}
+			e.Protocol = &proto
+		}
+		return editService(ctx, path, pos[1], e, rename)
 	}
 	return errors.New(usageService)
+}
+
+// editService sends one service-edit and prints the result.
+func editService(ctx context.Context, path, name string, e control.ServiceEdit, rename string) error {
+	if rename != "" {
+		e.Name = &rename
+	}
+	if e == (control.ServiceEdit{}) {
+		return fmt.Errorf("nothing to change; see `sol help` for what %s edit takes", "sol service|site")
+	}
+	var s control.LocalService
+	if err := control.Call(ctx, path, control.Request{Op: control.OpServiceEdit, Service: name, Edit: &e}, &s); err != nil {
+		return err
+	}
+	fmt.Printf("Changed %s.\n", name)
+	printService(s)
+	if rename != "" && rename != name {
+		fmt.Println("Peers it is shared with can still open it. They see the new name after a refresh (`sol peers -r`)")
+		fmt.Println("and need to open it again under that name; a tunnel to the old name stops working.")
+	}
+	return nil
+}
+
+// runFiles is `sol files [ls|add|rename|rm]`: this node's shared files.
+func runFiles(ctx context.Context, args []string) error {
+	const usageFiles = "usage: sol files [ls]\n" +
+		"       sol files add <file> [more files] [--name N] [--replace]\n" +
+		"       sol files rename <name> <new name>\n" +
+		"       sol files rm <name> [more names]"
+	var name string
+	var replace bool
+	data, pos := flags("files", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&name, "name", "", "add: the name peers see (one file only; default: the file's name)")
+		fs.BoolVar(&replace, "replace", false, "add: a file with that name gets the new content")
+	})
+	path := sock(data)
+	sub := "ls"
+	if len(pos) > 0 {
+		sub, pos = pos[0], pos[1:]
+	}
+	switch sub {
+	case "ls", "list":
+		var list []control.File
+		if err := control.Call(ctx, path, control.Request{Op: control.OpFiles}, &list); err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Println("No files yet. Share one with `sol files add <file>`, and let a peer see them with `sol share <peer> _files`.")
+			return nil
+		}
+		for _, f := range list {
+			n := f.Name
+			if n == "" {
+				n = "(unnamed)"
+			}
+			where := "shared"
+			if f.From != "" {
+				where = "from " + f.From
+			}
+			fmt.Printf("%-40s %9s  %-16s %s\n", n, human(f.Size), where, f.Hash[:12])
+		}
+		return nil
+	case "add":
+		if len(pos) == 0 || (name != "" && len(pos) > 1) {
+			return errors.New(usageFiles)
+		}
+		for _, file := range pos {
+			n := name
+			if n == "" {
+				n = filepath.Base(file)
+			}
+			if err := addFile(ctx, path, file, n, replace); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "rename", "mv":
+		if len(pos) != 2 {
+			return errors.New(usageFiles)
+		}
+		if err := control.Call(ctx, path, control.Request{Op: control.OpFileRename, Name: pos[0], Rename: pos[1]}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Renamed %s to %s.\n", pos[0], pos[1])
+		return nil
+	case "rm", "remove", "delete":
+		if len(pos) == 0 {
+			return errors.New(usageFiles)
+		}
+		for _, n := range pos {
+			if err := control.Call(ctx, path, control.Request{Op: control.OpFileRemove, Name: n}, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted %s.\n", n)
+		}
+		return nil
+	}
+	return errors.New(usageFiles)
+}
+
+// addFile streams one file into the node's shared files.
+func addFile(ctx context.Context, path, file, name string, replace bool) error {
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return fmt.Errorf("%s is a folder; add its files (or a .zip/.tar of it)", file)
+	}
+	c, err := control.Dial(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if err := c.Send(control.Request{Op: control.OpFileAdd, Name: name, Replace: replace}); err != nil {
+		return err
+	}
+	if err := c.Recv(nil); err != nil {
+		return err
+	}
+	if _, err := io.Copy(c.Conn, f); err != nil {
+		return err
+	}
+	c.CloseWrite()
+	var sent control.Sent
+	if err := c.Recv(&sent); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("%w (add --replace to give it the new content)", err)
+		}
+		return err
+	}
+	fmt.Printf("Shared %s (%s), SHA-256 %s\n", name, human(sent.Size), sent.Hash)
+	return nil
 }
 
 func runAudit(ctx context.Context, args []string) error {

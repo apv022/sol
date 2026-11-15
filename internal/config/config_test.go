@@ -341,3 +341,75 @@ func TestOptions(t *testing.T) {
 		t.Fatalf("lists: stun=%q advertise=%q", get("stun"), get("direct_advertise"))
 	}
 }
+
+// UpdateService validates the edited service like a new one, saves it
+// atomically, and changes nothing (in memory or on disk) when it fails.
+func TestUpdateService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.AddService(Service{Name: "web", LocalPort: 80, Visibility: VisibilityPrivate})
+	c.AddService(Service{Name: "db", LocalPort: 5432, Visibility: VisibilityPrivate})
+	c.AddService(Service{Name: "blog", Dir: t.TempDir(), Visibility: VisibilityPublic})
+	c.AddPeer(Peer{ID: "abc", NodeID: "n", Name: "laptop", PubKey: "k", Shares: []string{"_inbox", "web"}})
+	before, _ := os.ReadFile(path)
+
+	bad := []func(*Service) error{
+		func(s *Service) error { s.LocalPort = 0; return nil },
+		func(s *Service) error { s.LocalPort = 70000; return nil },
+		func(s *Service) error { s.Protocol = "udp"; return nil },
+		func(s *Service) error { s.Visibility = "everyone"; return nil },
+		func(s *Service) error { s.Name = "db"; return nil },     // taken
+		func(s *Service) error { s.Name = "_files"; return nil }, // built-in names are not allowed
+		func(s *Service) error { s.Name = "Bad Name"; return nil },
+		func(s *Service) error { s.Record = true; return nil }, // a record needs http
+		func(s *Service) error { s.Dir = "/srv"; return nil },  // an app can't also be a site
+		func(s *Service) error { return errors.New("caller refused") },
+	}
+	for i, fn := range bad {
+		if _, err := c.UpdateService("web", fn); err == nil {
+			t.Errorf("edit %d accepted", i)
+		}
+	}
+	if _, err := c.UpdateService("blog", func(s *Service) error { s.Protocol = ProtocolTCP; return nil }); err == nil {
+		t.Error("a site became tcp")
+	}
+	if _, err := c.UpdateService("nope", func(*Service) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown service: %v", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatal("a refused edit changed the file")
+	}
+	if s, _ := c.Service("web"); s.LocalPort != 80 || s.Protocol != ProtocolTCP {
+		t.Fatalf("a refused edit changed memory: %+v", s)
+	}
+
+	got, err := c.UpdateService("web", func(s *Service) error {
+		s.Name, s.LocalPort, s.Protocol, s.Visibility = "site", 8081, ProtocolHTTP, VisibilityPublic
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "site" || got.LocalPort != 8081 {
+		t.Fatalf("returned %+v", got)
+	}
+	if _, ok := c.Service("web"); ok {
+		t.Fatal("old name still there")
+	}
+	if p, _ := c.Peer("abc"); !p.Shared("site") || p.Shared("web") || !p.Shared("_inbox") {
+		t.Fatalf("shares did not follow the rename: %v", p.Shares)
+	}
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := c2.Service("site"); !ok || s.LocalPort != 8081 || s.Visibility != VisibilityPublic || s.Protocol != ProtocolHTTP {
+		t.Fatalf("not saved: %+v", s)
+	}
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode %v", fi.Mode().Perm())
+	}
+}

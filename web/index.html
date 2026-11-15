@@ -256,8 +256,11 @@
     <header class="sheet-head"><h2 id="dlg-service-title">Add a service</h2>
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
     <div class="sheet-body">
-      <p class="muted">Pick the app, or choose Custom. An app must already be running on this machine;
+      <p id="service-intro" class="muted">Pick the app, or choose Custom. An app must already be running on this machine;
         a website is just a folder of files.</p>
+      <p id="service-edit-note" class="muted small" hidden>Changes apply to new connections; ones already open
+        keep going. A public service keeps its address. After a rename, peers keep their access but see the
+        new name only when they refresh, and open it again under that name.</p>
       <div id="templates" class="templates"></div>
 
       <label>Name <span class="muted">(lowercase letters, numbers, dashes)</span>

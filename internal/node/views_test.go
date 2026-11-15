@@ -1,6 +1,7 @@
 package node
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/apv022/sol/internal/api"
 	"github.com/apv022/sol/internal/config"
+	"github.com/apv022/sol/internal/events"
 	"github.com/apv022/sol/internal/peers"
 	"github.com/apv022/sol/internal/transport"
 )
@@ -176,5 +178,33 @@ func TestPeerStateTruthfulWithTunnel(t *testing.T) {
 	}
 	if s := n.peerState(p.ID, true, api.PathView{}); s != "connected" {
 		t.Fatalf("open connection: %s", s)
+	}
+}
+
+// A renamed service keeps its onion and record keys (so a public address
+// survives a rename); a key already under the new name is kept aside.
+func TestMoveServiceKeysOnRename(t *testing.T) {
+	dir := t.TempDir()
+	n := &Node{opts: Options{DataDir: dir}, log: events.New(10)}
+	onion := filepath.Join(torDir(dir), "onions")
+	svcs := filepath.Join(dir, "services")
+	os.MkdirAll(onion, 0o700)
+	os.MkdirAll(svcs, 0o700)
+	os.WriteFile(filepath.Join(onion, "svc-blog.key"), []byte("onion"), 0o600)
+	os.WriteFile(filepath.Join(svcs, "blog.key"), []byte("record"), 0o600)
+	os.WriteFile(filepath.Join(svcs, "news.key"), []byte("an older service"), 0o600)
+	n.moveServiceKeys("blog", "news")
+	if b, _ := os.ReadFile(filepath.Join(onion, "svc-news.key")); string(b) != "onion" {
+		t.Fatalf("onion key not moved: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(svcs, "news.key")); string(b) != "record" {
+		t.Fatalf("record key not moved: %q", b)
+	}
+	aside, _ := filepath.Glob(filepath.Join(svcs, "news.key.replaced-*"))
+	if len(aside) != 1 {
+		t.Fatal("the key already under the new name was not kept")
+	}
+	if _, err := os.Stat(filepath.Join(svcs, "blog.key")); err == nil {
+		t.Fatal("old key left behind")
 	}
 }

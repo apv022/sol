@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/internal/api"
+	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/config"
 	"github.com/apv022/sol/internal/control"
 	"github.com/apv022/sol/internal/netutil"
@@ -183,6 +184,40 @@ func (n *Node) handleControl(c net.Conn) {
 	case control.OpServiceVis:
 		err := n.SetServiceVisibility(req.Service, req.Visibility)
 		reply(n.controlServiceNamed(req.Service), err)
+	case control.OpServiceEdit:
+		if req.Edit == nil {
+			reply(nil, errors.New("service-edit: nothing to change"))
+			return
+		}
+		e := req.Edit
+		s, err := n.EditService(req.Service, config.ServiceEdit{Name: e.Name, LocalPort: e.Port, Protocol: e.Protocol,
+			Visibility: e.Visibility, Dir: e.Dir, Record: e.Record})
+		if err != nil {
+			reply(nil, err)
+			return
+		}
+		reply(n.controlServiceNamed(s.Name), nil)
+	case control.OpFiles:
+		list, err := n.blobs.List()
+		out := []control.File{}
+		for _, e := range list {
+			out = append(out, n.controlFile(e))
+		}
+		reply(out, err)
+	case control.OpFileAdd:
+		if err := control.WriteResponse(c, nil, nil); err != nil {
+			return
+		}
+		hash, err := n.AddFile(br, req.Name, req.Replace)
+		var size int64
+		if err == nil {
+			size = n.blobSize(hash)
+		}
+		reply(control.Sent{Hash: hash, Size: size}, err)
+	case control.OpFileRename:
+		reply(nil, n.RenameFile(req.Name, req.Rename))
+	case control.OpFileRemove:
+		reply(nil, n.DeleteFile(req.Name))
 	case control.OpConfig, control.OpConfigSet:
 		var err error
 		if req.Op == control.OpConfigSet {
@@ -287,6 +322,17 @@ func (n *Node) controlService(s api.ServiceView) control.LocalService {
 		}
 	}
 	return v
+}
+
+func (n *Node) controlFile(e blob.Entry) control.File {
+	f := control.File{Hash: e.Hash, Name: e.Name, Size: e.Size, Modified: e.Modified.Format(time.RFC3339)}
+	if e.From != "" {
+		f.From = e.From
+		if p, ok := n.peers.Get(e.From); ok {
+			f.From = p.Name
+		}
+	}
+	return f
 }
 
 func (n *Node) controlStatus() control.Status {

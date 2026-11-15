@@ -22,6 +22,7 @@
 //	GET    /api/services                    list (with public addresses)
 //	POST   /api/services                    add {name, local_port, visibility, protocol}
 //	PUT    /api/services/{name}/visibility  {visibility}
+//	PATCH  /api/services/{name}             {name?, local_port?, protocol?, visibility?, dir?, record?}: edit in place
 //	DELETE /api/services/{name}
 //	GET    /api/peers                       peers with live connections (never credentials)
 //	POST   /api/peers/invite                -> {link, expires}
@@ -34,7 +35,10 @@
 //	GET    /api/tunnels                     open tunnels with their status
 //	DELETE /api/tunnels/{port}              close a tunnel
 //	GET    /api/files                       list blobs (with who sent each)
-//	POST   /api/files                       multipart upload, field "file"
+//	POST   /api/files                       multipart upload: optional fields "name" and "replace" ("1"), then "file"
+//	PUT    /api/files/{ref}/name            {name}: rename a shared file (ref: its name, or an unnamed file's hash)
+//	DELETE /api/files/{ref}                 delete a shared file (the bytes go with their last name)
+//	DELETE /api/inbox/{hash}                delete a file a peer sent
 //	GET    /blob/{hash}                     stream a blob (range requests)
 //	GET    /api/events                      recent log
 //	GET    /api/audit                       leak-check results
@@ -47,7 +51,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -76,6 +79,17 @@ type Backend interface {
 	AddService(config.Service) error
 	RemoveService(name string) error
 	SetServiceVisibility(name, visibility string) error
+	// EditService changes a service in place (rename, port, protocol,
+	// visibility, a site's folder and record flag) and returns it.
+	EditService(name string, e config.ServiceEdit) (config.Service, error)
+	// AddFile stores r as a shared file called name (replace: a file with
+	// that name gets the new content). RenameFile and DeleteSharedFile take
+	// a shared file's name, or the hash of an unnamed one.
+	AddFile(r io.Reader, name string, replace bool) (hash string, err error)
+	RenameFile(ref, newName string) error
+	DeleteSharedFile(ref string) error
+	// DeleteReceived removes a file a peer sent (by hash) from the inbox.
+	DeleteReceived(hash string) error
 	Peers() []PeerView
 	Invite() (InviteInfo, error)
 	Pair(ctx context.Context, link string) (config.Peer, error)
@@ -277,6 +291,7 @@ func Handler(b Backend, web fs.FS) http.Handler {
 	mux.HandleFunc("GET /api/services", s.listServices)
 	mux.HandleFunc("POST /api/services", s.addService)
 	mux.HandleFunc("PUT /api/services/{name}/visibility", s.setVisibility)
+	mux.HandleFunc("PATCH /api/services/{name}", s.editService)
 	mux.HandleFunc("DELETE /api/services/{name}", s.removeService)
 	mux.HandleFunc("GET /api/peers", s.listPeers)
 	mux.HandleFunc("POST /api/peers/invite", s.invite)
@@ -290,6 +305,9 @@ func Handler(b Backend, web fs.FS) http.Handler {
 	mux.HandleFunc("DELETE /api/tunnels/{port}", s.closeTunnel)
 	mux.HandleFunc("GET /api/files", s.listFiles)
 	mux.HandleFunc("POST /api/files", s.upload)
+	mux.HandleFunc("PUT /api/files/{ref}/name", s.renameFile)
+	mux.HandleFunc("DELETE /api/files/{ref}", s.deleteFile)
+	mux.HandleFunc("DELETE /api/inbox/{hash}", s.deleteReceived)
 	mux.Handle("GET /blob/", b.Blobs().Handler("/blob/"))
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/audit", s.audit)
@@ -490,6 +508,22 @@ func (s *server) setVisibility(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (s *server) editService(w http.ResponseWriter, r *http.Request) {
+	var e config.ServiceEdit
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	dec.DisallowUnknownFields() // a misspelt field must not look like "nothing changed"
+	if err := dec.Decode(&e); err != nil {
+		writeErr(w, err)
+		return
+	}
+	svc, err := s.b.EditService(r.PathValue("name"), e)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, svc)
+}
+
 func (s *server) removeService(w http.ResponseWriter, r *http.Request) {
 	if err := s.b.RemoveService(r.PathValue("name")); err != nil {
 		writeErr(w, err)
@@ -628,25 +662,70 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	var name string
+	var replace bool
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
 			writeErr(w, errors.New(`no "file" field in upload`))
 			return
 		}
-		if part.FormName() != "file" {
+		switch part.FormName() {
+		case "name", "replace":
+			v, _ := io.ReadAll(io.LimitReader(part, 1024))
+			if part.FormName() == "name" {
+				name = string(v)
+			} else {
+				replace = string(v) == "1" || string(v) == "true"
+			}
+			continue
+		case "file":
+		default:
 			continue
 		}
+		if name == "" {
+			name = part.FileName()
+		}
 		// Stream straight to disk; the file is never held in memory.
-		hash, err := s.b.Blobs().PutNamed(part, part.FileName())
+		hash, err := s.b.AddFile(part, name, replace)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		s.b.Events().Add(events.KindService, fmt.Sprintf("file stored: %s (%s…)", part.FileName(), hash[:12]))
 		writeJSON(w, http.StatusCreated, map[string]string{"hash": hash})
 		return
 	}
+}
+
+func (s *server) renameFile(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.b.RenameFile(r.PathValue("ref"), body.Name); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) deleteFile(w http.ResponseWriter, r *http.Request) {
+	if err := s.b.DeleteSharedFile(r.PathValue("ref")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) deleteReceived(w http.ResponseWriter, r *http.Request) {
+	if err := s.b.DeleteReceived(r.PathValue("hash")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
