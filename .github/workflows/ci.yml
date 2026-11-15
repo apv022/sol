@@ -35,9 +35,15 @@ jobs:
         # The full -v log goes to an artifact; the step log shows only results and failures,
         # so a failure is readable without downloading anything.
         shell: bash
+        # No -race on macOS: on its runners the race detector slows gVisor's userspace
+        # network stack (direct mode) by hundreds of times, so WireGuard tests time out
+        # without any bug (measured: 1-2 ms per tunnel connect becomes 1-1.7 s). Linux
+        # and Windows keep the race detector.
+        env:
+          RACE: ${{ runner.os != 'macOS' && '-race' || '' }}
         run: |
           set +e
-          go test -race -v ./... > test.log 2>&1
+          go test $RACE -v ./... > test.log 2>&1
           rc=$?
           grep -E '^(--- FAIL|FAIL|ok |panic:)|_test\.go:[0-9]+:' test.log
           exit $rc
