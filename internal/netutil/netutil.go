@@ -72,6 +72,21 @@ func LANIP() (net.IP, error) {
 	return ip, nil
 }
 
+// LANIP6 is LANIP for IPv6: the global address the OS would send from, if
+// it has one. No packets are sent.
+func LANIP6() (net.IP, error) {
+	c, err := net.Dial("udp6", "[2001:db8::1]:9") // documentation range, never routed
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	ip := c.LocalAddr().(*net.UDPAddr).IP
+	if !ip.IsGlobalUnicast() || ip.To4() != nil {
+		return nil, errors.New("no global IPv6 address")
+	}
+	return ip, nil
+}
+
 // Online reports whether this machine has a route to the internet: whether
 // the system would pick a non-loopback local address to send towards a
 // public one, over IPv4 or IPv6. It sends nothing (a UDP "connect" only

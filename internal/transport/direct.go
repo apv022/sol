@@ -275,34 +275,19 @@ func candidates(la *net.TCPAddr, listen string) []string {
 	}
 	host, _, _ := net.SplitHostPort(listen)
 	v4only := host == "0.0.0.0"
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
 	var lan, v6, v4 []string
-	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || skipIface(ifc.Name) {
+	for _, ip := range localIPs() {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 			continue
 		}
-		addrs, _ := ifc.Addrs()
-		for _, a := range addrs {
-			ipn, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip := ipn.IP
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
-				continue
-			}
-			hp := net.JoinHostPort(ip.String(), strconv.Itoa(port))
-			switch {
-			case ip.To4() != nil && ip.IsPrivate():
-				lan = append(lan, hp)
-			case ip.To4() != nil:
-				v4 = append(v4, hp)
-			case ip.IsGlobalUnicast() && !v4only:
-				v6 = append(v6, hp)
-			}
+		hp := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+		switch {
+		case ip.To4() != nil && ip.IsPrivate():
+			lan = append(lan, hp)
+		case ip.To4() != nil:
+			v4 = append(v4, hp)
+		case ip.IsGlobalUnicast() && !v4only:
+			v6 = append(v6, hp)
 		}
 	}
 	out := append(append(lan, v6...), v4...)
@@ -310,6 +295,50 @@ func candidates(la *net.TCPAddr, listen string) []string {
 		out = out[:directMaxCands]
 	}
 	return out
+}
+
+// netInterfaces lists the machine's interfaces; a variable so tests can
+// simulate Android, where apps may not enumerate them.
+var netInterfaces = net.Interfaces
+
+// outboundIPs finds the addresses the OS would send from, without netlink.
+// It is the fallback for when interfaces can't be listed: since Android 11
+// an app is denied the netlink socket net.Interfaces needs, and with no
+// candidate the node would never advertise a direct address at all (nor
+// learn its public one, which only comes from a peer it reached directly).
+var outboundIPs = func() []net.IP {
+	var ips []net.IP
+	if ip, err := netutil.LANIP(); err == nil {
+		ips = append(ips, ip)
+	}
+	if ip, err := netutil.LANIP6(); err == nil {
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+// localIPs returns the addresses of every usable interface (up, not
+// loopback, not a container or VM bridge), or the outbound addresses when
+// interfaces can't be listed or none has an address. It runs each time
+// candidates are built, so a network change is picked up.
+func localIPs() []net.IP {
+	var ips []net.IP
+	ifaces, _ := netInterfaces()
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || skipIface(ifc.Name) {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
+				ips = append(ips, ipn.IP)
+			}
+		}
+	}
+	if len(ips) == 0 {
+		ips = outboundIPs()
+	}
+	return ips
 }
 
 // maxPreAuth caps connections still in the preamble or TLS handshake. The

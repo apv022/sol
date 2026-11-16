@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -358,4 +359,63 @@ func TestPreAuthConnectionsAreCapped(t *testing.T) {
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// stubInterfaces replaces the interface lister and the outbound fallback
+// for one test.
+func stubInterfaces(t *testing.T, list func() ([]net.Interface, error), out ...string) {
+	t.Helper()
+	oldList, oldOut := netInterfaces, outboundIPs
+	t.Cleanup(func() { netInterfaces, outboundIPs = oldList, oldOut })
+	netInterfaces = list
+	outboundIPs = func() []net.IP {
+		var ips []net.IP
+		for _, s := range out {
+			ips = append(ips, net.ParseIP(s))
+		}
+		return ips
+	}
+}
+
+// Regression: on Android (11+) an app can't list interfaces (netlink is
+// denied), so no direct address was ever advertised. The outbound address
+// must stand in, for both direct transports.
+func TestCandidatesFallBackToOutboundIP(t *testing.T) {
+	denied := func() ([]net.Interface, error) {
+		return nil, errors.New("route ip+net: netlinkrib: permission denied")
+	}
+	empty := func() ([]net.Interface, error) { return nil, nil }
+	for name, list := range map[string]func() ([]net.Interface, error){"denied": denied, "empty": empty} {
+		t.Run(name, func(t *testing.T) {
+			stubInterfaces(t, list, "192.168.1.7", "2001:db8::7", "127.0.0.1")
+			got := candidates(&net.TCPAddr{IP: net.IPv6unspecified, Port: 7701}, ":7701")
+			if strings.Join(got, ",") != "192.168.1.7:7701,[2001:db8::7]:7701" {
+				t.Fatalf("candidates %v", got)
+			}
+
+			w, _ := startWG(t)
+			w.mu.Lock()
+			w.allowLoopback = false // as on a phone listening on all interfaces
+			addr := w.addressLocked()
+			w.mu.Unlock()
+			_, cands, err := ParseWGAddr(addr)
+			if err != nil || len(cands) == 0 || cands[0] != net.JoinHostPort("192.168.1.7", strconv.Itoa(int(w.port))) {
+				t.Fatalf("wg address %q (%v)", addr, err)
+			}
+		})
+	}
+}
+
+// When interfaces can be listed, the fallback isn't consulted.
+func TestCandidatesPreferInterfaces(t *testing.T) {
+	stubInterfaces(t, net.Interfaces, "203.0.113.9")
+	ips := localIPs()
+	if len(ips) == 1 && ips[0].Equal(net.ParseIP("203.0.113.9")) {
+		t.Skip("this machine lists no interface address")
+	}
+	for _, ip := range ips {
+		if ip.Equal(net.ParseIP("203.0.113.9")) {
+			t.Fatalf("fallback mixed in although interfaces list: %v", ips)
+		}
+	}
 }

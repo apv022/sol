@@ -138,6 +138,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
+- Direct mode now works on Android: when the OS denies listing network interfaces (Android 11+
+  blocks netlink), a node advertises its outbound IPv4/IPv6 address for WireGuard and TLS direct
+  instead of no direct address at all.
 - A service renamed while a peer was opening it no longer cuts that new stream.
 - **Direct connections stay direct on slower machines.** Opening a stream over a live
   WireGuard tunnel sent a punch, which made an initiating peer reset its session, and the TCP
