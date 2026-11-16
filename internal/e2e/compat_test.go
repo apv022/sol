@@ -161,7 +161,13 @@ func TestIncompatiblePeerShownAndNotHammered(t *testing.T) {
 		}
 		return false
 	})
-	if countEvents(b, "alpha now runs a compatible Sol") != 1 {
-		t.Fatal("the recovery wasn't logged")
+	// The state clears under the node's lock and the log line follows just
+	// after, so wait for it rather than expecting it in the same instant.
+	eventually(t, 5*time.Second, "the recovery to be logged", func() bool {
+		return countEvents(b, "alpha now runs a compatible Sol") == 1
+	})
+	time.Sleep(200 * time.Millisecond) // and it stays logged once, not per redial
+	if n := countEvents(b, "alpha now runs a compatible Sol"); n != 1 {
+		t.Fatalf("the recovery was logged %d times, want once", n)
 	}
 }
