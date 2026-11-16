@@ -3,6 +3,11 @@
 Sol is early software that has not had an independent security review. What it does and does not
 protect against is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
+## Supported versions
+
+Sol is pre-1.0: only the latest release (currently the pre-release `v0.1.0-alpha.6`) gets fixes.
+Once `v0.1.0` is out, that is the latest stable release. Please check against it before reporting.
+
 ## Looking for review
 
 Nobody outside the project has reviewed Sol yet. If you know Tor onion services or protocol

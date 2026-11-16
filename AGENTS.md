@@ -13,7 +13,9 @@ make hooks       # once per clone: every `git push` runs `make check` first
 ```
 
 CI (GitHub Actions) runs `make check` on Linux, macOS, and Windows. Locally you only cover your
-own OS: watch for OS limits such as the 104-byte Unix socket path on macOS.
+own OS: watch for OS limits such as the 104-byte Unix socket path on macOS. CI runs macOS without
+`-race` on purpose: the race detector slows gVisor's userspace network stack about 1000x there, so
+Linux and Windows keep it. `govulncheck` also runs on every push and weekly.
 
 Run two local nodes without touching your real `~/.sol` (give each its own ports in
 `config.json`, or use `"tor": false, "clearnet": true` for a quick LAN test):

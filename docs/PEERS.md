@@ -4,9 +4,9 @@ Every machine running Sol is a **node**. Two nodes pair once and become **peers*
 both can reach the other, each decides what it shares with the other, and either can send the
 other files. There is no separate client program anymore.
 
-This replaces the earlier node/device split (`sol` vs `sol pair`/`sol connect`). Sol is
-pre-release with no outside users, so the handshake and on-disk format changed in place; re-pair
-your machines once.
+This replaces the earlier node/device split (`sol` vs `sol pair`/`sol connect`). The handshake is
+versioned (protocol version 1, see [PROTOCOL.md](PROTOCOL.md)). Nodes older than v0.1.0-alpha.5
+speak an unversioned format and can't talk to newer ones: update every machine once and re-pair.
 
 ## What a peer is
 

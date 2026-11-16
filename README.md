@@ -10,10 +10,19 @@ No port forwarding, no VPN, no accounts, no domain, no cloud.</p>
 <a href="https://github.com/apv022/sol/actions/workflows/ci.yml"><img src="https://github.com/apv022/sol/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
 <a href="https://github.com/apv022/sol/releases"><img src="https://img.shields.io/github/v/release/apv022/sol?include_prereleases&sort=semver" alt="release"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
-<img src="https://img.shields.io/github/go-mod/go-version/apv022/sol" alt="Go version">
+<a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/apv022/sol" alt="Go version"></a>
 <img src="https://img.shields.io/badge/go%20dependencies-1%20(wireguard--go)-brightgreen" alt="Go dependencies: 1 (wireguard-go)">
 <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android-lightgrey" alt="Platforms">
 </p>
+
+<p align="center">
+<a href="https://solarae.io/sol">Website</a> ·
+<a href="docs/PEERS.md">Docs</a> ·
+<a href="https://github.com/apv022/sol/releases">Releases</a> ·
+<a href="https://github.com/apv022/sol-mobile">Android app</a>
+</p>
+
+<p align="center"><img src="docs/media/demo-pair.gif" width="88%" alt="Pairing two machines with a one-time link, then opening an app over Tor"></p>
 
 ```
 home server (behind CGNAT, no open ports)           your laptop, anywhere
@@ -28,13 +37,17 @@ Sol is one Go binary that runs on each of your machines. Pair two of them once w
 link, and they become **peers**: each can open the apps the other shares with it, and either can
 send the other files, through Tor, from anywhere. Nobody else can even find them.
 
-<!-- demo GIF: record with `vhs docs/demo.tape` and replace this comment -->
+<p align="center">
+<picture>
+<source media="(prefers-color-scheme: light)" srcset="docs/media/panel-home-light.png">
+<img src="docs/media/panel-home-dark.png" width="88%" alt="Sol panel: online over Tor, with a paired machine and two open tunnels">
+</picture>
+</p>
 
-<p align="center"><img src="docs/media/panel-home.png" width="88%" alt="Sol panel: online over Tor, with a paired machine and two open tunnels"></p>
-
-> **Early software.** Sol works and its tests pass on Linux. CI covers macOS and
-> Windows too, but the newest changes (self-healing Tor and peer links) have so far only been run on
-> Linux. Nobody outside the project has reviewed its security yet. [We're asking for that review](SECURITY.md#looking-for-review).
+> **Pre-release (`v0.1.0-alpha.6`).** Sol works and CI runs its tests on Linux, macOS and Windows,
+> but it has had little use outside the project and no independent security review.
+> [We're asking for that review](SECURITY.md#looking-for-review). `v0.1.0` follows a week of
+> real-phone testing.
 
 ## Why
 
@@ -68,7 +81,8 @@ sudo apt install tor        # or: brew install tor · sudo pacman -S tor · sudo
 The script downloads the release binary for your system, checks its checksum, and never uses
 `sudo`. Other ways: grab an archive from [Releases](https://github.com/apv022/sol/releases)
 (Windows included), or build it with Go 1.26+: `go install github.com/apv022/sol/cmd/sol@latest`.
-On a phone, there is an alpha [Android app](https://github.com/apv022/sol-mobile).
+Until a stable release exists, `install.sh` installs the newest pre-release. On a phone, there is
+an alpha [Android app](https://github.com/apv022/sol-mobile).
 
 **2. Start it.**
 
@@ -145,9 +159,17 @@ Details: [docs/PEERS.md](docs/PEERS.md) · [docs/PROTOCOL.md](docs/PROTOCOL.md) 
 
 ## Screenshots
 
-| Peers: what each side shares | Settings |
+| Peers: what each side shares | Services |
 |---|---|
-| <img src="docs/media/panel-peers.png" alt="Sol peers screen: a paired machine, what it shares, what you share with it"> | <img src="docs/media/panel-settings.png" alt="Sol settings screen"> |
+| <img src="docs/media/panel-peers.png" alt="Sol peers screen: a paired machine, what it shares, what you share with it"> | <img src="docs/media/panel-services.png" alt="Sol services screen: apps this machine shares"> |
+| **Files** | **Settings** |
+| <img src="docs/media/panel-files.png" alt="Sol files screen: shared files and files received from peers"> | <img src="docs/media/panel-settings.png" alt="Sol settings screen"> |
+
+| Shared files page, as a peer sees it | On a phone |
+|---|---|
+| <picture><source media="(prefers-color-scheme: light)" srcset="docs/media/shared-files-light.png"><img src="docs/media/shared-files-dark.png" alt="The shared files page a peer opens, styled like the panel"></picture> | <img src="docs/media/panel-phone-dark.png" width="240" alt="The panel on a phone, with a tab bar"> |
+
+The command line does the same: <img src="docs/media/demo-cli.gif" alt="Sol on the command line: service add, share, open, send">
 
 The panel is one web page served on `127.0.0.1`. Themes, accent colour and layout are under
 **appearance**; anything else is yours to restyle in `~/.sol/panel.css`.
@@ -187,7 +209,7 @@ The panel is one web page served on `127.0.0.1`. Themes, accent colour and layou
 
 ## Status
 
-Sol is **early**. It works and is tested, but it hasn't had an independent security review.
+Sol is a **pre-release**. It works and is tested, but it hasn't had an independent security review.
 
 | Feature | Status |
 |---|---|
@@ -202,14 +224,16 @@ Sol is **early**. It works and is tested, but it hasn't had an independent secur
 | Public services on their own onion | ✅ |
 | Static sites from a folder (`sol site add`), with an opt-in signed record of their addresses | ✅ |
 | Panel themes, layouts and your own `panel.css`; installable as an app window | ✅ |
+| Edit services and sites in place (`sol service edit`, `sol site edit`, panel Edit); apps on IPv6 localhost work | ✅ |
 | Give back to Tor: opt-in Snowflake proxy (`sol snowflake on`) | ✅ needs `snowflake-proxy` on PATH · 🚧 not bundled |
 | Shared files page for peers, streaming, SHA-256 fingerprints; add, rename, replace and delete from the panel or `sol files` | ✅ |
 | Direct mode over WireGuard: straight to a peer, punching through home routers (Tailscale-style), TLS where UDP is blocked, Tor otherwise | ✅ opt-in (`"direct": true`) · ❌ symmetric NATs stay on Tor (no relays) |
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
 | Background node (`sol`, `sol stop`, `sol logs`), settings from the CLI and the panel | ✅ |
-| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha: runs on an emulator, not yet verified on a real phone |
-| Release binaries for Linux, macOS, Windows (amd64, arm64) and an install script | ✅ tor installed separately |
+| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha (`v0.1.0-alpha.6`, signed APK): real-phone testing under way |
+| Release binaries for Linux, macOS, Windows (amd64, arm64) and an install script | ✅ pre-releases so far · tor installed separately |
+| CI: Linux, macOS, Windows, `govulncheck` on every push and weekly | ✅ |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
 | Anonymous Public Mode (egress lock, EXIF stripping, full audit) | 🚧 partial. See the [threat model](docs/THREAT_MODEL.md) |
 | I2P transport | 🗺️ stub in place ([how to add it](docs/EXTENDING.md)) |
@@ -223,13 +247,14 @@ The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
 - **First contact over Tor can still be slow.** Reaching a brand-new onion took a median of
   89 s before the fix and 17 s after (6 new onions each). About 1 run in 6 still took over 2
   minutes, because of Tor rendezvous stalls. Sol retries the dial, but pairing can take that long.
-- **Only tested on Linux so far.** The self-healing Tor and peer-liveness work, and its
-  fault-injection tests (`internal/faultnet`), have not yet run on macOS or Windows CI.
-- **No real-device mobile verification.** The Android app is checked on an emulator only. Battery,
-  Doze and mobile-data switching are untested on a real phone (see sol-mobile's docs).
-- **The wire protocol is versioned from v0.1.0** (protocol version 1). Nodes from before that
-  speak an unversioned format and can't talk to it, so update every machine once. After that, a
-  peer on an incompatible version shows as such, saying which machine to update.
+- **Mostly developed and run on Linux.** CI tests macOS and Windows (macOS without `-race`, which
+  slows gVisor about 1000x there), but day-to-day use is mostly on Linux.
+- **Little real-phone mileage.** Battery, Doze and mobile-data switching on the Android app are
+  still being checked on real phones (see sol-mobile's docs).
+- **The wire protocol is versioned** (protocol version 1, [docs/PROTOCOL.md](docs/PROTOCOL.md)).
+  Nodes from before `v0.1.0-alpha.5` speak an unversioned format and can't talk to it, so update
+  every machine once. After that, a peer on an incompatible version shows as such, saying which
+  machine to update.
 - **Direct mode:** opt-in; two machines behind symmetric NATs stay on Tor (Sol runs no relays).
 - **Tor is not bundled** in release binaries; install it separately. Windows has no autostart yet.
 - **No independent security review** yet.
@@ -259,7 +284,7 @@ Pick Sol when you want privacy and independence, and no company or rented server
 
 ```sh
 make test      # unit tests + full two-node e2e over clearnet (no Tor needed)
-make check     # gofmt, vet, staticcheck, tests (what CI runs)
+make check     # gofmt, vet, staticcheck, tests (what CI runs on Linux, macOS and Windows)
 make test-tor  # e2e over the real Tor network (needs tor; takes a few minutes)
 ```
 

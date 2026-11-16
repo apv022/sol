@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] - 2026-11-15
+
+Pre-release. First build with the versioned handshake (protocol version 1): nodes from before it
+can't talk to it, so update every machine and re-pair once.
+
 ### Added
 - **Versioned handshake (protocol version 1, locked for v0.1.0).** Both hellos carry the sender's
   supported version range and the nodes use the highest version both speak. The negotiated
@@ -201,3 +206,6 @@ and versions follow [Semantic Versioning](https://semver.org/).
   (about ten seconds), and a single failed check no longer marks it unreachable.
 - Panel buttons marked hidden were still shown (for example "Reconnect to Tor" while online).
 - The directory page put values from `hosts.json` into the page unescaped.
+
+[Unreleased]: https://github.com/apv022/sol/compare/v0.1.0-alpha.5...HEAD
+[0.1.0-alpha.5]: https://github.com/apv022/sol/releases/tag/v0.1.0-alpha.5
