@@ -45,9 +45,8 @@ send the other files, through Tor, from anywhere. Nobody else can even find them
 </p>
 
 > **Pre-release (`v0.1.0-alpha.6`).** Sol works and CI runs its tests on Linux, macOS and Windows,
-> but it has had little use outside the project and no independent security review.
-> [We're asking for that review](SECURITY.md#looking-for-review). `v0.1.0` follows a week of
-> real-phone testing.
+> and the Android app is verified on a Pixel running GrapheneOS (Android 16), but it has had little use outside the project and
+> no independent security review. [We're asking for that review](SECURITY.md#looking-for-review).
 
 ## Why
 
@@ -220,7 +219,7 @@ Sol is a **pre-release**. It works and is tested, but it hasn't had an independe
 | Mutual peer pairing, per-peer sharing, instant unpairing on both sides | ✅ |
 | Any TCP service; lasting tunnels from the panel's **Open** button or `sol open` | ✅ |
 | Send files between peers, both ways, SHA-256 verified, with size limits | ✅ |
-| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status, the path each connection takes and why, phone layout | ✅ (phone layout seen in the Android emulator only) |
+| Web panel: guided setup, invite/join, share toggles, live "connected and verified" status, the path each connection takes and why, phone layout | ✅ (phone layout checked on a Pixel running GrapheneOS (Android 16)) |
 | Public services on their own onion | ✅ |
 | Static sites from a folder (`sol site add`), with an opt-in signed record of their addresses | ✅ |
 | Panel themes, layouts and your own `panel.css`; installable as an app window | ✅ |
@@ -231,7 +230,7 @@ Sol is a **pre-release**. It works and is tested, but it hasn't had an independe
 | LAN / clearnet transport (testing) | ✅ |
 | Start at login (`sol autostart on`) | ✅ Linux, macOS · 🗺️ Windows |
 | Background node (`sol`, `sol stop`, `sol logs`), settings from the CLI and the panel | ✅ |
-| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | 🚧 alpha (`v0.1.0-alpha.6`, signed APK): real-phone testing under way |
+| Android app ([sol-mobile](https://github.com/apv022/sol-mobile)) | ✅ alpha (`v0.1.0-alpha.6`, signed APK): verified on a Pixel running GrapheneOS (Android 16): pairing, opening apps, files both ways, direct mode on Wi-Fi, network switches and Doze |
 | Release binaries for Linux, macOS, Windows (amd64, arm64) and an install script | ✅ pre-releases so far · tor installed separately |
 | CI: Linux, macOS, Windows, `govulncheck` on every push and weekly | ✅ |
 | Release builds with tor bundled | 🚧 (`make build-bundled`, per platform) |
@@ -249,8 +248,8 @@ The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
   minutes, because of Tor rendezvous stalls. Sol retries the dial, but pairing can take that long.
 - **Mostly developed and run on Linux.** CI tests macOS and Windows (macOS without `-race`, which
   slows gVisor about 1000x there), but day-to-day use is mostly on Linux.
-- **Little real-phone mileage.** Battery, Doze and mobile-data switching on the Android app are
-  still being checked on real phones (see sol-mobile's docs).
+- **One test phone so far.** The Android app is verified on a Pixel running GrapheneOS (Android 16); other phones and
+  Android versions haven't been tried yet (reports welcome, see sol-mobile's docs).
 - **The wire protocol is versioned** (protocol version 1, [docs/PROTOCOL.md](docs/PROTOCOL.md)).
   Nodes from before `v0.1.0-alpha.5` speak an unversioned format and can't talk to it, so update
   every machine once. After that, a peer on an incompatible version shows as such, saying which
