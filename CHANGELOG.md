@@ -5,6 +5,13 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-11-15
+
+### Fixed
+- Direct mode now works on Android: when the OS denies listing network interfaces (Android 11+
+  blocks netlink), a node advertises its outbound IPv4/IPv6 address for WireGuard and TLS direct
+  instead of no direct address at all.
+
 ## [0.1.0-alpha.5] - 2026-11-15
 
 Pre-release. First build with the versioned handshake (protocol version 1): nodes from before it
@@ -143,9 +150,6 @@ can't talk to it, so update every machine and re-pair once.
   uses. Running `sol` again shows where the running node is.
 
 ### Fixed
-- Direct mode now works on Android: when the OS denies listing network interfaces (Android 11+
-  blocks netlink), a node advertises its outbound IPv4/IPv6 address for WireGuard and TLS direct
-  instead of no direct address at all.
 - A service renamed while a peer was opening it no longer cuts that new stream.
 - **Direct connections stay direct on slower machines.** Opening a stream over a live
   WireGuard tunnel sent a punch, which made an initiating peer reset its session, and the TCP
@@ -207,5 +211,6 @@ can't talk to it, so update every machine and re-pair once.
 - Panel buttons marked hidden were still shown (for example "Reconnect to Tor" while online).
 - The directory page put values from `hosts.json` into the page unescaped.
 
-[Unreleased]: https://github.com/apv022/sol/compare/v0.1.0-alpha.5...HEAD
+[Unreleased]: https://github.com/apv022/sol/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/apv022/sol/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/apv022/sol/releases/tag/v0.1.0-alpha.5
