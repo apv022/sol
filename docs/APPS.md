@@ -206,7 +206,42 @@ What Sol can enforce depends on how the app runs. Be honest about which tier an 
 |---|---|---|---|
 | **0. Exposed** | You run it, like any service today | Network edge only: who reaches it, as whom. The app has your user's full access to the machine | Works today (without the API) |
 | **1. Supervised** | Sol starts it in a container or OS sandbox (`runtime.Provider`; the Docker stub exists) | Plus filesystem and network limits: its own data folder, loopback only, no other ports | Planned |
-| **2. Sandboxed** | WebAssembly with capabilities granted from the manifest | Plus no syscalls beyond what Sol hands it | Planned, v1.0 in spec.md. Needs a decision: wasmtime needs cgo, wazero is pure Go but still a dependency (AGENTS.md rule 1) |
+| **2. Sandboxed** | WebAssembly with capabilities granted from the manifest | Plus no syscalls beyond what Sol hands it | Planned, v1.0 in spec.md, with wazero (see below) |
+
+### Why WebAssembly, and why wazero
+
+**Where app code runs.** An app has two halves. Its **client side** (the UI) is a web page, and
+the browser already sandboxes it. Its **server side** (the backend on your node) is what needs a
+sandbox, because it runs on your machine next to Sol and your files.
+
+**Why not just OS sandboxes.** Linux has namespaces, seccomp and Landlock; macOS and Windows have
+different, weaker or deprecated mechanisms; Android allows almost none of it for a process the
+app starts. Tier 1 is still worth having, but it would be a different sandbox on every platform,
+each with its own holes. WebAssembly is one sandbox that behaves the same on every platform Sol
+ships on, phones included: a module can touch nothing except the functions Sol hands it.
+
+**What it costs.** App backends must be compiled to WebAssembly (Go, Rust, C, Zig and others can
+target it). Heavy native programs don't fit: a Monero wallet daemon or an audio transcoder stays a
+separate program the user runs (tier 0 or 1), and the WebAssembly part of the app talks to it. So
+WebAssembly is for apps from people you don't fully trust, not a rule for every app.
+
+**When.** Not needed for the first apps, which come from the project itself and can run at tier
+0. It must exist before Sol offers to install other people's apps.
+
+**Decision: [wazero](https://wazero.io), not wasmtime.**
+
+| | wazero | wasmtime |
+|---|---|---|
+| Language | Pure Go | Rust, used from Go through cgo |
+| Sol's builds | Unchanged: `go build` cross-compiles every target, Android included | Needs a C toolchain and a prebuilt Rust library per target; cross-compiling gets much harder |
+| Its own dependencies | None | The Rust library and the cgo wrapper |
+| Speed | Fast enough for app backends (an ahead-of-time compiler on amd64 and arm64, an interpreter elsewhere) | Faster |
+| Standards | Core WebAssembly and WASI preview 1 | Also the newer component model and WASI 0.2 |
+
+wazero is accepted as Sol's second dependency, on the same reasoning as `wireguard-go`: writing a
+WebAssembly sandbox ourselves is the riskier choice. The features wasmtime adds over it aren't
+needed, because apps get no raw sockets or files anyway: Sol gives them the four primitives as
+host functions and nothing more. Revisit only if app backends turn out to be too slow on it.
 
 Tier 0 is enough to build and test every app. Tiers 1 and 2 are what make "pull and run an app
 you don't fully trust" safe, and they must exist before Sol offers to install apps from anyone
@@ -269,5 +304,5 @@ API above is enough, not as part of Sol.
 2. Should an app be told when a peer stops sharing with us, or just see `dial` fail?
 3. Can two apps cooperate (the market reusing the social app's feed), and if so, through Sol or
    directly? Default: directly, outside Sol.
-4. WebAssembly runtime: wazero (pure Go dependency) or wasmtime (cgo), or skip tier 2.
+4. ~~WebAssembly runtime~~: decided, wazero (see Isolation).
 5. Do apps need a per-app quota on the node (disk, bandwidth), or is that the app's job?

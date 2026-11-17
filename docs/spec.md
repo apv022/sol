@@ -387,7 +387,7 @@ Listing criteria are published. Entries that serve illegal content are removed o
 
 ### v1.0: The decentralized web layer
 - **DHT** for pubkey → endpoints discovery, with petnames and bookmarks.
-- Sandboxed hosted services (WASM, capability-based permissions), so a node can run apps it doesn't trust. The app API and isolation tiers are in [APPS.md](APPS.md); wasmtime (cgo) versus wazero (pure Go) is still open.
+- Sandboxed hosted services (WASM, capability-based permissions), so a node can run apps it doesn't trust. The app API and isolation tiers are in [APPS.md](APPS.md); the runtime is wazero (pure Go, no cgo), accepted as a second dependency for the same reason as `wireguard-go`.
 - Community and paid pinning nodes for always-on availability.
 - Directory federation with external lists and mirrors, so the client can pick any gateway from a verified list.
 - Rip Galore: CD ripping (whipper, FLAC, AccurateRip, MusicBrainz) publishing straight into a node.
