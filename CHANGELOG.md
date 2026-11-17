@@ -5,6 +5,14 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs
+- Design for an app platform on Sol ([docs/APPS.md](docs/APPS.md)): Sol stays the network and
+  identity layer, apps run on top through four primitives (who is calling, dial a peer's app,
+  register with consent, per-app signing keys). Not built yet.
+- [docs/NETWORK.md](docs/NETWORK.md): how paired nodes grow into a network (paired versus public
+  reach, transports, discovery layers, bigger nodes).
+- Example app designs in `docs/apps/`: music between friends, social feeds on Nostr, a market.
+
 ## [0.1.0-alpha.6] - 2026-11-15
 
 ### Fixed

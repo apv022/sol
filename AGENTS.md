@@ -29,6 +29,8 @@ SOL_DATA=/tmp/sol-b go run ./cmd/sol pair '<link>'
 ## Where things are
 
 - `docs/PEERS.md`: the model. Every machine is a node; nodes pair as peers.
+- `docs/APPS.md` and `docs/NETWORK.md`: design for the app platform and for growing into a network
+  (not built yet). Apps stay outside the core; `docs/apps/` sketches example apps.
 - `cmd/sol/main.go`: the CLI. Keep logic out of it: it runs the node, or sends one request to the
   running node over `internal/control`.
 - `internal/node/`: wires everything together. `node.go` (listener, routing, publications),

@@ -238,6 +238,7 @@ Sol is a **pre-release**. It works and is tested, but it hasn't had an independe
 | I2P transport | 🗺️ stub in place ([how to add it](docs/EXTENDING.md)) |
 | Gateway: open services in a normal phone browser | 🗺️ v0.2 |
 | Known-hosts directory | 🗺️ |
+| App platform: apps built on Sol's identity and peer connections ([design](docs/APPS.md)) | 🗺️ |
 
 The full roadmap is in [docs/spec.md §10](docs/spec.md#10-roadmap).
 
@@ -301,6 +302,8 @@ Start with [AGENTS.md](AGENTS.md) for a map of the code and the rules, and
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Packages, request paths, files on disk |
 | [docs/EXTENDING.md](docs/EXTENDING.md) | Where a new transport, setting or check plugs in |
 | [docs/spec.md](docs/spec.md) | Goals, the four stages, and the roadmap |
+| [docs/APPS.md](docs/APPS.md) | Design: the app platform (apps on top, Sol as the network layer) |
+| [docs/NETWORK.md](docs/NETWORK.md) | Design: from paired machines to a network (reach, discovery, bigger nodes) |
 | [CHANGELOG.md](CHANGELOG.md) | What changed |
 
 ## Getting help, giving feedback

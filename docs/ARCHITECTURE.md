@@ -2,7 +2,7 @@
 
 How the code is organised and how a request flows through it. For *why* Sol exists and where it
 is going, see [spec.md](spec.md). For the peer model, see [PEERS.md](PEERS.md). For the wire
-format, see [PROTOCOL.md](PROTOCOL.md).
+format, see [PROTOCOL.md](PROTOCOL.md). For the planned app platform, see [APPS.md](APPS.md).
 
 ## The big picture
 

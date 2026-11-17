@@ -101,6 +101,13 @@ handler then knows exactly which peer is connected), add it to `node.peerInfo`, 
 in `web/app.js` and `cmd/sol` (`label`). Decide whether new peers get it by default
 (`peers.DefaultShares`; the safe answer is no).
 
+## Apps (design)
+
+Apps are separate programs that build on Sol; they are not added to this repository. The API they
+will use (who is calling, an app socket for dialing peers, manifests, per-app keys) and its build
+order, each step with its e2e test, are in [APPS.md](APPS.md). Follow that order, and keep every
+app primitive scoped to the app: no app op may pair, change shares or read config.
+
 ## The gateway (v0.2)
 
 The design is in the package doc of [`internal/gateway`](../internal/gateway/gateway.go) and

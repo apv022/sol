@@ -60,6 +60,12 @@ Decisions that follow (recorded so they aren't reopened without a reason):
   record, under published criteria and a report path (Section 9.5). It does not crawl.
 - **Apps.** The panel stays one web page, installable as an app window. Phones: Android through
   the same Go core and panel, then the gateway for plain browsers. No Electron.
+- **An app platform, with a thin core.** Sol is the network and identity layer; apps (music,
+  social, a market) are separate programs on top, using four primitives: who is calling, dial a
+  peer's app, register with consent, sign with a per-app key. Sol never holds an app's data,
+  wallet or logic. The contract is [APPS.md](APPS.md); how nodes become a network is
+  [NETWORK.md](NETWORK.md). A social app hosts Nostr rather than replacing it, so the non-goal
+  in Section 3 stands.
 - **Helping the Tor network** means an optional Snowflake proxy in its own process (shipped:
   `sol snowflake on`), never a relay on the tor that serves this node's onions.
 
@@ -381,7 +387,7 @@ Listing criteria are published. Entries that serve illegal content are removed o
 
 ### v1.0: The decentralized web layer
 - **DHT** for pubkey → endpoints discovery, with petnames and bookmarks.
-- Sandboxed hosted services (WASM via wasmtime, capability-based permissions), so a node can run apps it doesn't trust.
+- Sandboxed hosted services (WASM, capability-based permissions), so a node can run apps it doesn't trust. The app API and isolation tiers are in [APPS.md](APPS.md); wasmtime (cgo) versus wazero (pure Go) is still open.
 - Community and paid pinning nodes for always-on availability.
 - Directory federation with external lists and mirrors, so the client can pick any gateway from a verified list.
 - Rip Galore: CD ripping (whipper, FLAC, AccurateRip, MusicBrainz) publishing straight into a node.
