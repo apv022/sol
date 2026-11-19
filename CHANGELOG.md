@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Docs
+- [docs/ROADMAP.md](docs/ROADMAP.md): the working plan, phases judged by exit criteria
+  (just works, one surface, app platform and first dapps, network, public layer, v1.0).
 - Design for an app platform on Sol ([docs/APPS.md](docs/APPS.md)): Sol stays the network and
   identity layer, apps run on top through four primitives (who is calling, dial a peer's app,
   register with consent, per-app signing keys). Not built yet.

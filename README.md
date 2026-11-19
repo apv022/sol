@@ -304,6 +304,7 @@ Start with [AGENTS.md](AGENTS.md) for a map of the code and the rules, and
 | [docs/spec.md](docs/spec.md) | Goals, the four stages, and the roadmap |
 | [docs/APPS.md](docs/APPS.md) | Design: the app platform (apps on top, Sol as the network layer) |
 | [docs/NETWORK.md](docs/NETWORK.md) | Design: from paired machines to a network (reach, discovery, bigger nodes) |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | The working plan: phases, exit criteria, tickets |
 | [CHANGELOG.md](CHANGELOG.md) | What changed |
 
 ## Getting help, giving feedback
