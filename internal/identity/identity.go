@@ -1,9 +1,29 @@
-// Package identity holds the minimal key types the transports need: node IDs
-// (base32 ed25519 public keys) and X25519 keypairs for Tor client auth.
+// Package identity implements Sol's layered identity (design/IDENTITY.md):
+// the recovery key R (24 words, never stored once the backup is confirmed),
+// the person key P (admin devices), device keys D, and scoped, expiring agent
+// keys G, together with the signed objects that bind them: person
+// certificates, device lists, agent certificates and endpoint records.
 //
-// TODO(C3): this is a trimmed copy of the PoC identity package; the full node
-// identity (signing, persistence, device IDs) is rebuilt in C3 and should
-// replace or absorb this.
+// Invariants:
+//
+//   - Every signed object is a canonical byte string of length-prefixed
+//     fields (encoding.go), never JSON, and starts with its own context string,
+//     so a signature for one kind can never be replayed as another. Decoding
+//     and re-encoding is the identity, so objects carry no raw copy.
+//   - A person ID is R's public key; a bundle is trusted only if R signed the
+//     person certificate, that certificate's P signed the device list, and the
+//     presenting device is in that list (VerifyBundle).
+//   - Sequence numbers only move forward. A Cache refuses any person
+//     certificate, device list or endpoint record older than one it has seen,
+//     so a removed device cannot be resurrected by replaying an old list.
+//   - Agent certificates always expire, at most MaxAgentTTL after issue.
+//   - Key material lives only in a Keyring directory: files 0600, directory
+//     0700, written atomically. The recovery entropy is kept only until the
+//     person confirms the paper backup. Nothing in this package logs, prints
+//     or formats a private key or the entropy.
+//
+// The package also keeps the small helpers the transports use: node IDs and
+// X25519 keypairs for Tor client authorization.
 package identity
 
 import (
@@ -16,20 +36,38 @@ import (
 	"strings"
 )
 
-// b32 is lowercase-friendly unpadded base32 (RFC 4648 alphabet).
+// b32 is unpadded base32 (RFC 4648 alphabet); IDs are its lowercase form.
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// NodeID is the lowercase base32 form of a node's ed25519 public key.
-func NodeID(pub ed25519.PublicKey) string { return strings.ToLower(b32.EncodeToString(pub)) }
+// IDLen is the length of an ID: 32 bytes of public key in unpadded base32.
+const IDLen = 52
 
-// ParseNodeID decodes a node ID back into a public key.
-func ParseNodeID(id string) (ed25519.PublicKey, error) {
+// ID returns the canonical ID of an ed25519 public key: lowercase, unpadded
+// base32. Person IDs (R), device IDs (D) and agent IDs (G) all use it.
+func ID(pub ed25519.PublicKey) string { return strings.ToLower(b32.EncodeToString(pub)) }
+
+// ParseID decodes a canonical ID back into a public key. Only the lowercase
+// form is accepted, so every key has exactly one ID.
+func ParseID(id string) (ed25519.PublicKey, error) {
+	if len(id) != IDLen || strings.ToLower(id) != id {
+		return nil, fmt.Errorf("invalid id %q", id)
+	}
 	b, err := b32.DecodeString(strings.ToUpper(id))
 	if err != nil || len(b) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid node id %q", id)
+		return nil, fmt.Errorf("invalid id %q", id)
+	}
+	// Reject non-canonical trailing bits (52 chars carry 260 bits for 256).
+	if ID(b) != id {
+		return nil, fmt.Errorf("invalid id %q", id)
 	}
 	return ed25519.PublicKey(b), nil
 }
+
+// NodeID is ID under the name the transports use for a device key.
+func NodeID(pub ed25519.PublicKey) string { return ID(pub) }
+
+// ParseNodeID is ParseID under the name the transports use.
+func ParseNodeID(id string) (ed25519.PublicKey, error) { return ParseID(id) }
 
 // X25519Key is a keypair for Tor v3 client authorization.
 //

@@ -52,9 +52,9 @@ Status: `todo` · `doing` · `done`.
 
 | ID | Ticket | Spec | Status |
 |---|---|---|---|
-| C1 | Repo skeleton (go.mod, Makefile, `make check`), port from `~/solbak`: transports (tor, wg, stun, direct, clearnet), faultnet, runtime, config atomic writes, netutil, blob store. Keep their tests passing | AGENTS.md | todo |
-| C2 | Identity: person/device/app keys, certificates, revocations, 24-word backup | design/IDENTITY.md (write first) | todo |
-| C3 | Wire v2: handshake with certificates, pairing a person, adding my device, h2 session per peer, liveness + healing (port PoC logic) | design/PROTOCOL.md (write first) | todo |
+| C1 | Repo skeleton (go.mod, Makefile, `make check`), port from `~/solbak`: transports (tor, wg, stun, direct, clearnet), faultnet, runtime, config atomic writes, netutil, blob store. Keep their tests passing | AGENTS.md | done |
+| C2 | Identity: person/device/app keys, certificates, revocations, 24-word backup | design/IDENTITY.md (write first) | done |
+| C3 | Wire v2: handshake with certificates, pairing a person, adding my device, h2 session per peer, liveness + healing (port PoC logic) | design/PROTOCOL.md (write first) | doing |
 | C4 | Feeds: store, signing, append/read, replication to own devices and sharers, catch-up, events stream | API.md §3, §5 | todo |
 | C5 | Blobs over sessions: chunked fetch, Range, multi-source, pin, permission rule | API.md §4 | todo |
 | C6 | App host: manifest, install, supervise, app tokens, app socket routing, per-app origins, `/_sol/` bridge | API.md §1, §9, §10 | todo |
@@ -65,7 +65,7 @@ Status: `todo` · `doing` · `done`.
 
 | ID | Ticket | Status |
 |---|---|---|
-| A1 | `sdk/go/sol` client + `memsol` fake (whole API.md) + CRDTs (LWW map, list, block text) with tests; `sdk/js/sol.js` + `crdt.js`; `ui/kit` (tokens, base components, dark/light) | todo |
+| A1 | `sdk/go/sol` client + `memsol` fake (whole API.md) + CRDTs (LWW map, list, block text) with tests; `sdk/js/sol.js` + `crdt.js`; `ui/kit` (tokens, base components, dark/light) | doing |
 | A2 | Files app: tree as a feed (LWW map of paths → blob), upload/download, folders, share a folder, peers' shared folders, actions + UI | todo |
 | A3 | Docs app: notes and rich text (slim editor: headings, lists, bold/italic, links, checklists, code), block CRDT sync, collaborators, actions + UI | todo |
 | A4 | Music app: indexer (tags from MP3/FLAC/Ogg/M4A, cover art) on anchors, library feed, player UI with queue, play from peers' libraries | todo |

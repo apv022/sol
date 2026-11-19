@@ -100,6 +100,22 @@ paired with and accept only newer `seq` values.
 | every device | install Sol, enter the 24 words: new P, new device list with the new device | contacts accept it because R signed it |
 | the words | nothing to do while devices remain; issue new words means a **new identity** (re-pair everyone) | |
 
+## Implementation notes (settled in C2)
+
+- **Sequence numbers** are `max(previous + 1, unix seconds now)`, so a device restoring from the
+  words (which knows no earlier seq) still issues a higher one. The cache orders bundles by
+  (person-cert seq, device-list seq), so a new `P` starts a fresh device-list order. Known
+  limit: a restoring device whose clock is behind could issue a seq contacts reject. Fix in C3:
+  before restoring, fetch the newest bundle from a surviving device or a contact and start above
+  it.
+- The recovery seed input is plain concatenation `"sol recovery v1" | entropy`.
+- Wire form of every signed object is `lp(body) | lp(sig)`; a bundle is
+  `lp(person cert) | lp(device list) | lp(endpoint record)`.
+- Rotating `P` clears the admin flag on every other device; an old `P` is dropped.
+- Equal seq with different bytes is refused (`ErrConflict`). Agent certs dated more than 5 minutes
+  in the future are refused.
+- All device secrets live in one atomic file, `identity.key` (`0600`).
+
 ## What this file does not cover
 
 The handshake that carries the bundle is in [PROTOCOL.md](PROTOCOL.md). Feed entry signatures are
