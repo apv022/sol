@@ -1,0 +1,130 @@
+/* Sol design tokens. Direction: a calm blue-grey dusk with one small sun.
+   Surfaces are cool mist (light) or ink-night (dark); the only warm colour is the marigold "sun",
+   used for presence, focus and the active marker, so it always means "here, now".
+   Apps style with these tokens only; never hard-code a colour. */
+:root {
+  color-scheme: light dark;
+
+  /* colour: light */
+  --bg: #e9edf1;
+  --surface: #f6f8fa;
+  --surface-2: #dde3e9;
+  --raised: #ffffff;
+  --ink: #18203a;
+  --ink-2: #4a5570;
+  --ink-3: #6a748b;
+  --line: #cdd5de;
+  --primary: #28376b;
+  --on-primary: #f6f8fc;
+  --primary-soft: #dfe5f5;
+  --sun: #f2a516;
+  --sun-strong: #a35f00; /* text and focus rings: 3:1+ on light surfaces */
+  --on-sun: #2a1a00;
+  --ok: #1f7a55;
+  --warn: #9a5b00;
+  --danger: #b3382f;
+  --scrim: rgb(24 32 58 / 0.45);
+
+  /* type: system stack, modular scale 1.2 */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.44rem;
+  --text-2xl: 1.88rem;
+  --text-3xl: 2.5rem;
+  --leading: 1.5;
+  --leading-tight: 1.2;
+  --weight-regular: 420;
+  --weight-medium: 560;
+  --weight-bold: 680;
+
+  /* spacing (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4.5rem;
+  --touch: 2.75rem; /* 44px minimum target */
+
+  /* radii: small controls are tight, containers are generous, avatars are discs */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 22px;
+  --radius-full: 999px;
+
+  /* shadows are tinted with the ink colour, never grey */
+  --shadow-1: 0 1px 2px rgb(24 32 58 / 0.08);
+  --shadow-2: 0 6px 18px -6px rgb(24 32 58 / 0.22), 0 1px 3px rgb(24 32 58 / 0.08);
+  --shadow-3: 0 24px 56px -16px rgb(24 32 58 / 0.4), 0 4px 12px rgb(24 32 58 / 0.1);
+
+  /* motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 360ms;
+
+  --sidebar: 15.5rem;
+  --bottom-nav: 3.75rem;
+}
+
+/* colour: dark */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1222;
+    --surface: #151b30;
+    --surface-2: #1e2641;
+    --raised: #1a2240;
+    --ink: #e8ecf6;
+    --ink-2: #aab3c9;
+    --ink-3: #8993ac;
+    --line: #2a3454;
+    --primary: #aebcff;
+    --on-primary: #0d1530;
+    --primary-soft: #232d57;
+    --sun: #f7b73a;
+    --sun-strong: #f7b73a;
+    --on-sun: #2a1a00;
+    --ok: #4fd1a0;
+    --warn: #f0b04a;
+    --danger: #ff8b80;
+    --scrim: rgb(2 4 12 / 0.6);
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-2: 0 8px 22px -8px rgb(0 0 0 / 0.6), 0 1px 3px rgb(0 0 0 / 0.4);
+    --shadow-3: 0 28px 60px -16px rgb(0 0 0 / 0.75), 0 4px 12px rgb(0 0 0 / 0.4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1222;
+  --surface: #151b30;
+  --surface-2: #1e2641;
+  --raised: #1a2240;
+  --ink: #e8ecf6;
+  --ink-2: #aab3c9;
+  --ink-3: #8993ac;
+  --line: #2a3454;
+  --primary: #aebcff;
+  --on-primary: #0d1530;
+  --primary-soft: #232d57;
+  --sun: #f7b73a;
+  --sun-strong: #f7b73a;
+  --on-sun: #2a1a00;
+  --ok: #4fd1a0;
+  --warn: #f0b04a;
+  --danger: #ff8b80;
+  --scrim: rgb(2 4 12 / 0.6);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 8px 22px -8px rgb(0 0 0 / 0.6), 0 1px 3px rgb(0 0 0 / 0.4);
+  --shadow-3: 0 28px 60px -16px rgb(0 0 0 / 0.75), 0 4px 12px rgb(0 0 0 / 0.4);
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
+}

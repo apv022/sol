@@ -9,7 +9,7 @@ proof of concept (the code in this repo today), it says so.
  ┌──────────────────────────────────────────────────────────────────────┐
  │  Shells: desktop app · Android app · browser                          │  one UI
  ├──────────────────────────────────────────────────────────────────────┤
- │  Apps: files · docs · notes · tasks · calendar · music · movies ·     │  separate
+ │  Apps: files · notes · tasks · calendar · music · movies ·            │  separate
  │        chat · agent · (anyone's app)                                  │  processes
  │        each = backend binary + web UI + action schema + CLI           │
  ├──────────────────── app API (local socket) ──────────────────────────┤
@@ -71,9 +71,10 @@ copy, so it is instant and works offline. The network only moves changes.
   readable by whoever it's shared with. The daemon pushes new entries to subscribed peers the
   moment they're written and catches peers up from a sequence number when they come back.
   This replaces polling everywhere, including the PoC's "Check again" button.
-- **Collaborative state.** Docs, notes, tasks and calendars need concurrent edits to merge. These
-  apps keep CRDT state on top of the feeds (each edit is a feed entry). Rich text uses a text CRDT
-  with formatting marks (Peritext-style). Choosing or writing that CRDT is an open decision below.
+- **Everything is a file.** User data lives as plain files (Markdown, `.ics`, audio, video) in one
+  synced folder owned by the Files app. Notes, Tasks, Calendar, Music and Movies are lenses over
+  those files. Concurrent edits to one file keep both versions as a conflict copy. Any tool
+  (vim, grep, a file manager, an agent's shell) works on the folder. See `apps/FILES.md`.
 - **Blobs.** Files, songs and movies are stored by SHA-256 hash, in chunks, so they can be streamed
   with seeking and fetched from any device of anyone who already has them and shares them with
   you. The PoC's blob store is the starting point.
@@ -98,7 +99,6 @@ From that one schema the SDK generates:
 
 - the **CLI** (`music play`, `tasks add`), with `--json`, `--dry-run` and full `--help`;
 - the **local HTTP API** the app's own UI calls;
-- the **agent tools** (MCP) exposed through the daemon;
 - the **reference docs**.
 
 So the UI, the CLI and an agent are three clients of the same code. Nothing exists only as a
@@ -123,11 +123,11 @@ makes Sol a Tailscale replacement on day one.
 ## The SDK and the apps
 
 - **Go SDK** for app backends: identity, feeds, blobs, actions, sharing, and the code generator for
-  CLI, API, MCP and docs.
+  CLI, API and docs.
 - **UI kit**: one design system and component set shared by every app, so the suite looks like one
   product and each app stays small.
 - Each app is one repo (or one folder in an apps monorepo): a Go backend, a UI, an action schema.
-  Few dependencies; the CRDT and the UI framework are the expected exceptions.
+  No dependencies beyond the stdlib; UIs use plain JS and the UI kit.
 
 ## Build order
 
@@ -135,14 +135,12 @@ makes Sol a Tailscale replacement on day one.
 2. **Sol daemon**: identity, people, sync, blobs, actions, reach (porting the PoC transports).
 3. **SDK + UI kit**, proven by a first app.
 4. **The Sol app**: people, devices, apps, Inbox.
-5. **Apps**, in an order that exercises the platform: notes and tasks (sync, CRDT), files
-   (blobs), music then movies (streaming from peers), calendar, docs (rich text), chat, agent.
+5. **Apps**, in an order that exercises the platform: files (the synced folder), notes, music
+   (streaming from peers), the agent, then tasks, calendar, movies.
 
 ## Open decisions
 
-1. **CRDT for docs and notes:** write a small one in Go (fewest dependencies, most work), or use
-   Automerge or Yjs in the UI (proven, but adds a dependency and a second language for the data
-   model).
+1. **Settled:** no rich-text CRDT; files sync with conflict copies (see PLAN.md decisions).
 2. **UI stack:** Preact + HTM with no build step (very light, harder for a large design system), or
    Svelte or Solid with a build step (still light, nicer for a component kit).
 3. **Desktop shell:** Wails (Go + the system webview) or Tauri (Rust).

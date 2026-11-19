@@ -20,8 +20,8 @@ your people. From then on every app built on it is p2p for free. It reaches your
 your friends' devices anywhere, without opening a port, and it syncs data between them. No app
 writes networking, login, discovery or sync code again.
 
-**On top of it, a suite of slim apps** that replace the self-hosted stack: files, docs (slim rich
-text), notes, tasks, calendar, music, movies, chat, and an agent. Each one is a good app alone and
+**On top of it, a suite of slim apps** that replace the self-hosted stack: files (a synced folder
+like OneDrive or Nextcloud), notes (Markdown), tasks, calendar, music, movies, chat, and an agent. Each one is a good app alone and
 better with peers: your music player plays your library, and John's if he shares it with you.
 
 Self-hosting falls out of this for free. "My server" is just one of my devices that happens to

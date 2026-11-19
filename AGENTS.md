@@ -24,7 +24,8 @@ make build   # bin/sol
 3. **No third-party Go dependencies.** The one exception is `wireguard-go` in the daemon. No
    npm, no build step for UIs: plain JS modules and `ui/kit`.
 4. **Agent first.** Every user-visible operation is an action in the app's manifest, reachable
-   from `sol do` and `sol mcp`. A button that isn't an action is a bug.
+   from `sol do` with `--json`, `--dry-run` and generated `--help`. The CLI is the agent
+   interface (no MCP). A button that isn't an action is a bug.
 5. **No polling.** State changes are pushed (events stream, feed replication).
 6. **Never log secrets** (keys, tokens, pairing secrets, request bodies). Secret files `0600`,
    secret dirs `0700`, writes atomic.
@@ -39,3 +40,6 @@ make build   # bin/sol
     the DOM.
 12. **Linux and Android first,** but nothing Linux-only without a fallback: macOS and Windows
     must build and pass tests.
+13. **Everything is a file.** User data lives as plain-format files in the synced folder
+   (Markdown, `.ics`, audio, video). Apps are lenses over those files, not owners of hidden
+   databases. App-private state (indexes, caches) goes in `SOL_APP_DATA` and can be rebuilt.

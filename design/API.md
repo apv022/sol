@@ -43,7 +43,8 @@ daemon.
 | Action | `<app>.<verb>` | `files.upload` |
 
 A **feed** belongs to one person and one app. Every device of that person may append to it. An app
-can only read and write its own app's feeds (`<anyone>/<this app>/<feed>`).
+can only write its own app's feeds, and read its own plus those of apps listed in its manifest's
+`reads` (§9), within what is shared with me.
 
 ## 1. Identity: who am I, who is calling
 
@@ -182,7 +183,8 @@ and change nothing.
 ### The same actions everywhere
 - **CLI:** `sol do files.upload --path /notes.txt --blob sha256:… [--json] [--dry-run]` and
   `sol do --help files` (generated from the schemas).
-- **Agents:** `sol mcp` serves every action an agent's key may call as MCP tools over stdio.
+- **Agents:** use the same CLI with their agent key (`SOL_AGENT_KEY` or `--as-agent`); the daemon
+  enforces the agent certificate's scopes, expiry and approvals. There is no separate agent protocol.
 - **UI:** the app's own UI calls its actions through `sol.js` like any other client.
 
 The daemon writes every action that changes something to a signed activity log (who, which key,
@@ -207,6 +209,8 @@ on its socket at `path`, with caller headers.
 {"kind": "notice", "title": "Album added", "body": "…", "to": "self"}
 {"kind": "approval", "title": "Delete 3 files?", "action": {"action": "files.delete", "args": {…}}}
 ```
+`GET /v1/inbox` lists this app's items (and their answers) newest first.
+
 Notices appear in the Sol app (and as an OS notification when `to` is `self` and the person allows
 it). An approval is answered by the person on any of their devices; on approval the daemon runs the
 stored action as the requesting app. Events of type `inbox` report the answer.
@@ -246,6 +250,8 @@ the whole "plug and play" contract.
 | `ui` | path the app serves its UI on; omit for headless apps |
 | `scopes` | API areas the app may use; the person sees them when installing |
 | `runs_on` | `any`, or `anchor` for apps that only run on always-on devices (e.g. a music indexer) |
+| `folders` | lens apps: subfolders of the synced folder the app may use on disk, with mode, e.g. `[{"path": "Music", "mode": "read"}]` or `[{"path": "*", "mode": "write"}]`. The daemon passes the folder root as `SOL_FILES` |
+| `reads` | other apps whose feeds this app may read, e.g. `["files"]` (Music reads the Files tree to stream peers' music by blob hash) |
 | `effect` | `read`, `write` or `destructive` |
 | `approval` | `never` (default for read), `agents` (agents need approval), `always` |
 

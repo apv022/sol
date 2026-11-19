@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sol kit demo</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: var(--space-2); }
+  .sw { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; font-size: var(--text-xs); background: var(--raised); }
+  .sw i { display: block; height: 2.5rem; }
+  .sw span { display: block; padding: var(--space-1) var(--space-2); font-family: var(--font-mono); }
+  .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-4); }
+  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); gap: var(--space-2); }
+  .icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--text-xs); color: var(--ink-2); border-radius: var(--radius-md); background: var(--surface); }
+  section { margin-bottom: var(--space-7); }
+  .shadow { width: 7rem; height: 4rem; background: var(--raised); border-radius: var(--radius-md); display: grid; place-items: center; font-size: var(--text-xs); }
+</style>
+</head>
+<body>
+<sol-app-shell>
+  <nav slot="nav">
+    <div class="brand"><sol-icon name="sun" style="color: var(--sun)"></sol-icon> Sol</div>
+    <a class="nav-item" href="#tokens" data-id="#tokens"><sol-icon name="settings"></sol-icon>Tokens</a>
+    <a class="nav-item" href="#components" data-id="#components"><sol-icon name="folder"></sol-icon>Components</a>
+    <a class="nav-item" href="#icons" data-id="#icons"><sol-icon name="image"></sol-icon>Icons</a>
+    <span class="spacer"></span>
+    <button class="nav-item" id="theme" type="button"><sol-icon name="moon"></sol-icon>Theme: auto</button>
+  </nav>
+  <main>
+    <h1>Sol kit</h1>
+    <p class="muted">One design system for every app. Use the theme button to cycle auto, light and dark.</p>
+
+    <section id="tokens">
+      <h2>Colour</h2>
+      <div class="swatches" id="colors"></div>
+      <h2 style="margin-top: var(--space-6)">Type</h2>
+      <p style="font-size: var(--text-3xl); font-weight: var(--weight-bold); line-height: 1.1">Text 3xl, bold</p>
+      <p style="font-size: var(--text-2xl)">Text 2xl, the page title</p>
+      <p style="font-size: var(--text-xl)">Text xl</p>
+      <p style="font-size: var(--text-lg)">Text lg</p>
+      <p>Text md, the body: a calm system font that loads instantly.</p>
+      <p style="font-size: var(--text-sm)">Text sm, secondary details.</p>
+      <p style="font-size: var(--text-xs)">Text xs, fine print. <code>--font-mono</code></p>
+      <h2 style="margin-top: var(--space-6)">Radii and shadows</h2>
+      <div class="row">
+        <div class="shadow" style="box-shadow: var(--shadow-1)">shadow-1</div>
+        <div class="shadow" style="box-shadow: var(--shadow-2)">shadow-2</div>
+        <div class="shadow" style="box-shadow: var(--shadow-3)">shadow-3</div>
+        <div class="shadow" style="border-radius: var(--radius-sm)">radius-sm</div>
+        <div class="shadow" style="border-radius: var(--radius-lg)">radius-lg</div>
+        <div class="shadow" style="border-radius: var(--radius-full)">full</div>
+      </div>
+      <h2>Spacing and motion</h2>
+      <div class="row" id="spaces"></div>
+      <p class="muted">Motion: <code>--dur-1</code> 120ms, <code>--dur-2</code> 220ms, <code>--dur-3</code> 360ms, all zero under reduced motion.</p>
+    </section>
+
+    <section id="components">
+      <h2>Buttons and fields</h2>
+      <div class="row">
+        <button class="primary" type="button">Save changes</button>
+        <button type="button">Cancel</button>
+        <button class="ghost" type="button"><sol-icon name="plus"></sol-icon>New</button>
+        <button class="danger" type="button"><sol-icon name="trash"></sol-icon>Delete</button>
+        <button type="button" disabled>Disabled</button>
+        <span class="badge">Badge</span><span class="badge sun">Online</span>
+      </div>
+      <div class="row"><label style="flex: 1; min-width: 12rem">Name<input value="Ada"></label><label style="flex: 1; min-width: 12rem">Note<input placeholder="Optional"></label></div>
+
+      <h2>Toolbar and card</h2>
+      <div class="toolbar"><button type="button"><sol-icon name="upload"></sol-icon>Upload</button><span class="grow"></span><button class="ghost" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button></div>
+      <div class="card"><h3>Card</h3><p>A raised surface for one idea. Keep content short and the action obvious.</p></div>
+
+      <h2 style="margin-top: var(--space-5)">Avatars</h2>
+      <div class="row">
+        <sol-avatar name="Ada" id="p1" online></sol-avatar>
+        <sol-avatar name="Bo" id="p2"></sol-avatar>
+        <sol-avatar name="Chen" id="p3" online size="3.5rem"></sol-avatar>
+        <sol-avatar name="Dee" id="p4" size="1.75rem"></sol-avatar>
+      </div>
+
+      <h2>List (arrow keys move, Enter selects)</h2>
+      <sol-list id="people">
+        <div slot="empty" class="empty"><sol-icon name="people"></sol-icon><h3>No one here yet</h3><p>Pair a friend to share with them.</p></div>
+      </sol-list>
+      <div class="toolbar" style="margin-top: var(--space-3)"><button type="button" id="clear">Empty the list</button><button type="button" id="fill">Fill it</button></div>
+
+      <h2>Skeleton (remote data only)</h2>
+      <sol-list loading></sol-list>
+
+      <h2 style="margin-top: var(--space-5)">Empty state</h2>
+      <div class="card flat empty"><sol-icon name="inbox"></sol-icon><h3>Inbox is clear</h3><p>Notices and approvals from your apps show up here.</p></div>
+
+      <h2 style="margin-top: var(--space-5)">Dialog and toast</h2>
+      <div class="row">
+        <button type="button" id="open">Open dialog</button>
+        <button type="button" id="toast">Show toast</button>
+        <button type="button" id="err">Show error</button>
+      </div>
+      <sol-dialog id="dlg" heading="Share Holiday photos">
+        <p>Bo will be able to see this folder on all their devices.</p>
+        <div class="dlg-actions"><button type="button" id="no">Cancel</button><button class="primary" type="button" id="yes">Share</button></div>
+      </sol-dialog>
+    </section>
+
+    <section id="icons"><h2>Icons</h2><div class="icons" id="iconGrid"></div></section>
+  </main>
+</sol-app-shell>
+<script type="module">
+  import { icons } from './icons.js';
+  import { toast, setTheme } from './kit.js';
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+
+  for (const n of ['bg','surface','surface-2','raised','ink','ink-2','ink-3','line','primary','primary-soft','sun','sun-strong','ok','warn','danger']) {
+    const i = el('i'); i.style.background = `var(--${n})`;
+    $('colors').append(el('div', { className: 'sw' }, i, el('span', { textContent: '--' + n })));
+  }
+  for (const n of [1,2,3,4,5,6,7]) {
+    const b = el('div'); b.style.cssText = `width:var(--space-${n});height:var(--space-${n});background:var(--primary);border-radius:2px`;
+    $('spaces').append(el('div', { className: 'row', title: 'space-' + n }, b));
+  }
+  for (const name of Object.keys(icons)) {
+    $('iconGrid').append(el('div', {}, el('sol-icon', { name: '' , ...{} }), el('span', { textContent: name })));
+    $('iconGrid').lastChild.firstChild.setAttribute('name', name);
+  }
+
+  const people = $('people');
+  const names = ['Ada', 'Bo', 'Chen'];
+  function fill() {
+    people.querySelectorAll('[data-item]').forEach((r) => r.remove());
+    names.forEach((n, i) => {
+      const av = el('sol-avatar'); av.setAttribute('name', n); av.setAttribute('id', 'p' + (i + 1)); if (i !== 1) av.setAttribute('online', '');
+      people.append(el('div', { className: 'row-item' , tabIndex: 0 }, av, el('div', { className: 'grow' }, el('div', { className: 'title', textContent: n }), el('small', { textContent: i === 1 ? 'Last seen yesterday' : 'Online now' })), el('sol-icon')));
+    });
+    people.querySelectorAll('.row-item').forEach((r) => { r.className = ''; r.setAttribute('data-item', ''); r.lastChild.setAttribute('name', 'chevron'); });
+  }
+  fill();
+  $('clear').onclick = () => people.querySelectorAll('[data-item]').forEach((r) => r.remove());
+  $('fill').onclick = fill;
+  people.addEventListener('sol-select', (e) => toast('Selected ' + e.detail.querySelector('.title').textContent));
+
+  $('open').onclick = () => $('dlg').show();
+  $('no').onclick = $('yes').onclick = () => $('dlg').close();
+  $('toast').onclick = () => toast('Shared with Bo');
+  $('err').onclick = () => toast('Bo is offline. Try again when they are back.', { kind: 'error' });
+
+  const modes = ['auto', 'light', 'dark'];
+  let m = 0;
+  $('theme').onclick = () => {
+    m = (m + 1) % 3; setTheme(modes[m]);
+    $('theme').lastChild.textContent = 'Theme: ' + modes[m];
+  };
+</script>
+</body>
+</html>

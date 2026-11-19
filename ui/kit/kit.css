@@ -1,0 +1,143 @@
+/* Sol kit: base styles and layout primitives. Uses tokens.css only. */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: var(--weight-regular) var(--text-md)/var(--leading) var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { line-height: var(--leading-tight); margin: 0 0 var(--space-3); letter-spacing: -0.015em; font-weight: var(--weight-bold); }
+h1 { font-size: var(--text-2xl); } h2 { font-size: var(--text-xl); } h3 { font-size: var(--text-lg); }
+p { margin: 0 0 var(--space-3); max-width: 68ch; }
+a { color: var(--primary); text-underline-offset: 3px; }
+small, .muted { color: var(--ink-2); font-size: var(--text-sm); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+
+:focus-visible { outline: 2px solid var(--sun-strong); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* buttons and fields */
+button, .btn, input, select, textarea { font: inherit; color: inherit; }
+button, .btn {
+  min-height: var(--touch); min-width: var(--touch); padding: 0 var(--space-4);
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  font-weight: var(--weight-medium); cursor: pointer; text-decoration: none; color: var(--ink);
+  transition: background var(--dur-1) var(--ease), transform var(--dur-1) var(--ease);
+}
+button:hover, .btn:hover { background: var(--surface-2); }
+button:active, .btn:active { transform: translateY(1px); }
+button.primary, .btn.primary { background: var(--primary); color: var(--on-primary); border-color: transparent; }
+button.primary:hover { background: var(--primary); filter: brightness(1.1); }
+button.ghost { background: transparent; border-color: transparent; }
+button.danger { color: var(--danger); }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
+input, select, textarea {
+  min-height: var(--touch); width: 100%; padding: 0 var(--space-3);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-md);
+}
+textarea { padding: var(--space-3); min-height: 6rem; }
+label { display: grid; gap: var(--space-1); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--ink-2); }
+
+/* app shell: sidebar on wide screens, bottom nav on phones */
+sol-app-shell { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100dvh; }
+sol-app-shell > [slot="nav"] {
+  position: sticky; top: 0; align-self: start; height: 100dvh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4) var(--space-3);
+  background: var(--surface); border-right: 1px solid var(--line);
+}
+sol-app-shell > [slot="nav"] .brand { font-weight: var(--weight-bold); font-size: var(--text-lg); padding: var(--space-2) var(--space-3) var(--space-4); display: flex; align-items: center; gap: var(--space-2); }
+sol-app-shell > [slot="nav"] .spacer { flex: 1; }
+.nav-item {
+  position: relative; min-height: var(--touch); display: flex; align-items: center; gap: var(--space-3);
+  padding: 0 var(--space-3) 0 var(--space-4); border-radius: var(--radius-md);
+  color: var(--ink-2); text-decoration: none; font-weight: var(--weight-medium); background: none; border: 0; justify-content: flex-start; width: 100%;
+}
+.nav-item:hover { background: var(--surface-2); color: var(--ink); }
+/* the sun marks where you are */
+.nav-item[aria-current="page"] { color: var(--ink); background: var(--primary-soft); }
+.nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: 6px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
+  border-radius: 50%; background: var(--sun); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sun) 28%, transparent);
+}
+sol-app-shell > main { min-width: 0; padding: var(--space-5) var(--space-6) var(--space-8); max-width: 62rem; width: 100%; }
+@media (max-width: 760px) {
+  sol-app-shell { grid-template-columns: 1fr; padding-bottom: var(--bottom-nav); }
+  sol-app-shell > [slot="nav"] {
+    position: fixed; inset: auto 0 0 0; top: auto; height: var(--bottom-nav); z-index: 20;
+    flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; padding: 0 var(--space-2);
+    border-right: 0; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
+  }
+  sol-app-shell > [slot="nav"] .brand, sol-app-shell > [slot="nav"] .spacer { display: none; }
+  .nav-item { flex-direction: column; justify-content: center; gap: 2px; padding: 0 var(--space-2); font-size: var(--text-xs); min-width: var(--touch); text-align: center; }
+  .nav-item[aria-current="page"] { background: none; }
+  .nav-item[aria-current="page"]::before { left: 50%; top: 4px; margin: 0 0 0 -4px; }
+  sol-app-shell > main { padding: var(--space-4) var(--space-4) var(--space-6); }
+}
+
+/* toolbar, card, list, empty state */
+.toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.toolbar .grow { flex: 1; }
+.card { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-5); box-shadow: var(--shadow-1); }
+.card.flat { box-shadow: none; background: var(--surface); }
+sol-list { display: block; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
+sol-list > [data-item] {
+  display: flex; align-items: center; gap: var(--space-3); min-height: 3.5rem; padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--dur-1) var(--ease);
+}
+sol-list > [data-item]:last-of-type { border-bottom: 0; }
+sol-list > [data-item]:hover { background: var(--surface); }
+sol-list > [data-item]:focus-visible { outline-offset: -3px; }
+sol-list > [data-item] .grow { flex: 1; min-width: 0; }
+sol-list > [data-item] .title { font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+sol-list > [slot="empty"] { display: none; }
+sol-list[data-empty] > [slot="empty"] { display: block; }
+.empty { text-align: center; padding: var(--space-7) var(--space-5); color: var(--ink-2); }
+.empty sol-icon { --size: 2.5rem; color: var(--ink-3); margin-bottom: var(--space-3); }
+.empty h3 { color: var(--ink); }
+.empty p { margin-inline: auto; }
+
+/* skeleton: only for data that is genuinely remote and not yet here */
+.skeleton { display: block; min-height: 1rem; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--surface-2) 30%, var(--surface) 50%, var(--surface-2) 70%); background-size: 300% 100%; animation: sol-shimmer 1.4s linear infinite; }
+sol-list[loading] > [data-item], sol-list[loading] > [slot="empty"] { display: none; }
+sol-list .skeleton-row { height: 3.5rem; border-radius: 0; border-bottom: 1px solid var(--line); }
+@keyframes sol-shimmer { to { background-position: -300% 0; } }
+
+/* dialog */
+sol-dialog > dialog {
+  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--raised); color: var(--ink);
+  padding: 0; width: min(32rem, calc(100vw - 2rem)); box-shadow: var(--shadow-3);
+}
+sol-dialog > dialog::backdrop { background: var(--scrim); }
+sol-dialog > dialog[open] { animation: sol-pop var(--dur-2) var(--ease); }
+sol-dialog .dlg-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-4) var(--space-5) 0; }
+sol-dialog .dlg-head h2 { margin: 0; font-size: var(--text-lg); }
+sol-dialog .dlg-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+sol-dialog [slot="actions"], sol-dialog .dlg-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
+@keyframes sol-pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+
+/* toast */
+sol-toast { position: fixed; z-index: 100; inset: auto var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom)) auto; display: grid; gap: var(--space-2); pointer-events: none; }
+sol-toast .toast {
+  pointer-events: auto; min-height: var(--touch); display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-4); background: var(--ink); color: var(--bg); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2); animation: sol-pop var(--dur-2) var(--ease); max-width: 24rem;
+}
+sol-toast .toast[data-kind="error"] { background: var(--danger); color: #fff; }
+@media (max-width: 760px) { sol-toast { inset: auto var(--space-3) calc(var(--bottom-nav) + var(--space-3)) var(--space-3); } }
+
+/* avatar: a disc; presence is the sun */
+sol-avatar { --size: 2.5rem; position: relative; display: inline-grid; place-items: center; flex: none; width: var(--size); height: var(--size); border-radius: 50%; font-weight: var(--weight-bold); font-size: calc(var(--size) * 0.4); background: var(--av-bg, var(--primary-soft)); color: var(--av-fg, var(--primary)); user-select: none; }
+sol-avatar[online]::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 28%; height: 28%; min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--sun); border: 2px solid var(--raised); }
+
+/* icon */
+sol-icon { --size: 1.25rem; display: inline-flex; width: var(--size); height: var(--size); flex: none; }
+sol-icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+.badge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: 0 var(--space-2); border-radius: var(--radius-full); background: var(--surface-2); font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--ink-2); }
+.badge.sun { background: color-mix(in srgb, var(--sun) 28%, transparent); color: var(--sun-strong); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  .skeleton { animation: none; }
+}
