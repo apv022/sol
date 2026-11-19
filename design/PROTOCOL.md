@@ -80,6 +80,24 @@ connection). The reason goes to the local log.
 The caller checks that `D_b` is the device it meant to reach (from the pairing link or the cached
 bundle) and that `sig_b` verifies; otherwise it closes.
 
+### Settled in C3 (and gaps for C3b)
+
+- **Layouts.** `T` uses the raw 10 version bytes. Accept is `0x01 | bundle frame | 64-byte sig_b`.
+  The Request JSON must be canonical (sorted keys, no extra whitespace).
+- **Bundle frames** use a 4-byte length (max 1 MiB), not the 16 KiB frame limit, so a large device
+  list fits. *(C3b: implement; today's code still uses the small frame.)*
+- **Join.** A joining device has no bundle yet: it sends its signed endpoint record in the bundle
+  frame, and the Request carries `name` (the device's display name) for `join`. *(C3b: add `name`.)*
+- **Recover.** A device restoring from the words has no bundle, so it can't fetch the newest one
+  through a normal handshake. New op `recover`: the caller additionally signs `T` with the
+  recovery key `R`; an own device or a contact that verifies it answers with the newest bundle
+  it holds, then closes. *(C3b.)*
+- **Pushing changes.** Whenever a device list or endpoint record changes, the device pushes it to
+  every open session (`POST /p/bundle`), so contacts learn of a removed device immediately, not at
+  their next handshake. *(C3b.)*
+- Contacts are replicated between my own devices through a Sol-internal feed once feeds exist
+  (C4); until then each device keeps its own store.
+
 ## Pairing links
 
 ```
