@@ -1,0 +1,106 @@
+# Identity
+
+Status: spec for ticket C2. All keys are ed25519. All IDs are the lowercase, unpadded base32 of a
+public key (52 characters).
+
+## Why layers
+
+One key that does everything is one leak away from losing everything. Sol splits identity so that
+each key does as little as possible and each leak has a smaller, recoverable blast radius.
+
+```
+Recovery key  R   paper only (24 words). Its public key IS your person ID. Signs rarely.
+   └─ signs ─▶ Person key  P   on your admin devices. Signs your device list.
+                  └─ signs ─▶ Device keys  D   one per device. Signs sessions and feed entries.
+                                 └─ signs ─▶ Agent keys  G   scoped, expiring. Acts for you.
+```
+
+| Key | Lives | Signs | If it leaks |
+|---|---|---|---|
+| **R** recovery | only the 24-word backup; derived on demand, never stored | person certificates (which P is current) | your identity is lost. This is why it never touches a disk |
+| **P** person | admin devices (the first device by default), file `0600` | the device list | from the paper backup, issue a new P; the old one stops working everywhere |
+| **D** device | its device, file `0600` | handshakes, feed entries, agent certificates | from an admin device, remove it from the device list |
+| **G** agent | where the agent runs | actions within its scopes until its expiry | revoke it from its device, or remove the device; it expires anyway |
+
+Apps never get a key. The daemon signs on their behalf (feed entries, actions) and stamps which
+app it was. Per-app keys for apps that publish outside Sol are a later addition, signed by `D` in
+the same certificate format.
+
+## The 24 words
+
+`R` comes from 256 bits of entropy encoded as 24 words with the BIP-39 English word list and
+checksum (the list is vendored as a data file, `internal/identity/words.txt`, with its SHA-256
+in a comment; no code dependency). The seed for `R` is `SHA-256("sol recovery v1" | entropy)`,
+used as the ed25519 seed. No passphrase in v1.
+
+On first run the daemon generates the entropy, derives `R`, and issues the first person
+certificate and device list. The entropy stays on that admin device (`0600`, same protection as
+`P`) **only until the person confirms** they wrote the words down in the Sol app; then it is
+deleted and only paper remains. Until then the Sol app keeps a reminder in the Inbox.
+
+## Encoding
+
+Every signed object is a byte string built from length-prefixed fields, never from JSON, so two
+implementations can't disagree about it. `lp(x)` is a 4-byte big-endian length followed by `x`.
+`u64(n)` is 8 bytes big-endian. Strings are UTF-8. Lists are `u64(count)` followed by the items.
+Every signed object starts with a context string so a signature for one kind can never be
+replayed as another.
+
+### Person certificate (signed by R)
+
+```
+lp("sol person-cert v1") | lp(R_pub) | u64(seq) | lp(P_pub) | u64(issued_unix) | lp(name)
+```
+The highest `seq` wins. Issuing a new one (from the words) makes every older `P` invalid.
+
+### Device list (signed by P)
+
+```
+lp("sol device-list v1") | lp(R_pub) | u64(seq) | list of device:
+    lp(D_pub) | lp(name) | u64(flags) | u64(added_unix)
+```
+`flags`: bit 0 `admin` (holds P), bit 1 `anchor` (always on). A device not in the latest list is
+not yours. The highest `seq` wins; a list with a lower or equal `seq` than one already seen is
+ignored, so an attacker can't replay an old list to resurrect a removed device.
+
+### Agent certificate (signed by D)
+
+```
+lp("sol agent-cert v1") | lp(R_pub) | lp(D_pub) | lp(G_pub) | lp(name)
+  | u64(issued_unix) | u64(expires_unix) | list of lp(scope)
+```
+Scopes are action patterns (`files.*`, `docs.read`, `*`) and optionally `person:<id>` limits.
+`expires_unix` is required, at most 90 days after `issued_unix` (default 30); the issuing device
+renews it while the agent is in use. Revocation: the device publishes a revocation entry in its
+`sol/revocations` feed (replicated to its own devices only); peers never see agent keys directly,
+because an agent always acts through one of your devices.
+
+### Endpoint record (signed by D)
+
+```
+lp("sol endpoints v1") | lp(D_pub) | u64(seq) | list of (lp(transport) | lp(address) | lp(access))
+```
+Where a device can be reached (onion address + client-auth key, WireGuard key + endpoint, …).
+Changes often; highest `seq` wins; pushed over sessions and to paired people.
+
+## The identity bundle
+
+What a device presents in a handshake, so the other side can check the whole chain in one go:
+the latest person certificate, the latest device list, and the device's endpoint record. The
+verifier checks: `R_pub` signed the person certificate → that `P` signed the device list → the
+device key in the handshake is in that list. People cache the newest bundle of everyone they've
+paired with and accept only newer `seq` values.
+
+## Rotation and loss
+
+| Lost | Do this | Effect on contacts |
+|---|---|---|
+| a normal device | from an admin device: remove it (new device list) | pushed on next contact; its sessions are closed |
+| an admin device | from another admin device: remove it, **and** issue a new P from the words (it held P) | new person cert + list pushed; old P useless |
+| every device | install Sol, enter the 24 words: new P, new device list with the new device | contacts accept it because R signed it |
+| the words | nothing to do while devices remain; issue new words means a **new identity** (re-pair everyone) | |
+
+## What this file does not cover
+
+The handshake that carries the bundle is in [PROTOCOL.md](PROTOCOL.md). Feed entry signatures are
+in PROTOCOL.md §Feeds.

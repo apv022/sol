@@ -1,0 +1,421 @@
+package transport
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"errors"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/apv022/sol/internal/identity"
+)
+
+// echoTarget is a plain TCP echo server standing in for the node listener.
+func echoTarget(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func startDirect(t *testing.T) (*Direct, string) {
+	t.Helper()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect("127.0.0.1:0", priv)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Stop() })
+	addr, err := d.Publish(context.Background(), Publication{ID: "node", Target: echoTarget(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d, addr
+}
+
+func TestDirectDialPinsTheNodeKey(t *testing.T) {
+	d, addr := startDirect(t)
+	if !d.Handles(addr) || !strings.HasPrefix(addr, "sol-direct:"+d.nodeID+"@127.0.0.1:") {
+		t.Fatalf("address %q", addr)
+	}
+	c, err := d.Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("ping"))
+	buf := make([]byte, 4)
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("echo through TLS: %q %v", buf, err)
+	}
+
+	// The same host:port under another node's id must be refused: that is
+	// what stops a man in the middle (or a stale address pointing at
+	// someone else's node).
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, cands, _ := ParseDirectAddr(addr)
+	forged := "sol-direct:" + identity.NodeID(other) + "@" + cands[0]
+	// (It never even gets a certificate: the preamble tag doesn't match.)
+	if c, err := d.Dial(context.Background(), forged); err == nil {
+		c.Close()
+		t.Fatal("dial with the wrong key succeeded")
+	}
+}
+
+func TestDirectIsSilentToProbes(t *testing.T) {
+	_, addr := startDirect(t)
+	_, cands, _ := ParseDirectAddr(addr)
+	// Includes the bare magic: without this node's tag it gets nothing either.
+	for _, probe := range []string{"GET / HTTP/1.0\r\n\r\n", "\x16\x03\x01\x00\x05hello", "SOLD1" + strings.Repeat("x", 16)} {
+		c, err := net.Dial("tcp", cands[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write([]byte(probe))
+		c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+		n, _ := c.Read(make([]byte, 64))
+		c.Close()
+		if n != 0 {
+			t.Fatalf("probe %q got %d bytes back", probe, n)
+		}
+	}
+}
+
+func TestDirectCarriesOnlyTheNode(t *testing.T) {
+	d, _ := startDirect(t)
+	if _, err := d.Publish(context.Background(), Publication{ID: "svc-blog", Target: "127.0.0.1:1"}); err == nil {
+		t.Fatal("a public service was published on direct")
+	}
+}
+
+func TestDirectFallsThroughDeadCandidates(t *testing.T) {
+	d, addr := startDirect(t)
+	_, cands, _ := ParseDirectAddr(addr)
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	mixed := "sol-direct:" + d.nodeID + "@" + deadAddr + "," + cands[0]
+	c, err := d.Dial(context.Background(), mixed)
+	if err != nil {
+		t.Fatalf("one good candidate should be enough: %v", err)
+	}
+	c.Close()
+	start := time.Now()
+	if _, err := d.Dial(context.Background(), "sol-direct:"+d.nodeID+"@"+deadAddr); err == nil {
+		t.Fatal("dead address dialed")
+	}
+	if time.Since(start) > DirectDialTimeout+time.Second {
+		t.Fatal("a dead direct path must fail fast")
+	}
+}
+
+func TestDirectSkipsUnsafeCandidates(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(":0", priv) // not on loopback
+	id := identity.NodeID(priv.Public().(ed25519.PublicKey))
+	for _, cand := range []string{"127.0.0.1:22", "localhost:80", "intranet.local:80", "[::1]:22", "0.0.0.0:1", "[fe80::1]:7701", "224.0.0.1:1"} {
+		if _, err := d.Dial(context.Background(), "sol-direct:"+id+"@"+cand); err == nil || !strings.Contains(err.Error(), "no usable address") {
+			t.Errorf("%s: dialled (%v)", cand, err)
+		}
+	}
+}
+
+func TestCandidatesMatchTheListener(t *testing.T) {
+	if c := candidates(&net.TCPAddr{IP: net.ParseIP("192.168.1.5"), Port: 7701}, "192.168.1.5:7701"); len(c) != 1 || c[0] != "192.168.1.5:7701" {
+		t.Fatalf("specific bind: %v", c)
+	}
+	for _, c := range candidates(&net.TCPAddr{IP: net.IPv4zero, Port: 7701}, "0.0.0.0:7701") {
+		if strings.HasPrefix(c, "[") {
+			t.Fatalf("0.0.0.0 listener advertised IPv6 %s", c)
+		}
+	}
+}
+
+func TestParseDirectAddr(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	id := identity.NodeID(priv.Public().(ed25519.PublicKey))
+	for _, bad := range []string{"", "sol-direct:", "sol-direct:" + id, "sol-direct:" + id + "@", "sol-direct:nope@1.2.3.4:1", "x.onion:80"} {
+		if _, _, err := ParseDirectAddr(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	if _, c, err := ParseDirectAddr("sol-direct:" + id + "@[2001:db8::1]:7701,10.0.0.2:7701"); err != nil || len(c) != 2 {
+		t.Fatalf("v6+v4: %v %v", c, err)
+	}
+}
+
+func TestDirectRetriesABusyPort(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := retryListenEvery
+	retryListenEvery = 20 * time.Millisecond
+	t.Cleanup(func() { retryListenEvery = old })
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(busy.Addr().String(), priv)
+	d.Start(context.Background())
+	t.Cleanup(func() { d.Stop() })
+	if _, err := d.Publish(context.Background(), Publication{ID: "node", Target: echoTarget(t)}); err == nil {
+		t.Fatal("publish on a busy port should report it")
+	}
+	if st := d.Status(); st.State == StateReady {
+		t.Fatalf("busy port shown as ready: %+v", st)
+	}
+	busy.Close()
+	for i := 0; i < 200 && d.Status().Addresses["node"] == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := d.Status(); st.State != StateReady || st.Addresses["node"] == "" {
+		t.Fatalf("port never retried: %+v", st)
+	}
+}
+
+// A man in the middle who knows the node id (so it can compute the
+// preamble) still can't pass: its certificate isn't the node's key.
+func TestDirectRejectsAnImpostorCertificate(t *testing.T) {
+	_, victim, _ := ed25519.GenerateKey(rand.Reader)
+	_, impostor, _ := ed25519.GenerateKey(rand.Reader)
+	cert, err := selfSigned(impostor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				io.ReadFull(c, make([]byte, len(directMagic)+directTagSize)) // accept any tag
+				tls.Server(c, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}).Handshake()
+				c.Close()
+			}()
+		}
+	}()
+	d := NewDirect("127.0.0.1:0", impostor)
+	addr := "sol-direct:" + identity.NodeID(victim.Public().(ed25519.PublicKey)) + "@" + ln.Addr().String()
+	if _, err := d.Dial(context.Background(), addr); err == nil || !strings.Contains(err.Error(), "different node") {
+		t.Fatalf("impostor accepted: %v", err)
+	}
+}
+
+func TestDirectRetryAfterRestart(t *testing.T) {
+	old := retryListenEvery
+	retryListenEvery = 20 * time.Millisecond
+	t.Cleanup(func() { retryListenEvery = old })
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(busy.Addr().String(), priv)
+	target := echoTarget(t)
+	for range 2 { // a Stop/Start cycle must leave a working retry loop
+		d.Start(context.Background())
+		d.Publish(context.Background(), Publication{ID: "node", Target: target})
+		d.Stop()
+	}
+	d.Start(context.Background())
+	t.Cleanup(func() { d.Stop() })
+	if _, err := d.Publish(context.Background(), Publication{ID: "node", Target: target}); err == nil {
+		t.Fatal("busy port not reported")
+	}
+	busy.Close()
+	for i := 0; i < 200 && d.Status().Addresses["node"] == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d.Status().Addresses["node"] == "" {
+		t.Fatal("no retry after a Stop/Start cycle")
+	}
+}
+
+// A busy port: Publish keeps the latest target, and a second Start (no
+// Stop) still leaves a retry loop that opens the port.
+func TestDirectBusyPortKeepsTargetAndSurvivesRestart(t *testing.T) {
+	old := retryListenEvery
+	retryListenEvery = 20 * time.Millisecond
+	t.Cleanup(func() { retryListenEvery = old })
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(busy.Addr().String(), priv)
+	d.Start(context.Background())
+	d.Publish(context.Background(), Publication{ID: "node", Target: "127.0.0.1:1"})
+	d.Start(context.Background()) // again, without Stop
+	t.Cleanup(func() { d.Stop() })
+	target := echoTarget(t)
+	if _, err := d.Publish(context.Background(), Publication{ID: "node", Target: target}); err == nil || strings.Contains(err.Error(), "not started") {
+		t.Fatalf("busy port: %v", err)
+	}
+	busy.Close()
+	var addr string
+	for i := 0; i < 200 && addr == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		addr = d.Status().Addresses["node"]
+	}
+	if addr == "" {
+		t.Fatal("port never retried")
+	}
+	c, err := d.Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("hi"))
+	buf := make([]byte, 2)
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "hi" {
+		t.Fatalf("forwarded to the old target: %q %v", buf, err)
+	}
+}
+
+// A direct transport that isn't started (never, failed, or stopped) claims
+// no addresses, so the node never dials through it.
+func TestDirectHandlesOnlyWhileStarted(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect("127.0.0.1:0", priv)
+	a := "sol-direct:x@10.0.0.2:7701"
+	if d.Handles(a) {
+		t.Fatal("handles before Start")
+	}
+	d.Start(context.Background())
+	if !d.Handles(a) {
+		t.Fatal("doesn't handle once started")
+	}
+	d.Stop()
+	if d.Handles(a) {
+		t.Fatal("handles after Stop")
+	}
+}
+
+// Unpublish while the port is being retried: the loop stops, and the node
+// never becomes reachable directly after it asked not to be.
+func TestUnpublishStopsTheRetryLoop(t *testing.T) {
+	SetRetryListenEvery(t, 20*time.Millisecond)
+	busy, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := busy.Addr().String()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDirect(addr, priv)
+	d.Start(context.Background())
+	t.Cleanup(func() { d.Stop() })
+	d.Publish(context.Background(), Publication{ID: "node", Target: echoTarget(t)})
+	d.Unpublish("node")
+	busy.Close()
+	time.Sleep(150 * time.Millisecond)
+	if c, err := net.Dial("tcp", addr); err == nil {
+		c.Close()
+		t.Fatal("the retry loop reopened an unpublished port")
+	}
+}
+
+// Idle unauthenticated connections are capped; past the cap, new ones are
+// dropped at once instead of piling up.
+func TestPreAuthConnectionsAreCapped(t *testing.T) {
+	_, addr := startDirect(t)
+	_, cands, _ := ParseDirectAddr(addr)
+	var idle []net.Conn
+	t.Cleanup(func() {
+		for _, c := range idle {
+			c.Close()
+		}
+	})
+	for range maxPreAuth {
+		c, err := net.Dial("tcp", cands[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, c)
+	}
+	time.Sleep(100 * time.Millisecond) // let the server take them
+	extra, err := net.Dial("tcp", cands[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	extra.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := extra.Read(make([]byte, 1)); isTimeout(err) {
+		t.Fatal("connection past the cap was held open")
+	}
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// stubInterfaces replaces the interface lister and the outbound fallback
+// for one test.
+func stubInterfaces(t *testing.T, list func() ([]net.Interface, error), out ...string) {
+	t.Helper()
+	oldList, oldOut := netInterfaces, outboundIPs
+	t.Cleanup(func() { netInterfaces, outboundIPs = oldList, oldOut })
+	netInterfaces = list
+	outboundIPs = func() []net.IP {
+		var ips []net.IP
+		for _, s := range out {
+			ips = append(ips, net.ParseIP(s))
+		}
+		return ips
+	}
+}
+
+// Regression: on Android (11+) an app can't list interfaces (netlink is
+// denied), so no direct address was ever advertised. The outbound address
+// must stand in, for both direct transports.
+func TestCandidatesFallBackToOutboundIP(t *testing.T) {
+	denied := func() ([]net.Interface, error) {
+		return nil, errors.New("route ip+net: netlinkrib: permission denied")
+	}
+	empty := func() ([]net.Interface, error) { return nil, nil }
+	for name, list := range map[string]func() ([]net.Interface, error){"denied": denied, "empty": empty} {
+		t.Run(name, func(t *testing.T) {
+			stubInterfaces(t, list, "192.168.1.7", "2001:db8::7", "127.0.0.1")
+			got := candidates(&net.TCPAddr{IP: net.IPv6unspecified, Port: 7701}, ":7701")
+			if strings.Join(got, ",") != "192.168.1.7:7701,[2001:db8::7]:7701" {
+				t.Fatalf("candidates %v", got)
+			}
+
+			w, _ := startWG(t)
+			w.mu.Lock()
+			w.allowLoopback = false // as on a phone listening on all interfaces
+			addr := w.addressLocked()
+			w.mu.Unlock()
+			_, cands, err := ParseWGAddr(addr)
+			if err != nil || len(cands) == 0 || cands[0] != net.JoinHostPort("192.168.1.7", strconv.Itoa(int(w.port))) {
+				t.Fatalf("wg address %q (%v)", addr, err)
+			}
+		})
+	}
+}
+
+// When interfaces can be listed, the fallback isn't consulted.
+func TestCandidatesPreferInterfaces(t *testing.T) {
+	stubInterfaces(t, net.Interfaces, "203.0.113.9")
+	ips := localIPs()
+	if len(ips) == 1 && ips[0].Equal(net.ParseIP("203.0.113.9")) {
+		t.Skip("this machine lists no interface address")
+	}
+	for _, ip := range ips {
+		if ip.Equal(net.ParseIP("203.0.113.9")) {
+			t.Fatalf("fallback mixed in although interfaces list: %v", ips)
+		}
+	}
+}

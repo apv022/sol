@@ -1,0 +1,188 @@
+// Package netutil holds small networking helpers shared by the node, the
+// connect client, and transports.
+package netutil
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"sync"
+	"time"
+)
+
+// Pipe copies bytes in both directions until either side closes, then closes
+// both. It returns when both copy loops have finished.
+func Pipe(a, b net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		io.Copy(dst, src)
+		// Half-close if possible so the peer sees EOF but can still reply;
+		// otherwise close fully.
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		} else {
+			dst.Close()
+		}
+	}
+	go cp(a, b)
+	go cp(b, a)
+	wg.Wait()
+	a.Close()
+	b.Close()
+}
+
+// FreePorts asks the OS for n distinct free TCP ports on 127.0.0.1.
+// There is an inherent race between closing the probe listener and the
+// caller binding the port, which is acceptable for local child processes.
+func FreePorts(n int) ([]int, error) {
+	var ports []int
+	var lns []net.Listener
+	defer func() {
+		for _, l := range lns {
+			l.Close()
+		}
+	}()
+	for range n {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		lns = append(lns, l)
+		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
+	}
+	return ports, nil
+}
+
+// LANIP returns this machine's preferred outbound IPv4 address, used to
+// advertise the clearnet transport in pairing links. No packets are sent.
+func LANIP() (net.IP, error) {
+	c, err := net.Dial("udp4", "192.0.2.1:9") // TEST-NET-1, never routed
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	ip := c.LocalAddr().(*net.UDPAddr).IP
+	if ip.IsUnspecified() {
+		return nil, errors.New("no LAN address")
+	}
+	return ip, nil
+}
+
+// LANIP6 is LANIP for IPv6: the global address the OS would send from, if
+// it has one. No packets are sent.
+func LANIP6() (net.IP, error) {
+	c, err := net.Dial("udp6", "[2001:db8::1]:9") // documentation range, never routed
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	ip := c.LocalAddr().(*net.UDPAddr).IP
+	if !ip.IsGlobalUnicast() || ip.To4() != nil {
+		return nil, errors.New("no global IPv6 address")
+	}
+	return ip, nil
+}
+
+// Online reports whether this machine has a route to the internet: whether
+// the system would pick a non-loopback local address to send towards a
+// public one, over IPv4 or IPv6. It sends nothing (a UDP "connect" only
+// consults the routing table), so it is cheap enough to call every second.
+// It cannot tell whether the route actually works (a captive portal, a dead
+// Wi-Fi): it only answers "is there anything to try".
+func Online() bool {
+	for _, p := range [][2]string{{"udp4", "192.0.2.1:9"}, {"udp6", "[2001:db8::1]:9"}} { // documentation ranges
+		c, err := net.Dial(p[0], p[1])
+		if err != nil {
+			continue
+		}
+		ip := c.LocalAddr().(*net.UDPAddr).IP
+		c.Close()
+		if !ip.IsLoopback() && !ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
+// DirectCandidate checks one direct-mode candidate (docs/PROTOCOL.md,
+// "Direct mode transport"): an IP:port that could be another machine. No
+// names, unspecified, multicast or link-local addresses, and loopback only
+// if allowLoopback. Config validation and the dialer share it, so an entry
+// the config accepts is one peers will dial.
+func DirectCandidate(hostport string, allowLoopback bool) error {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return err
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return fmt.Errorf("bad port %q", port)
+	}
+	ip := net.ParseIP(host)
+	switch {
+	case ip == nil:
+		return fmt.Errorf("%q is not an IP address (names aren't dialled)", host)
+	case ip.IsUnspecified(), ip.IsMulticast(), ip.IsLinkLocalUnicast():
+		return fmt.Errorf("%s can't reach another machine", ip)
+	case ip.IsLoopback() && !allowLoopback:
+		return fmt.Errorf("%s is this machine", ip)
+	}
+	return nil
+}
+
+// IsLoopbackListen reports whether a listen address ("127.0.0.1:7701",
+// "localhost:0") is loopback-only. A direct-mode node listening there may
+// advertise and dial loopback candidates (two nodes on one machine).
+func IsLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
+}
+
+// STUNPresets are public STUN servers a user can choose by name in config
+// ("stun": ["cloudflare"]). Sol never uses one unless the user lists it: a
+// STUN server learns this machine's public IP.
+var STUNPresets = map[string]string{
+	"cloudflare": "stun.cloudflare.com:3478",
+	"google":     "stun.l.google.com:19302",
+	"mozilla":    "stun.services.mozilla.com:3478",
+	"twilio":     "global.stun.twilio.com:3478",
+}
+
+// ExpandSTUN turns a config entry (a preset name or host:port) into
+// host:port, or reports why it is unusable.
+func ExpandSTUN(entry string) (string, error) {
+	if hp, ok := STUNPresets[entry]; ok {
+		return hp, nil
+	}
+	host, port, err := net.SplitHostPort(entry)
+	if err != nil || host == "" {
+		return "", fmt.Errorf("stun %q: want a preset (cloudflare, google, mozilla, twilio) or host:port", entry)
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return "", fmt.Errorf("stun %q: bad port", entry)
+	}
+	return entry, nil
+}
+
+// DialLocal connects to an app on this machine's loopback port: 127.0.0.1
+// first, then [::1]. Apps that listen on "localhost" (many Node and Bun
+// servers) often bind only the IPv6 loopback, and a service that answers
+// there must not look dead. Both addresses are loopback, so a service is
+// still never reachable from the network through this.
+func DialLocal(port int, timeout time.Duration) (net.Conn, error) {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+	if err == nil {
+		return c, nil
+	}
+	if c6, err6 := net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), timeout); err6 == nil {
+		return c6, nil
+	}
+	return nil, err
+}

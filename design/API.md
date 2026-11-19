@@ -92,18 +92,23 @@ Entry:
  "time": "2026-11-19T21:03:11Z", "body": {…any JSON, max 64 KiB…},
  "hash": "sha256:…", "prev": "sha256:…"}
 ```
-`seq` counts from 1 per feed. `hash` covers the signed entry; `prev` chains to the previous entry
-so a gap or a rewrite is detectable. Bodies over 64 KiB go in a blob and the entry points at it.
+Under the hood each device of the owner keeps its own chain in the feed, so two devices
+appending while offline never conflict (PROTOCOL.md §Feeds). `seq` counts from 1 per
+(feed, device); `prev` chains to that device's previous entry, so a gap or a rewrite is
+detectable; `hash` covers the signed entry. Apps don't usually care about `seq`: they read with
+`pos`, a cursor that increases by one for every entry this device stores for that feed, in
+arrival order. An entry returned by the API carries both `seq` and `pos`. Bodies over 64 KiB go in
+a blob and the entry points at it.
 
 ### `POST /v1/feeds/{feed}/append`
 Body: `{"body": {…}}`. `{feed}` is the feed name (own feeds only). Returns the stored entry.
 
-### `GET /v1/feeds/{address}?from=SEQ&limit=N`
-Reads entries with `seq >= from` (default 1, limit default 500, max 5000). Works for my feeds and
+### `GET /v1/feeds/{address}?from=POS&limit=N`
+Reads entries with `pos >= from` (default 1, limit default 500, max 5000), in `pos` order. Works for my feeds and
 for feeds shared with me (served from the local replica; never blocks on the network).
 
 ### `GET /v1/feeds?owner=PERSON`
-Lists the feed addresses for this app that I can read, with their latest `seq`.
+Lists the feed addresses for this app that I can read, with their latest `pos`.
 
 ### `GET /v1/events?feeds=ADDR,ADDR&people=1&inbox=1`
 Server-sent events. Event types:
