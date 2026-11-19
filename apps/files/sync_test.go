@@ -230,7 +230,9 @@ func TestIgnoredFilesAreNotSynced(t *testing.T) {
 	a.write(t, "~$doc.docx", "x")
 	a.write(t, ".#lock", "x")
 	a.write(t, ".sol/internal", "x")
-	waitFor(t, "b has real files", func() bool { return b.has("real.txt", "r") && b.has("secret/a.txt", "kept") && b.has(".solignore", "# comment\n*.log\nbuild/\nsecret/*.key\n") })
+	waitFor(t, "b has real files", func() bool {
+		return b.has("real.txt", "r") && b.has("secret/a.txt", "kept") && b.has(".solignore", "# comment\n*.log\nbuild/\nsecret/*.key\n")
+	})
 	a.settle(t)
 	b.settle(t)
 	got := strings.Join(b.files(), ",")

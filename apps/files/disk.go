@@ -31,6 +31,7 @@ type persisted struct {
 	Index   map[string]idxEntry `json:"index"`
 	Keep    map[string]bool     `json:"keep"`
 	Noticed map[string]bool     `json:"noticed"`
+	Dirs    map[string]bool     `json:"dirs"`
 }
 
 func (a *App) statePath() string { return filepath.Join(a.data, "state.json") }
@@ -55,11 +56,14 @@ func (a *App) loadState() {
 	if p.Noticed != nil {
 		a.noticed = p.Noticed
 	}
+	if p.Dirs != nil {
+		a.dirsMade = p.Dirs
+	}
 }
 
 func (a *App) saveState() {
 	a.mu.RLock()
-	b, err := json.Marshal(persisted{Index: a.index, Keep: a.keep, Noticed: a.noticed})
+	b, err := json.Marshal(persisted{Index: a.index, Keep: a.keep, Noticed: a.noticed, Dirs: a.dirsMade})
 	a.mu.RUnlock()
 	if err != nil || a.data == "" {
 		return
@@ -461,7 +465,32 @@ func (a *App) reconcilePass(ctx context.Context) (bool, error) {
 	// Folders.
 	for d := range v.explicit {
 		if a.isKept(d) && ValidatePath(d, false) == nil && !a.ign.ignored(d) {
-			_ = os.MkdirAll(a.disk(d), 0o755)
+			if os.MkdirAll(a.disk(d), 0o755) == nil {
+				a.mu.Lock()
+				a.dirsMade[d] = true
+				a.mu.Unlock()
+			}
+		}
+	}
+	// Folders I made for an explicit mkdir that has since been deleted go away when empty.
+	a.mu.RLock()
+	var madeGone []string
+	for d := range a.dirsMade {
+		if !v.explicit[d] {
+			madeGone = append(madeGone, d)
+		}
+	}
+	a.mu.RUnlock()
+	sort.Slice(madeGone, func(i, j int) bool { return len(madeGone[i]) > len(madeGone[j]) })
+	for _, d := range madeGone {
+		if v.dirs[d] {
+			continue // it has files again
+		}
+		if err := os.Remove(a.disk(d)); err == nil || errors.Is(err, fs.ErrNotExist) {
+			a.mu.Lock()
+			delete(a.dirsMade, d)
+			a.mu.Unlock()
+			did = true
 		}
 	}
 	// Deletions: indexed files that left the tree.

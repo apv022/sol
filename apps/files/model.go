@@ -112,7 +112,9 @@ func (a *App) applyEntry(addr string, e sol.Entry) {
 	}
 }
 
-func validShareID(id string) bool { return len(id) >= 6 && len(id) <= 32 && sol.ValidFeedName(sharePrefix+id) }
+func validShareID(id string) bool {
+	return len(id) >= 6 && len(id) <= 32 && sol.ValidFeedName(sharePrefix+id)
+}
 
 func (a *App) applyShare(b body) {
 	if !validShareID(b.ID) || ValidatePath(b.Path, false) != nil {
@@ -464,4 +466,3 @@ func transient(err error) bool {
 	}
 	return !(errors.Is(err, sol.ErrBadRequest) || errors.Is(err, sol.ErrForbidden))
 }
-

@@ -155,7 +155,9 @@ func TestShareWriteComesBack(t *testing.T) {
 	bob.must(t, "files.write", map[string]any{"path": "Shared/alice/Docs/hello.txt", "text": "hi from bob"})
 	waitFor(t, "alice's both devices get bob's file", func() bool { return a1.has("Docs/hello.txt", "hi from bob") && a2.has("Docs/hello.txt", "hi from bob") })
 	bob.write(t, "Shared/alice/Docs/a.txt", "bob edited alice's doc")
-	waitFor(t, "alice gets bob's edit on disk", func() bool { return a1.has("Docs/a.txt", "bob edited alice's doc") && a2.has("Docs/a.txt", "bob edited alice's doc") })
+	waitFor(t, "alice gets bob's edit on disk", func() bool {
+		return a1.has("Docs/a.txt", "bob edited alice's doc") && a2.has("Docs/a.txt", "bob edited alice's doc")
+	})
 	bob.write(t, "Shared/alice/Docs/deep/new.txt", "deep")
 	waitFor(t, "nested file", func() bool { return a1.has("Docs/deep/new.txt", "deep") })
 

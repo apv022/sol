@@ -1119,4 +1119,3 @@ func (a *App) actStatus(ctx context.Context, c sol.Call) (any, error) {
 		"files": len(v.files), "folder": a.root, "watcher": watcher,
 	}, nil
 }
-

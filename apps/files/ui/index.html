@@ -1,2 +1,27 @@
 <!doctype html>
-<html lang="en"><head><title>Files</title></head><body>placeholder</body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<link rel="stylesheet" href="/kit/tokens.css">
+<link rel="stylesheet" href="/kit/kit.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<sol-app-shell id="shell">
+  <nav slot="nav">
+    <div class="brand"><sol-icon name="folder"></sol-icon> Files</div>
+    <a class="nav-item" href="#/" data-id="files"><sol-icon name="home"></sol-icon>My files</a>
+    <a class="nav-item" href="#/Shared" data-id="shared"><sol-icon name="people"></sol-icon>Shared with me</a>
+    <a class="nav-item" href="#!conflicts" data-id="conflicts"><sol-icon name="alert"></sol-icon>Conflicts<span class="badge sun" id="conflict-count" hidden></span></a>
+    <a class="nav-item" href="#!sync" data-id="sync"><sol-icon name="refresh"></sol-icon>Sync</a>
+    <span class="spacer"></span>
+    <button class="nav-item" id="theme" type="button"><sol-icon name="moon"></sol-icon>Theme</button>
+  </nav>
+  <main id="main" aria-live="polite"><div class="skeleton" style="height:12rem"></div></main>
+</sol-app-shell>
+<div id="dropveil" hidden><div><sol-icon name="upload"></sol-icon><p>Drop to upload</p></div></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
