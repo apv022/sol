@@ -200,17 +200,10 @@ func (a *App) localChange(ctx context.Context, p string) error {
 		a.skip(p, err.Error())
 		return nil
 	}
-	v := a.getView()
-	rs, relp, err := v.route(p)
-	if err != nil {
-		a.skip(p, err.Error())
-		return nil
-	}
-	_ = rs
-	_ = relp
 	if cur, ok := a.idx(p); ok && cur.Size == st.Size() && cur.Mtime == st.ModTime().UnixNano() {
 		return nil
 	}
+	v := a.getView()
 	full := a.disk(p)
 	hash, err := sha256File(full)
 	if err != nil {
@@ -227,6 +220,10 @@ func (a *App) localChange(ctx context.Context, p string) error {
 	}
 	if f := v.files[p]; f != nil && f.Blob == hash {
 		a.setIndex(p, now) // the feed already says this; nothing to publish
+		return nil
+	}
+	if _, _, err := v.route(p); err != nil {
+		a.skip(p, err.Error()) // e.g. an edit inside a read-only shared folder: never published
 		return nil
 	}
 	f, err := os.Open(full)

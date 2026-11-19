@@ -72,9 +72,9 @@ copy, so it is instant and works offline. The network only moves changes.
   moment they're written and catches peers up from a sequence number when they come back.
   This replaces polling everywhere, including the PoC's "Check again" button.
 - **Each app's data in the model that fits it.** Files is a synced folder on disk (see
-  `apps/FILES.md`); Music and Movies read media from it. Notes, Tasks and Calendar keep records in
-  feeds and merge with CRDTs from the SDK (each edit is a feed entry), so concurrent edits on two
-  devices or by two people merge per item, live. Rich text uses the SDK's block-document CRDT.
+  `apps/FILES.md`); Music and Movies read media from it, and Notes are Markdown files in it (text files
+  merge three ways like git, so only overlapping edits make a conflict copy). Tasks and Calendar
+  keep records in feeds and merge per item with CRDTs from the SDK, live.
   Every app exports and imports a standard format, so data is never locked in.
 - **Blobs.** Files, songs and movies are stored by SHA-256 hash, in chunks, so they can be streamed
   with seeking and fetched from any device of anyone who already has them and shares them with

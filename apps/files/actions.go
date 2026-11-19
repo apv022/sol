@@ -685,6 +685,15 @@ func (a *App) actShare(ctx context.Context, c sol.Call) (any, error) {
 	if len(in.People) == 0 {
 		return nil, bad("no people")
 	}
+	if !c.DryRun && !under(p, sharedDir) {
+		// Publish what was just dropped into the folder, so the share includes it.
+		a.syncMu.Lock()
+		err := a.localChange(ctx, p)
+		a.syncMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
 	v := a.freshView(ctx)
 	if under(p, sharedDir) {
 		return nil, bad("only folders in my own files can be shared")

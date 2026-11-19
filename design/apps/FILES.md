@@ -23,8 +23,10 @@ uploads, downloads, shares subfolders with people, and shows folders people shar
   folder is `{"op": "mkdir"}`.
 - **Content** is in blobs. Writing a file = put the blob, append a `put` entry.
 - **Conflicts.** A `put` whose `base` is not the current blob of that path on the receiving device
-  means two devices edited the same version. Both survive: the later one keeps the name, the
-  other is written as `ideas (conflict from laptop 2026-11-19 2103).md` and a notice goes to the
+  means two devices edited the same version. For text files (UTF-8, under 4 MiB) the receiving device
+  first tries a three-way merge (base, mine, theirs; line-based, like git): if the edits don't
+  overlap, the merged file is written and appended as a new `put`. Otherwise both survive: the
+  later one keeps the name, the other is written as `ideas (conflict from laptop 2026-11-19 2103).md` and a notice goes to the
   Inbox. Never silently lose an edit.
 - **Paths** are `/`-separated, NFC-normalised, relative, no `..`, no leading `/`. Names invalid on
   Windows (`CON`, `aux.txt`, trailing dot/space, `<>:"\|?*`) are refused at write time on every OS,

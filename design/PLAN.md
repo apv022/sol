@@ -13,7 +13,7 @@ the spec files your ticket names. Update your ticket's status here when you fini
 | App UIs | web: plain JS modules + the shared UI kit, no build step, no framework | runs identically in the Android WebView, desktop shell and browsers; nothing to install |
 | App packaging | each app is its own process talking to the daemon over the app API. First-party apps are compiled into the one `sol` binary (busybox style, `sol app run files`), still one process each | one binary to ship (Android can only exec what's in the APK), third-party apps are any executable with an `app.json` |
 | Peer wire | protocol v2 (design/PROTOCOL.md): mutual handshake with identity bundles, then a small stream mux with HTTP/1.1 per stream, opened by either side | HTTP/2 only lets one side make requests; replication and blob fetches need both directions |
-| User data | each app uses the model that fits its job: Files is a synced folder (design/apps/FILES.md); Music and Movies read media from it; Notes, Tasks and Calendar keep records in synced feeds with CRDTs; every app exports/imports a standard format | per-item merging and live sync where data is structured; plain files where data is naturally files |
+| User data | each app uses the model that fits its job: Files is a synced folder (design/apps/FILES.md); Music and Movies read media from it; Notes are Markdown files there; Tasks and Calendar keep records in synced feeds with CRDTs; every app exports/imports a standard format | per-item merging and live sync where data is structured; plain files where data is naturally files |
 | Conflicts | Files: concurrent edits to one file keep a conflict copy (like Syncthing). Feed-based apps merge with CRDTs, so they never conflict | each app gets the best merge its data allows |
 | Agent interface | the CLI (`sol do`), no MCP | agents drive shells well, schemas stay out of the context window; an MCP adapter can be added later from the same schemas |
 | Android | the PoC's Gradle-free build (javac + d8, `~/sol-mobile/build.sh`) packaging the `sol` binary as a native lib, plus a WebView that opens the Sol app and app origins | proven on a Pixel |
@@ -29,7 +29,7 @@ sdk/go/sol/         Go client for the app API + memsol (in-memory fake) + CRDTs
 sdk/js/             sol.js (browser client)
 ui/kit/             tokens.css, components (plain JS custom elements), icons
 apps/files/         Files: folders, sync, sharing, upload/download
-apps/notes/         Notes: slim rich-text notes and documents, live sync and co-editing
+apps/notes/         Notes: Markdown notes over the synced folder
 apps/tasks/         Tasks: tasks and lists with dates
 apps/calendar/      Calendar: events, invites
 apps/movies/        Movies: video library and player
@@ -72,7 +72,8 @@ Status: `todo` · `doing` · `done`.
 |---|---|---|
 | A1 | `sdk/go/sol` client + `memsol` fake (whole API.md) + CRDTs (LWW map, list, block text) with tests; `sdk/js/sol.js` + `crdt.js`; `ui/kit` (tokens, base components, dark/light) | done |
 | A2 | Files: the synced folder (design/apps/FILES.md): watch + scan, tree feed, blobs, conflict copies, keep-on-device vs online-only folders, share a subfolder, peers' shared folders, UI + actions | doing |
-| A3 | Notes: slim rich-text editor (headings, lists, checklists, bold/italic, links, code, images) over the SDK block CRDT in feeds; live sync across devices and co-editing with people; search; export/import Markdown; actions + UI; great on a phone | todo |
+| A3 | Notes: Markdown editor over `.md` files in the synced folder (`Notes/`): live preview, `[[wiki links]]` + backlinks, tags, fast full-text search, checklists, images from the folder; phone-first; actions + UI | todo |
+| A2b | Files: three-way merge for text files (line-based diff3 against the entry's `base`, stdlib Myers diff); conflict copy only for overlapping edits | todo |
 | A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | todo |
 | A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
