@@ -40,6 +40,8 @@ make build   # bin/sol
     the DOM.
 12. **Linux and Android first,** but nothing Linux-only without a fallback: macOS and Windows
     must build and pass tests.
-13. **Everything is a file.** User data lives as plain-format files in the synced folder
-   (Markdown, `.ics`, audio, video). Apps are lenses over those files, not owners of hidden
-   databases. App-private state (indexes, caches) goes in `SOL_APP_DATA` and can be rebuilt.
+13. **One job, done well.** Each app does one thing and stands alone: installable, removable and
+    replaceable without touching other apps. It keeps its data in the model that fits it
+    (synced feeds with CRDTs for notes, tasks and calendars; the synced folder for files and
+    media), and it can always export and import a standard format (Markdown, `.ics`, the original
+    files), so nothing is locked in.

@@ -71,10 +71,11 @@ copy, so it is instant and works offline. The network only moves changes.
   readable by whoever it's shared with. The daemon pushes new entries to subscribed peers the
   moment they're written and catches peers up from a sequence number when they come back.
   This replaces polling everywhere, including the PoC's "Check again" button.
-- **Everything is a file.** User data lives as plain files (Markdown, `.ics`, audio, video) in one
-  synced folder owned by the Files app. Notes, Tasks, Calendar, Music and Movies are lenses over
-  those files. Concurrent edits to one file keep both versions as a conflict copy. Any tool
-  (vim, grep, a file manager, an agent's shell) works on the folder. See `apps/FILES.md`.
+- **Each app's data in the model that fits it.** Files is a synced folder on disk (see
+  `apps/FILES.md`); Music and Movies read media from it. Notes, Tasks and Calendar keep records in
+  feeds and merge with CRDTs from the SDK (each edit is a feed entry), so concurrent edits on two
+  devices or by two people merge per item, live. Rich text uses the SDK's block-document CRDT.
+  Every app exports and imports a standard format, so data is never locked in.
 - **Blobs.** Files, songs and movies are stored by SHA-256 hash, in chunks, so they can be streamed
   with seeking and fetched from any device of anyone who already has them and shares them with
   you. The PoC's blob store is the starting point.
@@ -140,7 +141,8 @@ makes Sol a Tailscale replacement on day one.
 
 ## Open decisions
 
-1. **Settled:** no rich-text CRDT; files sync with conflict copies (see PLAN.md decisions).
+1. **Settled:** v1 uses the SDK's block CRDT (blocks merge, same-block edits last-writer-wins);
+   a character-level text CRDT can replace it later behind the same SDK API.
 2. **UI stack:** Preact + HTM with no build step (very light, harder for a large design system), or
    Svelte or Solid with a build step (still light, nicer for a component kit).
 3. **Desktop shell:** Wails (Go + the system webview) or Tauri (Rust).

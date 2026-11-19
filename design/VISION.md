@@ -21,7 +21,7 @@ your friends' devices anywhere, without opening a port, and it syncs data betwee
 writes networking, login, discovery or sync code again.
 
 **On top of it, a suite of slim apps** that replace the self-hosted stack: files (a synced folder
-like OneDrive or Nextcloud), notes (Markdown), tasks, calendar, music, movies, chat, and an agent. Each one is a good app alone and
+like OneDrive or Nextcloud), notes (slim rich text, live co-editing), tasks, calendar, music, movies, chat, and an agent. Each one is a good app alone and
 better with peers: your music player plays your library, and John's if he shares it with you.
 
 Self-hosting falls out of this for free. "My server" is just one of my devices that happens to

@@ -29,16 +29,27 @@ type ActionSpec struct {
 
 // Manifest is an app's app.json.
 type Manifest struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Version     string       `json:"version"`
-	Description string       `json:"description,omitempty"`
-	Exec        string       `json:"exec"`
-	UI          string       `json:"ui,omitempty"`
-	Icon        string       `json:"icon,omitempty"`
-	Scopes      []string     `json:"scopes"`
-	RunsOn      []string     `json:"runs_on,omitempty"`
-	Actions     []ActionSpec `json:"actions,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	Description string   `json:"description,omitempty"`
+	Exec        string   `json:"exec"`
+	UI          string   `json:"ui,omitempty"`
+	Icon        string   `json:"icon,omitempty"`
+	Scopes      []string `json:"scopes"`
+	RunsOn      []string `json:"runs_on,omitempty"`
+	// Folders lists the subfolders of the synced folder a lens app may use on disk (API.md section 9).
+	Folders []FolderAccess `json:"folders,omitempty"`
+	// Reads lists other apps whose feeds this app may read.
+	Reads   []string     `json:"reads,omitempty"`
+	Actions []ActionSpec `json:"actions,omitempty"`
+}
+
+// FolderAccess is one entry of a manifest's folders list: a subfolder ("*" for all) and its mode
+// ("read" or "write").
+type FolderAccess struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
 }
 
 var knownScopes = map[string]bool{"feeds": true, "blobs": true, "people": true, "dial": true, "actions": true, "inbox": true}

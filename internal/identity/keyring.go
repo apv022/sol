@@ -264,6 +264,17 @@ func Open(dir string) (*Keyring, error) {
 	return k, nil
 }
 
+// Endpoints returns this device's current signed endpoint record. Unlike
+// Bundle it works before the device has joined a person: the join handshake
+// presents only this record.
+func (k *Keyring) Endpoints() EndpointRecord {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	ep := k.st.ep
+	ep.Endpoints = append([]Endpoint(nil), ep.Endpoints...)
+	return ep
+}
+
 // DevicePublic returns this device's public key D.
 func (k *Keyring) DevicePublic() ed25519.PublicKey {
 	k.mu.Lock()
