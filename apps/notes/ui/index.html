@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Notes</title>
+<link rel="stylesheet" href="/kit/tokens.css">
+<link rel="stylesheet" href="/kit/kit.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="notes" data-view="list">
+  <aside id="side" class="glass" aria-label="Notes">
+    <header class="side-head">
+      <h1>Notes</h1>
+      <button id="theme" class="ghost" type="button" aria-label="Toggle theme"><sol-icon name="moon"></sol-icon></button>
+      <button id="new" class="primary" type="button" aria-label="New note"><sol-icon name="plus"></sol-icon></button>
+    </header>
+    <input id="q" type="search" placeholder="Search notes and #tags" aria-label="Search notes" autocomplete="off">
+    <nav id="filters" class="chips" aria-label="Folders and tags"></nav>
+    <sol-list id="list"></sol-list>
+  </aside>
+  <main id="editorpane" aria-label="Note">
+    <div id="empty" class="empty"><sol-icon name="file"></sol-icon><h3>No note open</h3><p>Pick a note, or tap + to write a new one.</p></div>
+    <div id="ed" hidden>
+      <header class="toolbar glass ed-head">
+        <button id="back" class="ghost" type="button" aria-label="Back to notes"><sol-icon name="back"></sol-icon></button>
+        <div class="grow ed-title"><strong id="ed-title"></strong><small id="status" class="muted"></small></div>
+        <div class="segmented" id="seg" role="group" aria-label="View"><button type="button" data-pane="edit">Edit</button><button type="button" data-pane="preview">Preview</button></div>
+        <button id="pin" class="ghost" type="button"></button>
+        <button id="more" class="ghost" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button>
+      </header>
+      <div id="banner" class="banner" role="alert" hidden></div>
+      <div id="toolbar" class="tools glass" role="toolbar" aria-label="Formatting">
+        <button type="button" data-cmd="bold" aria-label="Bold"><b>B</b></button>
+        <button type="button" data-cmd="italic" aria-label="Italic"><i>I</i></button>
+        <button type="button" data-cmd="heading" aria-label="Heading">H</button>
+        <button type="button" data-cmd="check" aria-label="Checklist"><sol-icon name="check"></sol-icon></button>
+        <button type="button" data-cmd="link" aria-label="Link"><sol-icon name="link"></sol-icon></button>
+        <button type="button" data-cmd="code" aria-label="Code">&lt;/&gt;</button>
+        <button type="button" data-cmd="attach" aria-label="Attach an image or file"><sol-icon name="image"></sol-icon></button>
+        <input id="file" type="file" multiple hidden>
+      </div>
+      <div id="ac" class="ac" role="listbox" hidden></div>
+      <div class="panes">
+        <div id="edpane" class="pane"><div class="hl-wrap"><pre id="hl" aria-hidden="true"></pre><textarea id="ta" spellcheck="true" aria-label="Note text" autocapitalize="sentences"></textarea></div></div>
+        <div id="pvpane" class="pane"><article id="prev" class="md"></article><section id="bl" class="backlinks"></section></div>
+      </div>
+    </div>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
