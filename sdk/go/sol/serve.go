@@ -90,3 +90,31 @@ func ServeListener(ctx context.Context, ln net.Listener, api API, h http.Handler
 
 // CallerOf parses the caller headers of r: Sol-Person, Sol-Device, Sol-Agent, Sol-Self.
 func CallerOf(r *http.Request) Caller { return callerOf(r) }
+
+// AcceptStream answers a dialed stream (API.md §7). The daemon hands a peer's Dial to the app as
+// an upgrade request ("Upgrade: sol-stream") on the app's socket at the dialed path; the app
+// calls AcceptStream from its handler, which replies 101 Switching Protocols and returns the raw
+// connection and the verified caller. Anything else is refused with bad_request.
+func AcceptStream(w http.ResponseWriter, r *http.Request) (net.Conn, Caller, error) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "sol-stream") {
+		err := Errorf("bad_request", "not a sol-stream upgrade")
+		WriteError(w, err)
+		return nil, Caller{}, err
+	}
+	conn, rw, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		return nil, Caller{}, err
+	}
+	if _, err := conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sol-stream\r\n\r\n")); err != nil {
+		conn.Close()
+		return nil, Caller{}, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	if rw.Reader.Buffered() > 0 {
+		return &bufConn{Conn: conn, r: rw.Reader}, callerOf(r), nil
+	}
+	return conn, callerOf(r), nil
+}
+
+// IsStream reports whether r is a dialed stream (an "Upgrade: sol-stream" request).
+func IsStream(r *http.Request) bool { return strings.EqualFold(r.Header.Get("Upgrade"), "sol-stream") }

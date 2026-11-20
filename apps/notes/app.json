@@ -6,7 +6,7 @@
   "exec": "builtin:notes",
   "ui": "/",
   "icon": "icon.svg",
-  "scopes": ["actions"],
+  "scopes": ["blobs", "actions"],
   "runs_on": ["any"],
   "folders": [{"path": "Notes", "mode": "write"}],
   "actions": [

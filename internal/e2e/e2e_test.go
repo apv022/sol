@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/apphost"
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/blobnet"
 	"github.com/apv022/sol/internal/feeds"
@@ -28,6 +29,7 @@ func TestMain(m *testing.M) {
 	session.RedialMax = 200 * time.Millisecond
 	replicate.RetryMin = 20 * time.Millisecond
 	replicate.RetryMax = 200 * time.Millisecond
+	apphost.RestartMin = 50 * time.Millisecond
 	m.Run()
 }
 
