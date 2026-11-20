@@ -7,6 +7,8 @@
 // document.title to "PASS n" or "FAIL n/m" so a headless run can read the outcome.
 
 const tests = [];
+// Suites may stub fetch (sol.js tests do); keep the real one for reporting results.
+const realFetch = globalThis.fetch.bind(globalThis);
 
 /** Registers a test. Top-level code in a suite may also call assert directly. */
 export function test(name, fn) { tests.push({ name, fn }); }
@@ -68,4 +70,7 @@ export async function run(load) {
   const total = tests.length + 1;
   document.title = failed ? `FAIL ${failed}/${total}` : `PASS ${total}`;
   document.getElementById('summary').textContent = document.title;
+  // Report to cmd/browsertest when it is the server; harmless 404/501 anywhere else.
+  realFetch('/__result', { method: 'POST', body: document.title + '\n' +
+    [...document.querySelectorAll('#results li')].map((li) => li.textContent).join('\n') }).catch(() => {});
 }

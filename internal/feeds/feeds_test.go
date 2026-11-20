@@ -442,7 +442,11 @@ func TestViews(t *testing.T) {
 	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}); err != nil {
 		t.Fatal(err)
 	}
-	if ev := <-sub.C(); ev.Type != EventFeed || ev.Feed != bobID+"/notes/doc" || !ev.Readable {
+	ev := <-sub.C()
+	for ev.Type == EventEntry { // the incoming feed's own entry
+		ev = <-sub.C()
+	}
+	if ev.Type != EventFeed || ev.Feed != bobID+"/notes/doc" || !ev.Readable {
 		t.Fatalf("event %+v", ev)
 	}
 	if ls.ReadMode(bobID, doc) != ModeCoauthor {

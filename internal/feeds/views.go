@@ -11,7 +11,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/apv022/sol/internal/fsutil"
 	"github.com/apv022/sol/internal/identity"
 )
 
@@ -19,6 +18,8 @@ import (
 const (
 	ContactsFeed = "contacts"
 	SharesFeed   = "shares"
+	IncomingFeed = "incoming" // what contacts share with me (incomingRecord)
+	PinsFeed     = "pins"     // the blobs I pinned (pinRecord)
 )
 
 // Share modes (API.md §5).
@@ -200,35 +201,97 @@ type Share struct {
 	Mode   string `json:"mode"`
 }
 
-// Shares is the permission source for replication (and later blobs):
-// which of my feeds I share with whom, kept in my internal shares feed so
-// all my devices agree, plus what contacts share with me, as they announced
-// it over replication (persisted in incoming.json).
+// Shares is the permission source for replication and blobs: which of my
+// feeds I share with whom, kept in my internal shares feed so all my
+// devices agree, plus what contacts share with me, as they announced it over
+// replication, kept in my internal incoming feed (so every device of mine
+// knows it, even one that has not talked to that contact yet).
 type Shares struct {
 	s        *Store
 	contacts *Contacts
 	l        *lww[shareRecord]
+	in       *lww[incomingRecord]
 
-	mu       sync.Mutex
-	incoming map[string]map[string]string // person -> "<app>/<name>" -> mode
+	setMu sync.Mutex // serializes SetIncoming's read-compare-append
+
+	mu   sync.Mutex
+	seen map[string]map[string]string // incoming as last announced on the bus
+}
+
+// incomingRecord is the body of an entry in my incoming feed: everything
+// one contact announced as readable to me, "<app>/<name>" -> mode. It
+// replaces the previous record for that person (last writer wins).
+type incomingRecord struct {
+	Person string            `json:"person"`
+	Shares map[string]string `json:"shares"`
 }
 
 // NewShares returns the sharing view over s. contacts, if not nil, limits
-// sharing to contacts.
+// sharing to contacts. An incoming.json left by an older build is folded
+// into the incoming feed and removed.
 func NewShares(s *Store, contacts *Contacts) (*Shares, error) {
-	sh := &Shares{s: s, contacts: contacts, incoming: map[string]map[string]string{},
-		l: newLWW(s, SharesFeed, func(r shareRecord) string { return r.Feed + "|" + r.Person })}
+	sh := &Shares{s: s, contacts: contacts,
+		l:  newLWW(s, SharesFeed, func(r shareRecord) string { return r.Feed + "|" + r.Person }),
+		in: newLWW(s, IncomingFeed, func(r incomingRecord) string { return r.Person })}
 	raw, err := os.ReadFile(sh.incomingPath())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
 		return nil, err
-	default:
-		if err := json.Unmarshal(raw, &sh.incoming); err != nil {
+	case s.self.Person() != nil:
+		var old map[string]map[string]string
+		if err := json.Unmarshal(raw, &old); err != nil {
 			return nil, fmt.Errorf("feeds: %s: %w", sh.incomingPath(), err)
 		}
+		for p, m := range old {
+			if err := sh.SetIncoming(p, m); err != nil {
+				return nil, err
+			}
+		}
+		os.Remove(sh.incomingPath())
 	}
+	sh.seen = sh.incomingNow()
+	s.onStored(func(e Entry) {
+		if me := s.self.Person(); me != nil && e.Feed == Address(identity.ID(me), InternalApp, IncomingFeed) {
+			sh.announceIncoming()
+		}
+	})
 	return sh, nil
+}
+
+// incomingNow folds the incoming feed into person -> "<app>/<name>" -> mode.
+func (sh *Shares) incomingNow() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for p, r := range sh.in.all() {
+		if len(r.Shares) > 0 {
+			out[p] = r.Shares
+		}
+	}
+	return out
+}
+
+// announceIncoming publishes EventFeed for every feed that became readable
+// or unreadable to me since the last announcement, whichever of my devices
+// recorded the change.
+func (sh *Shares) announceIncoming() {
+	now := sh.incomingNow()
+	sh.mu.Lock()
+	defer sh.mu.Unlock() // publishing never blocks, so it may run under the lock
+	for p, old := range sh.seen {
+		for k := range old {
+			if _, ok := now[p][k]; !ok {
+				sh.s.bus.Publish(Event{Type: EventFeed, Feed: p + "/" + k, Readable: false})
+			}
+		}
+	}
+	for p, m := range now {
+		for k := range m {
+			if _, ok := sh.seen[p][k]; !ok {
+				sh.s.bus.Publish(Event{Type: EventFeed, Feed: p + "/" + k, Readable: true})
+			}
+		}
+	}
+	sh.seen = now
 }
 
 func (sh *Shares) incomingPath() string { return filepath.Join(sh.s.Dir(), "incoming.json") }
@@ -347,52 +410,29 @@ func (sh *Shares) ReadableBy(person string) map[string]string {
 // Incoming returns how person shares their feed app/name with me, as they
 // last announced it ("" if not shared).
 func (sh *Shares) Incoming(person, app, name string) string {
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	return sh.incoming[person][app+"/"+name]
+	r, _ := sh.in.get(person)
+	return r.Shares[app+"/"+name]
 }
 
 // IncomingAll returns everything person announced as readable to me:
 // "<app>/<name>" -> mode.
 func (sh *Shares) IncomingAll(person string) map[string]string {
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	return maps.Clone(sh.incoming[person])
+	r, _ := sh.in.get(person)
+	return maps.Clone(r.Shares)
 }
 
 // SetIncoming replaces what person shares with me ("<app>/<name>" -> mode,
-// as announced by one of their devices), persists it, and publishes
-// EventFeed for every feed that became readable or unreadable to me.
+// as announced by one of their devices). A change is appended to my
+// incoming feed, which replicates to my other devices; every device then
+// publishes EventFeed for each feed that became readable or unreadable to me.
 func (sh *Shares) SetIncoming(person string, m map[string]string) error {
-	sh.mu.Lock()
-	old := sh.incoming[person]
-	if maps.Equal(old, m) {
-		sh.mu.Unlock()
+	if _, err := identity.ParseID(person); err != nil {
+		return fmt.Errorf("%w: bad person", ErrInvalid)
+	}
+	sh.setMu.Lock()
+	defer sh.setMu.Unlock()
+	if r, _ := sh.in.get(person); maps.Equal(r.Shares, m) {
 		return nil
 	}
-	if len(m) == 0 {
-		delete(sh.incoming, person)
-	} else {
-		sh.incoming[person] = maps.Clone(m)
-	}
-	raw, err := json.Marshal(sh.incoming)
-	if err == nil {
-		// Under the lock, so concurrent updates reach the disk in order.
-		err = fsutil.WriteFileAtomic(sh.incomingPath(), raw, 0o600)
-	}
-	sh.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	for k := range old {
-		if _, ok := m[k]; !ok {
-			sh.s.bus.Publish(Event{Type: EventFeed, Feed: person + "/" + k, Readable: false})
-		}
-	}
-	for k := range m {
-		if _, ok := old[k]; !ok {
-			sh.s.bus.Publish(Event{Type: EventFeed, Feed: person + "/" + k, Readable: true})
-		}
-	}
-	return nil
+	return sh.in.put(incomingRecord{Person: person, Shares: maps.Clone(m)})
 }

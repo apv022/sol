@@ -159,13 +159,22 @@ between my own devices: every feed). Response: newline-delimited JSON messages: 
 with mode, or no longer readable), `entry` (a signed entry; time in unix ms), then one `live`
 once the backlog is sent, then live `entry`/`feed` messages as they happen. Shares and contacts
 are themselves internal feeds (`sol/shares`, `sol/contacts`) replicated between my devices.
-Known gap: the list of what contacts share *with me* is not yet replicated between my devices.
+What contacts share with me is the internal feed `sol/incoming`; pins are `sol/pins`.
 
 ## Blobs on the wire
 
 `GET /p/blobs/{hash}` with `Range`. Large blobs are fetched in 4 MiB ranges, in parallel from every
 online device that has them (`HEAD` first), verified as a whole by SHA-256 when complete; ranges
 are cached so an interrupted fetch resumes.
+
+### Blob headers (settled in C5)
+
+`HEAD|GET /p/blobs/sha256:<hex>` answers with `Sol-Blob-Size`, `Sol-Blob-Ranges: a-b,c-d` (bytes
+held, inclusive, merged), `Sol-Blob-Complete: true|false`, `Accept-Ranges: bytes` and
+`ETag: "sha256:<hex>"`. 206 for a single range from complete or partial data; 200 only for a
+complete blob; 416 (`Content-Range: bytes */size`) for a range out of bounds, not held, or
+multi-part; 403 is decided before looking the blob up, so it reveals nothing about what I hold.
+Anchors pull pinned blobs themselves when the replicated `sol/pins` feed changes.
 
 ## Liveness and healing
 

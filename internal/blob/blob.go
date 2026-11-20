@@ -16,6 +16,10 @@
 // bytes can be under several names (and in the inbox) at once, a blob is
 // deleted from disk only when the last name or inbox entry referring to it
 // goes. An unlabelled blob is an unnamed file of the owner's.
+//
+// Blobs that are still arriving over the network are kept apart, in
+// <dir>/.partial, until their whole SHA-256 checks out (see Partial): a
+// blob at <dir>/<hex> is always complete and verified.
 package blob
 
 import (
@@ -58,8 +62,10 @@ var (
 type Store struct {
 	Dir string
 
-	// NodeName, if set, supplies the owner's node name
 	mu sync.Mutex // guards the metadata file
+
+	pmu      sync.Mutex
+	partials map[string]*Partial // incomplete blobs in use, by hash
 }
 
 // namesFile maps hash -> meta. Older builds stored hash -> name (a plain

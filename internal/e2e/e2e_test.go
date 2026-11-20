@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/blob"
+	"github.com/apv022/sol/internal/blobnet"
 	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/pairing"
@@ -29,25 +31,34 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-// daemon is one device: keyring, feed store with the contacts and shares
-// views, a replicator, and a session manager publishing over clearnet.
+// daemon is one device: keyring, feed store with the contacts, shares,
+// pins and blob-reference views, a blob store, a replicator, a blob service,
+// and a session manager publishing over clearnet.
 type daemon struct {
-	t      *testing.T
-	kr     *identity.Keyring
-	dir    string // feed store, kept across restarts
-	tokens *pairing.Tokens
-	cache  *identity.Cache
+	t       *testing.T
+	kr      *identity.Keyring
+	dir     string // feed store, kept across restarts
+	blobDir string // blob store, kept across restarts
+	tokens  *pairing.Tokens
+	cache   *identity.Cache
 
 	store    *feeds.Store
 	contacts *feeds.Contacts
 	shares   *feeds.Shares
+	pins     *feeds.Pins
+	refs     *feeds.BlobRefs
+	blobs    *blob.Store
 	rep      *replicate.Replicator
+	bn       *blobnet.Service
 	cl       *transport.Clearnet
 	m        *session.Manager
 	addr     string // public clearnet address, stable across restarts
 
 	// evil, when set, serves /p/sync instead of the replicator.
 	evil atomic.Pointer[http.HandlerFunc]
+	// blobGate, when set, runs before every /p/blobs/ request is served;
+	// false drops the request unanswered.
+	blobGate atomic.Pointer[func(*http.Request) bool]
 }
 
 func whoami(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +67,7 @@ func whoami(w http.ResponseWriter, r *http.Request) {
 }
 
 func newDaemon(t *testing.T, kr *identity.Keyring) *daemon {
-	d := &daemon{t: t, kr: kr, dir: t.TempDir(), tokens: pairing.NewTokens()}
+	d := &daemon{t: t, kr: kr, dir: t.TempDir(), blobDir: t.TempDir(), tokens: pairing.NewTokens()}
 	d.start("127.0.0.1:0")
 	if _, err := kr.SetEndpoints([]identity.Endpoint{{Transport: "clearnet", Address: d.addr}}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -78,6 +89,13 @@ func (d *daemon) start(listen string) {
 		}
 		d.contacts = feeds.NewContacts(d.store)
 		if d.shares, err = feeds.NewShares(d.store, d.contacts); err != nil {
+			t.Fatal(err)
+		}
+		d.pins = feeds.NewPins(d.store)
+		if d.refs, err = feeds.NewBlobRefs(d.store, d.shares); err != nil {
+			t.Fatal(err)
+		}
+		if d.blobs, err = blob.New(d.blobDir); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,8 +120,20 @@ func (d *daemon) startNet(listen string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bn, err := blobnet.New(blobnet.Config{Blobs: d.blobs, Feeds: d.store, Refs: d.refs, Pins: d.pins,
+		Sessions: func() []*session.Session { return m.Sessions() }, Anchor: d.anchor,
+		Log: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	mx := http.NewServeMux()
 	mx.HandleFunc("/whoami", whoami)
+	mx.HandleFunc(blobnet.Path, func(w http.ResponseWriter, r *http.Request) {
+		if g := d.blobGate.Load(); g != nil && !(*g)(r) {
+			return
+		}
+		bn.ServeHTTP(w, r)
+	})
 	mx.HandleFunc(replicate.Path, func(w http.ResponseWriter, r *http.Request) {
 		if h := d.evil.Load(); h != nil {
 			(*h)(w, r)
@@ -112,19 +142,31 @@ func (d *daemon) startNet(listen string) {
 		rep.ServeHTTP(w, r)
 	})
 	m, err = session.New(session.Config{Keyring: d.kr, Cache: d.cache, Contacts: d.contacts, Tokens: d.tokens,
-		Transports: []transport.Transport{d.cl}, Handler: mx, OnSession: rep.Attach,
-		Log: slog.New(slog.DiscardHandler)})
+		Transports: []transport.Transport{d.cl}, Handler: mx,
+		OnSession: func(s *session.Session) { bn.SessionUp(s); rep.Attach(s) },
+		Log:       slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.m, d.rep = m, rep
+	d.m, d.rep, d.bn = m, rep, bn
 	go d.m.Serve(ln)
+}
+
+// anchor reports whether this device is an anchor in my device list.
+func (d *daemon) anchor() bool {
+	b, err := d.kr.Bundle()
+	if err != nil {
+		return false
+	}
+	dev, ok := b.Devices.Find(d.kr.DevicePublic())
+	return ok && dev.Anchor()
 }
 
 // stopNet takes the device offline; its store stays open.
 func (d *daemon) stopNet() {
 	d.m.Close()
 	d.rep.Close()
+	d.bn.Close()
 	d.cl.Stop()
 }
 

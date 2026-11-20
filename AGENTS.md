@@ -12,6 +12,7 @@ never edit it).
 ```sh
 make check   # gofmt + go vet + tests with -race. Must pass before you report a ticket done
 make build   # bin/sol
+make browser-test  # every */test/index.html in headless Firefox (~/.local/opt/firefox)
 ```
 
 ## Rules

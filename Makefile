@@ -1,4 +1,4 @@
-.PHONY: build check test fmt
+.PHONY: build check test fmt browser-test
 
 build:                ## bin/sol
 	go build -trimpath -o bin/sol ./cmd/sol
@@ -13,3 +13,6 @@ check:                ## must pass before a ticket is done
 
 fmt:
 	gofmt -w .
+
+browser-test:         ## browser JS suites in headless Firefox (no Node)
+	go run ./cmd/browsertest

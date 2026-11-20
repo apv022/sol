@@ -1,6 +1,8 @@
 // Package feeds is the daemon's feed store (design/API.md §3,
 // design/PROTOCOL.md §Feeds on the wire) and the small Sol-internal views
-// built on feeds: the contacts list and the sharing records.
+// built on feeds: the contacts list, the sharing records (mine and what
+// contacts share with me), the pinned blobs, and the blob reference index
+// behind the blob permission rule (API.md §4).
 //
 // A feed <person>/<app>/<name> is, under the hood, one signed chain per
 // device of its owner. Each entry is signed by the device key that wrote it
@@ -14,7 +16,6 @@
 //	<person>/<app>/<name>/<device ID>.log   one chain, append-only records
 //	<person>/<app>/<name>/pos.idx           arrival order: 40-byte records
 //	                                        (32-byte device key | u64 seq)
-//	incoming.json                           what contacts share with me
 //
 // A chain record is u32 len | JSON Wire | u32 CRC-32C. Directories are 0700,
 // files 0600.
@@ -40,7 +41,11 @@
 //     because the haves sent on reconnect come from the store itself.
 //   - The store never interprets an entry body beyond checking it is
 //     canonical JSON of at most MaxBodySize bytes. The internal views
-//     interpret only feeds of InternalApp.
+//     interpret only feeds of InternalApp; BlobRefs looks at other bodies
+//     only for "sha256:<64 hex>" strings, wherever they appear.
+//   - Sol's own state (contacts, shares, incoming shares, pins) lives in
+//     internal feeds of mine, so it replicates between my devices like any
+//     feed and is last-writer-wins per key.
 //
 // The store publishes EventEntry for every stored entry on Bus; the views
 // publish EventFeed when a feed becomes readable or unreadable to me.

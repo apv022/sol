@@ -62,8 +62,8 @@ Status: `todo` · `doing` · `done`.
 | C3 | Wire v2: handshake with certificates, pairing a person, adding my device, h2 session per peer, liveness + healing (port PoC logic) | design/PROTOCOL.md (write first) | done |
 | C3b | Wire follow-ups from PROTOCOL.md "Settled in C3": 1 MiB bundle frames, join `name`, `recover` op, push bundle changes, persist the identity cache; then port the PoC's transport ranking, probation, hedged dialing, sleep/network-change detection | design/PROTOCOL.md | todo |
 | C4 | Feeds: store, signing, append/read, replication to own devices and sharers, catch-up, events stream | API.md §3, §5 | done |
-| C5 | Blobs over sessions: chunked fetch, Range, multi-source, pin, permission rule | API.md §4 | doing |
-| C6 | App host: manifest, install, supervise, app tokens, app socket routing, per-app origins, `/_sol/` bridge | API.md §1, §9, §10 | todo |
+| C5 | Blobs over sessions: chunked fetch, Range, multi-source, pin, permission rule | API.md §4 | done |
+| C6 | App host: manifest, install, supervise, app tokens, app socket routing, per-app origins, `/_sol/` bridge | API.md §1, §9, §10 | doing |
 | C7 | Actions registry, `sol do` with generated `--help`, activity log, Inbox + approvals, dial | API.md §6–8 | todo |
 | C8 | Admin API for the Sol app: people, pairing, devices, port sharing (services), settings | design/ADMIN.md | todo |
 

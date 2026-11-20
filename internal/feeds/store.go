@@ -98,6 +98,7 @@ type Store struct {
 	feeds   map[string]*feed
 	devices map[string]bool     // owner|device pairs with a chain anywhere
 	dirty   map[string]struct{} // files written since the last Flush
+	hooks   []func(Entry)       // views' synchronous watchers (onStored)
 }
 
 type feed struct {
@@ -439,7 +440,7 @@ func (s *Store) Append(app, name string, body []byte) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	s.bus.Publish(Event{Type: EventEntry, Entry: &out})
+	s.stored(out)
 	return out, nil
 }
 
@@ -473,7 +474,7 @@ func (s *Store) Accept(w Wire) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	s.bus.Publish(Event{Type: EventEntry, Entry: &out})
+	s.stored(out)
 	return out, nil
 }
 
@@ -553,6 +554,26 @@ func (s *Store) store(f *feed, w Wire, hash string, sync bool) (Entry, error) {
 	}
 	s.mu.Unlock()
 	return w.entry(uint64(len(f.refs)), hash), nil
+}
+
+// stored announces a stored entry: on the bus, then to the views' hooks
+// (synchronously, with no store lock held, so they may read the store).
+func (s *Store) stored(e Entry) {
+	s.bus.Publish(Event{Type: EventEntry, Entry: &e})
+	s.mu.Lock()
+	hooks := s.hooks
+	s.mu.Unlock()
+	for _, h := range hooks {
+		h(e)
+	}
+}
+
+// onStored registers a hook run after every stored entry. Views use it to
+// react to entries that replication brings in, without a goroutine.
+func (s *Store) onStored(h func(Entry)) {
+	s.mu.Lock()
+	s.hooks = append(s.hooks[:len(s.hooks):len(s.hooks)], h)
+	s.mu.Unlock()
 }
 
 // syncDir makes a new file's directory entry durable (best effort: not
