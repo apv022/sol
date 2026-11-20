@@ -113,18 +113,6 @@ var (
 
 func keysDir(dir string) string { return filepath.Join(dir, "keys") }
 
-// DefaultDir is ~/.sol (or $SOL_DIR).
-func DefaultDir() string {
-	if d := os.Getenv("SOL_DIR"); d != "" {
-		return d
-	}
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return ".sol"
-	}
-	return filepath.Join(h, ".sol")
-}
-
 // Init creates a data directory: the identity (a new person, or with Join a bare device key),
 // config.json and the builtin apps.
 func Init(dir string, o InitOptions) error {
@@ -235,6 +223,9 @@ type Daemon struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	shutdown     chan struct{} // closed by POST /admin/v1/shutdown (sol stop)
+	shutdownOnce sync.Once
+
 	Keyring  *identity.Keyring
 	Cache    *identity.Cache
 	Store    *feeds.Store
@@ -307,10 +298,15 @@ func Start(o Options) (_ *Daemon, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// The single-instance check: a second daemon on one directory would replace the first's
+	// socket and tokens, so an answering one wins and this Start fails.
+	if _, err := Running(o.Dir); err == nil {
+		return nil, ErrRunning
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Daemon{dir: o.Dir, cfg: cfg, opt: o, log: o.Log, ctx: ctx, cancel: cancel, Keyring: kr,
 		Cache: identity.NewCache(), online: map[string]int{}, since: map[string]time.Time{},
-		lastSeen: map[string]time.Time{}, events: newAdminEvents()}
+		lastSeen: map[string]time.Time{}, events: newAdminEvents(), shutdown: make(chan struct{})}
 	defer func() {
 		if err != nil {
 			d.Close()

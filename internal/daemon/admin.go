@@ -41,6 +41,7 @@ type Status struct {
 	PeerSessions []SessionInfo    `json:"peer_sessions"`
 	Sessions     []BrowserSession `json:"sessions"`
 	Storage      *Storage         `json:"storage,omitempty"`
+	PID          int              `json:"pid"`
 	API          string           `json:"api"`
 	UI           string           `json:"ui"`
 	Files        string           `json:"files"`
@@ -104,7 +105,7 @@ func (d *Daemon) Status() Status {
 }
 
 func (d *Daemon) status(browser string) Status {
-	st := Status{API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
+	st := Status{PID: os.Getpid(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
 		Transports: []TransportInfo{}, PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
 	st.Me.Person.ID, st.Me.Device.ID = d.me()
 	if b, err := d.Keyring.Bundle(); err == nil {
@@ -533,6 +534,14 @@ func (d *Daemon) adminHandler() http.Handler {
 		}
 		_ = body(r, &b)
 		d.NetworkChanged(b.Reason)
+		return nil, nil
+	})
+	// sol stop: answer first, then let the owner of the process (sol run) call Close.
+	j("POST /admin/v1/shutdown", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err
+		}
+		d.RequestShutdown()
 		return nil, nil
 	})
 	mx.HandleFunc("GET /admin/v1/events", func(w http.ResponseWriter, r *http.Request) { d.events.serve(w, r) })

@@ -1,0 +1,283 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"time"
+
+	"github.com/apv022/sol/internal/autostart"
+	"github.com/apv022/sol/internal/daemon"
+)
+
+// This file is the background-daemon part of the CLI: `sol` and `sol start` run `sol run`
+// detached and return, `sol stop` and `sol restart` use the admin API, `sol logs` shows the
+// log, `sol autostart` manages the login entry. The admin socket is the single-instance lock
+// (daemon.Start refuses a second daemon on one directory).
+
+const (
+	logName     = "sol.log"
+	logMaxBytes = 10 << 20 // sol.log moves to sol.log.1 when a start finds it this large
+	startWait   = 30 * time.Second
+	stopWait    = 10 * time.Second
+)
+
+func logPath(dir string) string { return filepath.Join(dir, logName) }
+
+// startCmd is `sol` and `sol start`. It reports a running daemon, or starts one and waits
+// until it answers; it does not need the daemon's ready line, the admin socket appearing is
+// the signal (daemon.WaitUp).
+func startCmd(dir string) error {
+	if !daemon.Initialised(dir) {
+		fmt.Printf("Sol is not set up in %s yet.\n  Set it up:   sol init --name YOURNAME\n  Add a device to someone you already are: sol init --join\n", dir)
+		return nil
+	}
+	if st, err := daemon.Running(dir); err == nil {
+		fmt.Printf("Sol is already running.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`.\n", st.UI, dir)
+		return nil
+	}
+	exited, err := spawn(dir)
+	if err != nil {
+		return err
+	}
+	st, err := daemon.WaitUp(dir, exited, startWait)
+	switch {
+	case errors.Is(err, daemon.ErrExited):
+		// A racing start may have won; then somebody answers now.
+		if st, err2 := daemon.Running(dir); err2 == nil {
+			fmt.Printf("Sol is already running.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`.\n", st.UI, dir)
+			return nil
+		}
+		return fmt.Errorf("the daemon stopped right after starting; its last lines (%s):\n%s", logPath(dir), tail(logPath(dir), 8))
+	case err != nil:
+		return fmt.Errorf("the daemon did not answer within %s; see %s", startWait, logPath(dir))
+	}
+	fmt.Printf("Sol is running in the background.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`. Logs: `sol logs -f`. Stop: `sol stop`.\n", st.UI, dir)
+	return nil
+}
+
+// spawn starts `sol run --dir dir` detached, output to <dir>/sol.log. The returned channel
+// closes when the child exits.
+func spawn(dir string) (<-chan struct{}, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	rotate(logPath(dir))
+	// Stale files of a dead daemon would make WaitUp's first answer a lie only if a socket
+	// answered, which it cannot; but removing the token makes the file watcher fire on the new one.
+	_ = os.Remove(filepath.Join(dir, "admin.token"))
+	logf, err := os.OpenFile(logPath(dir), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer logf.Close() // the child holds its own copy
+	cmd := exec.Command(exe, "run", "--dir", dir)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, logf, logf
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting the daemon: %w", err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	return exited, nil
+}
+
+// rotate keeps one old log: a failure only means a longer file.
+func rotate(path string) {
+	if fi, err := os.Stat(path); err == nil && fi.Size() > logMaxBytes {
+		_ = os.Rename(path, path+".1")
+	}
+}
+
+// stopCmd is `sol stop`: ask the daemon to shut down, wait for it to go, and fall back to
+// SIGTERM (a hard kill on Windows) if it does not.
+func stopCmd(dir string, quiet bool) error {
+	st, err := daemon.Running(dir)
+	if err != nil {
+		if !quiet {
+			fmt.Println("Sol is not running.")
+		}
+		return nil
+	}
+	if c, err := daemon.Connect(dir); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// The daemon may drop the connection while closing; waiting for it to go is the check.
+		_ = c.Do(ctx, "POST", "/admin/v1/shutdown", nil, nil)
+		cancel()
+	}
+	if err := daemon.WaitDown(dir, stopWait); err != nil {
+		if st.PID == 0 {
+			return fmt.Errorf("the daemon did not stop within %s", stopWait)
+		}
+		fmt.Fprintln(os.Stderr, "The daemon is slow to stop; sending it a termination signal.")
+		if err := terminate(st.PID); err != nil {
+			return err
+		}
+		if err := daemon.WaitDown(dir, stopWait); err != nil {
+			return fmt.Errorf("the daemon (pid %d) is still running after %s", st.PID, 2*stopWait)
+		}
+	}
+	if !quiet {
+		fmt.Println("Sol stopped.")
+	}
+	return nil
+}
+
+// restartCmd is `sol restart`.
+func restartCmd(dir string) error {
+	if err := stopCmd(dir, true); err != nil {
+		return err
+	}
+	return startCmd(dir)
+}
+
+// ensureRunning starts the daemon if it is not running (sol open).
+func ensureRunning(dir string) error {
+	if _, err := daemon.Running(dir); err == nil {
+		return nil
+	}
+	if !daemon.Initialised(dir) {
+		return fmt.Errorf("Sol is not set up in %s yet; run `sol init --name YOURNAME`", dir)
+	}
+	return startCmd(dir)
+}
+
+// logsCmd is `sol logs [-f] [-n N]`.
+func logsCmd(dir string, args []string) error {
+	fs := flag.NewFlagSet("sol logs", flag.ContinueOnError)
+	follow := fs.Bool("f", false, "keep printing new lines (Ctrl-C to stop)")
+	n := fs.Int("n", 40, "how many of the last lines to print")
+	d := fs.String("dir", dir, "data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	path := logPath(*d)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("no log yet at %s (`sol start` writes one; `sol run` prints to the terminal)", path)
+	}
+	fmt.Print(tail(path, *n))
+	if !*follow {
+		return nil
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return followLog(ctx, path, os.Stdout)
+}
+
+// followLog copies what is appended to path to w until ctx ends.
+func followLog(ctx context.Context, path string, w io.Writer) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	off, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			off += int64(n)
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			continue
+		}
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if !waitGrow(ctx, path, off) {
+			return nil
+		}
+	}
+}
+
+// sleepGrow is the fallback wait: a short sleep at EOF. It returns false when ctx ended.
+func sleepGrow(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(300 * time.Millisecond):
+		return true
+	}
+}
+
+// tail returns the last n lines of the file at path ("" if unreadable).
+func tail(path string, n int) string {
+	f, err := os.Open(path)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() > 256<<10 { // enough for any sane n
+		_, _ = f.Seek(-256<<10, io.SeekEnd)
+	}
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+		if len(lines) > n {
+			lines = lines[1:]
+		}
+	}
+	out := ""
+	for _, l := range lines {
+		out += l + "\n"
+	}
+	return out
+}
+
+// autostartCmd is `sol autostart on|off|status`.
+func autostartCmd(dir string, args []string, asJSON bool) error {
+	if len(args) != 1 || (args[0] != "on" && args[0] != "off" && args[0] != "status") {
+		return errors.New("usage: sol autostart on|off|status")
+	}
+	m, err := autostart.ForThisProcess(runtime.GOOS, dir)
+	if err != nil && !(args[0] == "status" && errors.Is(err, autostart.ErrGoRun)) {
+		return err
+	}
+	switch args[0] {
+	case "on":
+		_, running := daemon.Running(dir)
+		if err := m.Enable(running != nil); err != nil {
+			return err
+		}
+		fmt.Println("Sol will start when you log in.")
+	case "off":
+		if err := m.Disable(); err != nil {
+			return err
+		}
+		fmt.Println("Sol will no longer start when you log in.")
+	default:
+		st := m.Status()
+		if asJSON {
+			return printJSON(st)
+		}
+		switch {
+		case !st.Supported:
+			fmt.Println("not_implemented: starting at login is not supported on this system yet")
+		case st.Other:
+			fmt.Printf("set up for another data directory (%s)\n", st.Path)
+		case st.Enabled:
+			fmt.Printf("on (%s)\n", st.Path)
+		default:
+			fmt.Println("off")
+		}
+	}
+	return nil
+}

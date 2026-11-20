@@ -1,7 +1,11 @@
 // Command sol is the Sol daemon, its CLI, and the first-party apps in one binary.
 //
 //	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
-//	sol run                      run this device in the foreground
+//	sol                          start this device in the background (same as sol start)
+//	sol start | stop | restart   manage the background daemon
+//	sol logs [-f] [-n N]         what the background daemon logged
+//	sol autostart on|off|status  start Sol when you log in (systemd user unit, launchd agent)
+//	sol run                      run this device in the foreground (what the above run)
 //	sol status                   who I am, my endpoints and sessions
 //	sol invite [--join]          print a one-time pair (or join) link
 //	sol pair <link>              redeem a pair link, or a join link on a fresh --join device
@@ -20,7 +24,8 @@
 //	sol service add|list|remove       share a local port with people (port sharing)
 //	sol tunnel open|list|close        open a contact's service on a local port
 //
-// Every command takes --dir (default $SOL_DIR or ~/.sol). The logic lives in internal/daemon;
+// Every command takes --dir (default $SOL_DIR, else ~/.local/share/sol on Linux, ~/Library/Application
+// Support/Sol on macOS, %LOCALAPPDATA%\Sol on Windows). The logic lives in internal/daemon;
 // this file only parses arguments and prints.
 package main
 
@@ -119,7 +124,10 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 const usage = `usage: sol <command> [flags]
 
   init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
-  run
+  (no command) | start | stop | restart       run Sol in the background; stop it; restart it
+  logs [-f] [-n N]                  what the background daemon logged (-f follows)
+  autostart on|off|status           start Sol when you log in
+  run                               run in the foreground
   status [--json]
   invite [--join]
   pair <link>
@@ -136,10 +144,14 @@ const usage = `usage: sol <command> [flags]
   service add <name> <port> [--http] [--with PERSON]... | service list | service remove <name>
   tunnel open <person> <service> [--port N] | tunnel list | tunnel close <id>
 
-Every command takes --dir DIR (default $SOL_DIR or ~/.sol).`
+Every command takes --dir DIR (default $SOL_DIR, else ~/.local/share/sol on Linux,
+~/Library/Application Support/Sol on macOS, %LOCALAPPDATA%\Sol on Windows).`
 
 func run(args []string) error {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+	if len(args) == 0 {
+		return startCmd(daemon.DefaultDir())
+	}
+	if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Println(usage)
 		return nil
 	}
@@ -184,7 +196,7 @@ func run(args []string) error {
 				Device: *device, From: *from, Config: cfg, Builtins: builtins.All()}); err != nil {
 				return err
 			}
-			fmt.Printf("Restored in %s. Start it with `sol run`; your other devices and contacts need pairing again.\n", *dir)
+			fmt.Printf("Restored in %s. Start it with `sol start`; your other devices and contacts need pairing again.\n", *dir)
 			return nil
 		}
 		if !*join && *name == "" {
@@ -195,9 +207,9 @@ func run(args []string) error {
 			return err
 		}
 		if *join {
-			fmt.Printf("Device created in %s. Start it with `sol run`, then `sol pair <join link>` (from `sol invite --join` on your other device).\n", *dir)
+			fmt.Printf("Device created in %s. Start it with `sol start`, then `sol pair <join link>` (from `sol invite --join` on your other device).\n", *dir)
 		} else {
-			fmt.Printf("Sol is set up for %s in %s. Start it with `sol run`.\n", *name, *dir)
+			fmt.Printf("Sol is set up for %s in %s. Start it with `sol start`.\n", *name, *dir)
 		}
 		return nil
 	case "run":
@@ -205,6 +217,24 @@ func run(args []string) error {
 			return err
 		}
 		return runDaemon(*dir)
+	case "start", "stop", "restart":
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		switch cmd {
+		case "start":
+			return startCmd(*dir)
+		case "stop":
+			return stopCmd(*dir, false)
+		}
+		return restartCmd(*dir)
+	case "logs":
+		return logsCmd(*dir, rest)
+	case "autostart":
+		if err := parseAnywhere(fs, rest); err != nil {
+			return err
+		}
+		return autostartCmd(*dir, fs.Args(), *asJSON)
 	case "app run":
 		if err := fs.Parse(rest); err != nil || fs.NArg() != 1 {
 			return errors.New("usage: sol app run <id>")
@@ -234,6 +264,11 @@ func run(args []string) error {
 	}
 	if err := parseAnywhere(fs, rest); err != nil {
 		return err
+	}
+	if cmd == "open" {
+		if err := ensureRunning(*dir); err != nil {
+			return err
+		}
 	}
 	c, err := daemon.Connect(*dir)
 	if err != nil {
@@ -507,6 +542,9 @@ func run(args []string) error {
 func runDaemon(dir string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	d, err := daemon.Start(daemon.Options{Dir: dir, Builtins: builtins.All(), Log: log})
+	if errors.Is(err, daemon.ErrRunning) && os.Getenv("SOL_SUPERVISED") == "1" {
+		return nil // exit 0: the login entry must not restart a duplicate forever
+	}
 	if err != nil {
 		return err
 	}
@@ -515,10 +553,13 @@ func runDaemon(dir string) error {
 	for _, e := range st.Endpoints {
 		eps = append(eps, e.Kind+" "+e.Addr)
 	}
-	fmt.Printf("Sol is running for %s on %s.\n  open it:   sol open\n  endpoints: %s\nCtrl-C to stop.\n", st.Me.Person.Name, st.Me.Device.Name, strings.Join(eps, ", "))
+	fmt.Printf("Sol is running for %s on %s.\n  open it:   sol open\n  endpoints: %s\nCtrl-C (or `sol stop`) to stop.\n", st.Me.Person.Name, st.Me.Device.Name, strings.Join(eps, ", "))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-d.ShutdownRequested():
+	}
 	return d.Close()
 }
 
