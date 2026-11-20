@@ -175,6 +175,20 @@ Returns the action's output, or `{"approval": "<inbox item id>"}` when the actio
 ### Listing: `GET /v1/actions?app=files`
 Returns the manifests' action entries with JSON Schemas, for UIs, the CLI and agents.
 
+### Sol's own actions: the built-in `sol` app
+Sol itself has actions too. The daemon lists and runs them under the pseudo-app `sol` (no process,
+no manifest file) through the same `/v1/actions`, `/admin/v1/actions` and `/agent/v1/actions`
+endpoints, so schemas, `--help`, `--dry-run`, `--json`, agent scopes (`sol.*`, `sol.theme.list`)
+all work unchanged: `sol do sol.theme.list`, `sol do sol.theme.set --name graphite`,
+`sol do sol.theme.settings --density compact` (no arguments shows the settings). They run on this
+device only (`person` must be empty or me). An installed app may not use the id `sol`.
+
+### Output hint: `columns`
+An action entry may carry `"columns": ["name","type","size","mtime"]`: the fields of each result
+row `sol do` shows as table columns, in that order. Without it the CLI shows the first five scalar
+fields. Times (`mtime`, `*_at`) and sizes (`size`, `*_bytes`) are formatted for reading; `--json`
+output is unchanged.
+
 ### Being called
 The daemon sends `POST /_sol/actions/{name}` to the app's own socket with the args as the body and
 the caller headers from section 1. With `Sol-Dry-Run: 1` the app must describe what it would do

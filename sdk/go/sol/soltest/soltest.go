@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,9 @@ type World struct {
 	SDKHashes bool
 	// SetOnline takes a person offline or back online (nil: offline checks are skipped).
 	SetOnline func(person string, on bool)
+	// SetDeviceOnline takes one device (A, A2, B or C) off the network or back, while the
+	// person's other devices stay on (nil: the per-device offline checks are skipped).
+	SetDeviceOnline func(device sol.API, on bool)
 	// Pinned reports whether person pinned a blob (nil: skipped).
 	Pinned func(person, hash string) bool
 	// InboxKinds lists the kinds of a person's inbox items (nil: skipped).
@@ -116,6 +120,7 @@ func Run(t *testing.T, f Factory) {
 		{"InboxNotice", InboxNotice},
 		{"InboxApproval", InboxApproval},
 		{"Dial", DialScenario},
+		{"OfflineConverge", OfflineConverge},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.f(t, f(t)) })
 	}
@@ -589,6 +594,78 @@ func DialScenario(t *testing.T, w *World) {
 	if w.SetOnline != nil {
 		w.SetOnline(w.AliceID, false)
 		if _, err := w.B.Dial(ctx, sol.DialRequest{Person: w.AliceID, App: "docs", Path: "/"}); !errors.Is(err, sol.ErrUnavailable) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// hashes is the sorted set of entry hashes in es.
+func hashes(es []sol.Entry) []string {
+	out := make([]string, 0, len(es))
+	for _, e := range es {
+		out = append(out, e.Hash)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// OfflineConverge: devices that were offline catch up when they come back. A contact who was
+// offline gets what was written meanwhile; a device of mine that wrote while offline, as my
+// other device did, ends with the same entries as that device and the contact, each device's
+// chain intact.
+func OfflineConverge(t *testing.T, w *World) {
+	if w.SetOnline == nil && w.SetDeviceOnline == nil {
+		t.Skip("this World cannot take anyone offline")
+	}
+	addr := sol.Address(w.AliceID, "docs", "log")
+	if _, err := w.A.Append(ctx, "log", "a-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.A.Share(ctx, sol.ShareRequest{Feed: "log", People: []string{w.BobID}}); err != nil {
+		t.Fatal(err)
+	}
+	readN(t, w.B, addr, 1)
+	readN(t, w.A2, addr, 1)
+	n := 1
+
+	if w.SetOnline != nil {
+		// Bob is away while Alice writes; what he has stays readable.
+		w.SetOnline(w.BobID, false)
+		for _, b := range []string{"a-2", "a-3"} {
+			if _, err := w.A.Append(ctx, "log", b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		n += 2
+		if _, err := w.B.Read(ctx, addr, 0, 0); err != nil {
+			t.Fatal("offline read of what was replicated:", err)
+		}
+		w.SetOnline(w.BobID, true)
+		readN(t, w.B, addr, n)
+	}
+
+	if w.SetDeviceOnline != nil {
+		// Alice's phone is offline: both her devices write; then it comes back.
+		w.SetDeviceOnline(w.A2, false)
+		if _, err := w.A.Append(ctx, "log", "laptop while phone away"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.A2.Append(ctx, "log", "phone offline 1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.A2.Append(ctx, "log", "phone offline 2"); err != nil {
+			t.Fatal(err)
+		}
+		n += 3
+		w.SetDeviceOnline(w.A2, true)
+	}
+
+	a, a2, b := readN(t, w.A, addr, n), readN(t, w.A2, addr, n), readN(t, w.B, addr, n)
+	if !slices.Equal(hashes(a), hashes(a2)) || !slices.Equal(hashes(a), hashes(b)) || len(a) != n {
+		t.Fatalf("not converged: %d %d %d entries, want %d", len(a), len(a2), len(b), n)
+	}
+	for _, es := range [][]sol.Entry{a, a2, b} {
+		if err := checkChain(w, es); err != nil {
 			t.Fatal(err)
 		}
 	}

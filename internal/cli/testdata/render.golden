@@ -1,7 +1,7 @@
 > [{"name":"a.txt","size":3,"dir":false},{"name":"b","dir":true,"tags":["x","y"]}]
-NAME   SIZE  DIR    TAGS
-a.txt  3     false
-b            true   x, y
+NAME   SIZE  DIR
+a.txt  3 B   false
+b            true
 
 > {"path":"/","count":2,"entries":[{"name":"a","size":1},{"name":"b","size":2}],"nested":{"k":[1,{"z":null}]}}
 path:   /
@@ -10,8 +10,8 @@ nested: {"k":[1,{"z":null}]}
 
 entries:
 NAME  SIZE
-a     1
-b     2
+a     1 B
+b     2 B
 
 > ["one","two"]
 one

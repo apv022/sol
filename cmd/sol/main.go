@@ -371,7 +371,7 @@ func run(args []string) error {
 			return printJSON(as)
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tSCOPES\tEXPIRES\tSTATE")
+		fmt.Fprintln(tw, "NAME\tDEVICE\tSCOPES\tEXPIRES\tSTATE")
 		for _, a := range as {
 			state := "active"
 			if a.Revoked {
@@ -379,7 +379,7 @@ func run(args []string) error {
 			} else if time.Now().After(a.Expires) {
 				state = "expired"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", a.Name, strings.Join(a.Scopes, " "), a.Expires.Local().Format("2006-01-02 15:04"), state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", a.Name, a.DeviceName, strings.Join(a.Scopes, " "), a.Expires.Local().Format("2006-01-02 15:04"), state)
 		}
 		return tw.Flush()
 	case "agent revoke":

@@ -3,6 +3,7 @@ package files
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -50,11 +51,30 @@ func ValidatePath(p string, allowRoot bool) error {
 			return err
 		}
 	}
-	if p == ".sol" || strings.HasPrefix(p, ".sol/") {
+	if (p == ".sol" || strings.HasPrefix(p, ".sol/")) && !syncedSol(p) {
 		return fmt.Errorf("%q is reserved", ".sol")
 	}
 	return nil
 }
+
+// syncedSol reports whether p is one of the few files under ".sol" that Files syncs between a
+// person's devices: the active theme's name and the person's own theme files (design/UI.md
+// "Themes"). Everything else under ".sol" is device state and never leaves the folder.
+func syncedSol(p string) bool {
+	if p == ".sol/theme" {
+		return true
+	}
+	n, ok := strings.CutPrefix(p, ".sol/themes/")
+	n, isCSS := strings.CutSuffix(n, ".css")
+	return ok && isCSS && themeFileRe.MatchString(n)
+}
+
+// themeFileRe is the daemon's theme name rule (internal/daemon/theme.go); apps cannot import it.
+var themeFileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// solContainer reports whether p is a folder that holds synced ".sol" files. Such folders are
+// walked but never published as folders themselves.
+func solContainer(p string) bool { return p == ".sol" || p == ".sol/themes" }
 
 func validElement(el string) error {
 	switch {

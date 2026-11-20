@@ -377,6 +377,7 @@ func (m *Manager) dialHedged(ctx context.Context, device, wantPerson ed25519.Pub
 			a.err = &dialError{fmt.Errorf("%s: transport not available", ep.Transport)}
 			return
 		}
+		m.authorize(t, device, ep, call.Secret)
 		dctx, cancel := context.WithTimeout(actx, DialTimeout)
 		defer cancel()
 		conn, err := t.Dial(dctx, ep.Address)
@@ -575,6 +576,7 @@ func (m *Manager) probePath(ctx context.Context, person, device ed25519.PublicKe
 	if err != nil {
 		return err
 	}
+	m.authorize(t, device, ep, nil)
 	conn, err := t.Dial(pctx, ep.Address)
 	if err != nil {
 		return err

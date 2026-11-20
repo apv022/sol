@@ -89,11 +89,14 @@ func pairNodes(t *testing.T, a, b *node) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := pairing.ParseLink(l.String())
-	if err != nil {
-		t.Fatal(err)
+	// Through the link text when its addresses fit one (the path tests' renamed transports
+	// have addresses no link carries).
+	if s, err := l.Encode(); err == nil {
+		if l, err = pairing.ParseLink(s); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := b.m.Pair(context.Background(), parsed); err != nil {
+	if _, err := b.m.Pair(context.Background(), l); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -317,17 +320,17 @@ func TestRecover(t *testing.T) {
 	cl.Start(ctx)
 	defer cl.Stop()
 	ts := []transport.Transport{cl}
-	pc, dl, err := Recover(ctx, ts, bob.kr.Endpoints(), r)
+	pc, dl, err := Recover(ctx, ts, bob.kr.Endpoints(), nil, r)
 	want := mustBundle(t, alice.kr)
 	if err != nil || pc.Seq != want.Person.Seq || dl.Seq != want.Devices.Seq {
 		t.Fatalf("from a contact: %v (%d %d)", err, pc.Seq, dl.Seq)
 	}
 	// Alice's own device answers too.
-	if pc, _, err = Recover(ctx, ts, alice.kr.Endpoints(), r); err != nil || pc.Seq != want.Person.Seq {
+	if pc, _, err = Recover(ctx, ts, alice.kr.Endpoints(), nil, r); err != nil || pc.Seq != want.Person.Seq {
 		t.Fatalf("from my own device: %v", err)
 	}
 	// Carol never paired with Alice: nothing, and nothing sent.
-	if _, _, err := Recover(ctx, ts, carol.kr.Endpoints(), r); !errors.Is(err, ErrNothingKnown) {
+	if _, _, err := Recover(ctx, ts, carol.kr.Endpoints(), nil, r); !errors.Is(err, ErrNothingKnown) {
 		t.Fatalf("stranger: %v", err)
 	}
 }

@@ -279,7 +279,7 @@ func sameUIOrigin(r *http.Request) bool {
 var loginFailed = template.Must(template.New("login").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sol</title><link rel="stylesheet" href="/kit/kit.css"></head>
-<body><main style="max-width:32rem;margin:15vh auto;padding:0 16px">
+<body><main class="empty">
 <h1>This login link has expired</h1>
 <p>Login links work once, for a minute. Open Sol from the app, or run <code>sol open</code> again.</p>
 </main></body></html>`))

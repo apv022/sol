@@ -1,0 +1,33 @@
+/* The kit demo's own layout, on tokens (demo.html). */
+/* demo-only layout, on tokens */
+section { margin-bottom: var(--space-6); }
+.row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3); }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: var(--space-2); }
+.sw { border-radius: var(--radius-control); overflow: hidden; font-size: var(--fs-footnote); background: var(--surface); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
+.sw i { display: block; height: 2.25rem; box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
+.sw span { display: block; padding: var(--space-1) var(--space-2); font-family: var(--font-mono); }
+.icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); gap: var(--space-2); }
+.icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--fs-footnote); color: var(--label-2); border-radius: var(--radius-control); background: var(--surface); }
+.icons sol-icon { --size: 24px; color: var(--label); }
+.float { display: grid; place-items: center; width: 7rem; height: 4rem; background: var(--surface); border-radius: var(--radius-group); box-shadow: var(--shadow-float); font-size: var(--fs-footnote); }
+.wall { padding: var(--space-5); border-radius: var(--radius-sheet); background: linear-gradient(180deg, #8fb4e8 0%, #f3c982 100%); display: flex; gap: var(--space-3); flex-wrap: wrap; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); } }
+:root[data-theme="dark"] .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); }
+.apps { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.apps > div { display: grid; justify-items: center; gap: var(--space-1); font-size: var(--fs-footnote); }
+#phone { width: 390px; height: 700px; border: 0; border-radius: 28px; box-shadow: var(--shadow-float); background: var(--canvas); }
+body.embed sol-app-shell > [slot="nav"] .brand { display: none; }
+/* stand-ins for inline styles: the kit is served on UI origins, whose CSP forbids them */
+.fit { width: auto; }
+.swatch-input { width: 3rem; padding: 2px; }
+.gap-above { margin-top: var(--space-3); }
+h2.gap-above { margin-top: var(--space-5); }
+.gap-below { margin-bottom: var(--space-3); }
+.shadow-1 { box-shadow: var(--shadow-1); }
+.r-control { border-radius: var(--radius-control); }
+.r-sheet { border-radius: var(--radius-sheet); }
+.r-pill { border-radius: var(--radius-pill); }
+.w-16 { max-width: 16rem; }
+.w-12 { max-width: 12rem; }
+.centered { text-align: center; }
+.row > .grow { flex: 1; }

@@ -75,7 +75,14 @@ func run(args []string) error {
 	}
 	results := make(chan string, 1)
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir(".")))
+	files := http.FileServer(http.Dir("."))
+	// The style policy of every UI origin (internal/apphost.CSP), so a suite that renders an
+	// inline style attribute fails (testing.js reports securitypolicyviolation). Scripts are
+	// not restricted: the suite pages bootstrap with an inline module.
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "style-src 'self'")
+		files.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("POST /__result", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		select {

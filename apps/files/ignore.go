@@ -58,7 +58,7 @@ func (g *ignorer) reload(root string) {
 // ignored reports whether p or any folder above it is ignored.
 func (g *ignorer) ignored(p string) bool {
 	if p == ".sol" || strings.HasPrefix(p, ".sol/") {
-		return true
+		return !solContainer(p) && !syncedSol(p)
 	}
 	g.mu.Lock()
 	pats := g.patterns

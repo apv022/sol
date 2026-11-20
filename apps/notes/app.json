@@ -11,7 +11,7 @@
   "folders": [{"path": "Notes", "mode": "write"}],
   "actions": [
     {"name": "notes.list", "description": "List notes, pinned first then recent first, and the folders. Optional filters: folder (and everything below it), tag, pinned. Pass since (a revision from an earlier call) to learn cheaply whether anything changed.",
-     "input": {"type": "object", "properties": {"folder": {"type": "string"}, "tag": {"type": "string"}, "pinned": {"type": "boolean"}, "limit": {"type": "number"}, "snippets": {"type": "boolean"}, "since": {"type": "number"}}}, "effect": "read"},
+     "input": {"type": "object", "properties": {"folder": {"type": "string"}, "tag": {"type": "string"}, "pinned": {"type": "boolean"}, "limit": {"type": "number"}, "snippets": {"type": "boolean"}, "since": {"type": "number"}}}, "effect": "read", "columns": ["title", "path", "tags", "mtime"]},
     {"name": "notes.read", "description": "Read a note: its text and an etag to pass back as base when writing.",
      "input": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}, "effect": "read"},
     {"name": "notes.write", "description": "Replace a note's text (creating it and its folders if needed). Pass base (the etag you read) to refuse overwriting an edit made since.",
@@ -24,7 +24,7 @@
      "input": {"type": "object", "required": ["paths"], "properties": {"paths": {"type": "array", "items": {"type": "string"}}}},
      "effect": "destructive", "approval": "agents"},
     {"name": "notes.search", "description": "Full-text search with prefix matching. Words are ANDed; #tag words filter by tag.",
-     "input": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "number"}}}, "effect": "read"},
+     "input": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "number"}}}, "effect": "read", "columns": ["title", "path", "tags", "mtime"]},
     {"name": "notes.tags", "description": "Every tag with the number of notes that use it.",
      "input": {"type": "object"}, "effect": "read"},
     {"name": "notes.backlinks", "description": "Notes that link to this note with [[wiki links]].",

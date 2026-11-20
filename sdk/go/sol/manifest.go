@@ -25,6 +25,9 @@ type ActionSpec struct {
 	Input       *Schema `json:"input,omitempty"`
 	Effect      string  `json:"effect"`
 	Approval    string  `json:"approval,omitempty"`
+	// Columns is an optional hint for `sol do`'s human output: the fields of each result row to
+	// show, in order. Without it the CLI shows the first five scalar fields. --json is unaffected.
+	Columns []string `json:"columns,omitempty"`
 }
 
 // Manifest is an app's app.json.

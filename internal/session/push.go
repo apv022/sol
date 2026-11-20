@@ -46,8 +46,12 @@ var PushTimeout = 30 * time.Second
 
 // BundleChanged tells the manager this device's bundle may have changed (call it after
 // changing the keyring outside the manager: endpoints, device names or flags). If it did,
-// the new bundle is pushed to every open session. Cheap; bursts collapse.
+// the new bundle is pushed to every open session, and Config.OnIdentity is told. Cheap;
+// bursts collapse.
 func (m *Manager) BundleChanged() {
+	if m.cfg.OnIdentity != nil {
+		m.cfg.OnIdentity()
+	}
 	select {
 	case m.announce <- struct{}{}:
 	default:

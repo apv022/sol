@@ -10,6 +10,10 @@ import { createAdmin } from '/admin.js';
 import { greetingFor, clockText, dateText, msToNextMinute, relTime, minutesLeft, bytes, appIconSpec, parseRoute } from '/util.js';
 
 const $ = (id) => document.getElementById(id);
+// The UI root forbids inline styles (CSP style-src 'self'): markup uses classes and data-var-*
+// (sol.js render). Any violation is kept for the self-test to report.
+const cspViolations = [];
+document.addEventListener('securitypolicyviolation', (e) => cspViolations.push(`${e.violatedDirective}: ${e.blockedURI || 'inline'} ${e.sample || ''}`.trim()));
 const phoneQ = matchMedia('(max-width: 760px)');
 
 // ---------- state ----------
@@ -94,7 +98,7 @@ function shareBlock(invite, hint) {
   const mins = minutesLeft(invite.expires);
   return html`<div class="share-box">
     <sol-qr value="${invite.link}" label="${hint}"></sol-qr>
-    <p class="muted" style="margin:0">${hint}</p>
+    <p class="muted flush">${hint}</p>
     <div class="link-line"><code>${invite.link}</code><button type="button" class="tinted" data-copy>${ic('copy')}Copy</button>
       ${typeof navigator.share === 'function' ? html`<button type="button" class="tinted" data-share>${ic('share')}Share</button>` : ''}</div>
     <small>One use, valid for ${mins} more minute${mins === 1 ? '' : 's'}.</small>
@@ -107,7 +111,7 @@ function wireShare(d, invite, title) {
 
 function addPerson() {
   dialog('Add a person', html`<div class="form" id="ap"><div id="ap-qr" class="share-box"><p class="muted">Making a link</p></div>
-    <hr style="border:0;border-top:var(--hairline) solid var(--separator);width:100%;margin:var(--space-2) 0">
+    <hr class="rule">
     <form id="ap-paste" class="form"><label>Or paste a link from them<input name="link" placeholder="sol://pair?..." autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
     <div class="dlg-actions"><button class="primary" type="submit">Connect</button></div></form></div>`, async (d, close) => {
     try {
@@ -146,7 +150,7 @@ function deviceDialog(dev) {
   dialog(dev.name, html`<div class="form">
     <div class="list"><div data-item><span class="grow">Anchor<span class="row-sub">Stays on, so others can always reach your data</span></span><input type="checkbox" role="switch" data-k="anchor" ${dev.anchor ? raw('checked') : ''} aria-label="Anchor"></div>
     <div data-item><span class="grow">Can manage Sol<span class="row-sub">Admin devices change settings and people</span></span><input type="checkbox" role="switch" data-k="admin" ${dev.admin ? raw('checked') : ''} ${me ? raw('disabled') : ''} aria-label="Can manage Sol"></div></div>
-    <div class="dlg-actions" style="justify-content:space-between"><button type="button" class="danger" data-rm ${me ? raw('disabled') : ''}>Remove</button><span class="inline-actions"><button type="button" data-rename>Rename</button><button type="button" class="primary" data-ok>Done</button></span></div></div>`, (d, close) => {
+    <div class="dlg-actions spread"><button type="button" class="danger" data-rm ${me ? raw('disabled') : ''}>Remove</button><span class="inline-actions"><button type="button" data-rename>Rename</button><button type="button" class="primary" data-ok>Done</button></span></div></div>`, (d, close) => {
     d.querySelectorAll('input[data-k]').forEach((i) => { i.onchange = () => act(() => admin.updateDevice(dev.id, { [i.dataset.k]: i.checked })); });
     d.querySelector('[data-ok]').onclick = close;
     d.querySelector('[data-rename]').onclick = () => { close(); renameDialog('Rename device', dev.name, (name) => admin.updateDevice(dev.id, { name })); };
@@ -202,7 +206,7 @@ function backupFlow() {
 }
 function confirmBackup(words) {
   const idx = [...words.keys()].sort(() => Math.random() - .5).slice(0, 3).sort((a, b) => a - b);
-  dialog('Check your backup', html`<form class="form"><p style="margin:0">Type these words from your list to confirm.</p>
+  dialog('Check your backup', html`<form class="form"><p class="flush">Type these words from your list to confirm.</p>
     ${idx.map((i) => html`<label>Word ${i + 1}<input name="w${i}" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>`)}
     <div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="primary" type="submit">Confirm</button></div></form>`, (d, close) => {
     d.querySelector('[data-no]').onclick = close;
@@ -265,7 +269,7 @@ function inboxItem(i, mini = false) {
   const actions = html`<span class="${mini ? 'mini-actions' : 'inline-actions'}">${approval ? html`<button class="primary" type="button" data-act="approve" data-id="${i.id}">Approve</button><button type="button" data-act="deny" data-id="${i.id}">Deny</button>` : html`<button type="button" data-act="deny" data-id="${i.id}">Dismiss</button>`}</span>`;
   return mini
     ? html`<div class="mini"><span><span class="row-title">${i.title}</span><span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`
-    : html`<div data-item class="wrap"><span class="grow"><span class="row-title" style="white-space:normal">${i.title}</span><span class="row-sub" style="white-space:normal">${i.body || ''}</span><span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`;
+    : html`<div data-item class="wrap"><span class="grow"><span class="row-title wraps">${i.title}</span><span class="row-sub wraps">${i.body || ''}</span><span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`;
 }
 function inboxView() {
   const items = list(state.inbox);
@@ -293,19 +297,19 @@ function settingsView() {
     ${phoneQ.matches ? html`<div class="list section"><a data-item data-chevron href="#/devices"><span class="row-icon">${ic('device')}</span><span class="grow">Devices</span></a><a data-item data-chevron href="#/sharing"><span class="row-icon">${ic('share')}</span><span class="grow">Sharing</span></a></div>` : ''}
     <section class="section"><h3 class="group-title">Appearance</h3><div class="list">
       <div data-item><span class="grow">Look</span>${seg('scheme', [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], s.scheme || 'auto')}</div>
-      <div data-item><span class="grow">Accent</span><span class="swatches">${ACCENTS.map((c) => html`<button type="button" class="swatch" style="--sw:${c}" data-set="accent" data-v="${c === ACCENTS[0] ? '' : c}" aria-label="Accent ${c}" aria-pressed="${(s.accent || '').toLowerCase() === (c === ACCENTS[0] ? '' : c.toLowerCase())}"></button>`)}</span></div>
+      <div data-item><span class="grow">Accent</span><span class="swatches">${ACCENTS.map((c) => html`<button type="button" class="swatch" data-var-sw="${c}" data-set="accent" data-v="${c === ACCENTS[0] ? '' : c}" aria-label="Accent ${c}" aria-pressed="${(s.accent || '').toLowerCase() === (c === ACCENTS[0] ? '' : c.toLowerCase())}"></button>`)}</span></div>
       <div data-item><span class="grow">Density</span>${seg('density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], s.density || 'comfortable')}</div>
       <div data-item><span class="grow">Corners</span>${seg('radius', [['rounded', 'Rounded'], ['square', 'Square']], s.radius || 'rounded')}</div>
       <div data-item><span class="grow">Glass<span class="row-sub">Translucent bars and panels</span></span><input type="checkbox" role="switch" data-toggle="glass" aria-label="Glass" ${s.glass === 'off' ? '' : raw('checked')}></div>
-      <div data-item><span class="grow">Font</span><select data-select="font" style="width:auto" aria-label="Font">${[['system', 'System'], ['inter', 'Inter'], ['mono', 'Monospace']].map(([v, l]) => html`<option value="${v}" ${(s.font || 'system') === v ? raw('selected') : ''}>${l}</option>`)}</select></div>
-      <div data-item><span class="grow">Theme</span><select data-select="theme" style="width:auto" aria-label="Theme">${list(state.themes?.themes).map((t) => html`<option value="${t.name}" ${t.name === (state.theme?.name || state.themes?.active) ? raw('selected') : ''}>${t.title || t.name}</option>`)}</select></div></div></section>
+      <div data-item><span class="grow">Font</span><select data-select="font" class="fit" aria-label="Font">${[['system', 'System'], ['inter', 'Inter'], ['mono', 'Monospace']].map(([v, l]) => html`<option value="${v}" ${(s.font || 'system') === v ? raw('selected') : ''}>${l}</option>`)}</select></div>
+      <div data-item><span class="grow">Theme</span><select data-select="theme" class="fit" aria-label="Theme">${list(state.themes?.themes).map((t) => html`<option value="${t.name}" ${t.name === (state.theme?.name || state.themes?.active) ? raw('selected') : ''}>${t.title || t.name}</option>`)}</select></div></div></section>
     <section class="section"><h3 class="group-title">Wallpaper</h3><div class="list"><div class="wps">${WALLPAPERS.map(([v, l]) => html`<button type="button" data-set="wallpaper" data-v="${v}" aria-pressed="${(s.wallpaper || 'dusk') === v}"><span class="wp" data-wallpaper="${v}"><span class="sun"></span></span>${l}</button>`)}</div></div></section>
     <section class="section"><h3 class="group-title">Backup</h3><div class="list"><div data-item><span class="grow">Backup words<span class="row-sub">${bk.confirmed ? 'You confirmed your backup.' : 'Write down your 24 words so you can restore Sol.'}</span></span>${bk.confirmed ? html`<span class="badge ok">Backed up</span>` : list(bk.words).length ? html`<button class="primary" type="button" data-act="backup">Show words</button>` : ''}</div></div>
       <p class="group-footer">To restore on a new device, choose “Restore from backup words” when you set up Sol.</p></section>
     <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
       <p class="group-footer">Agents run <code class="inline">sol do</code> with a key you issued, limited to its scopes.</p></section>
     <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span><button type="button" data-act="logout">Sign out</button>` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
-    <section class="section"><details class="adv"><summary class="group-title" style="cursor:pointer">Advanced</summary>
+    <section class="section"><details class="adv"><summary class="group-title">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
       <h3 class="group-title">Transports</h3><div class="list">${list(st.transports).map((t) => html`<div data-item><span class="grow">${t.name}</span><span class="badge ${t.state === 'up' ? 'ok' : ''}">${t.state}</span></div>`)}</div>
       <h3 class="group-title">Connections</h3><div class="list">${list(st.peer_sessions).length ? list(st.peer_sessions).map((x) => html`<div data-item><span class="grow"><span class="row-title">${x.peer}</span><span class="row-sub">${x.relation || ''} · since ${relTime(x.since)}</span></span></div>`) : html`<div data-item class="muted">None</div>`}</div>
@@ -317,7 +321,7 @@ let firstPaint = true;
 function appTile(a, i) {
   const spec = appIconSpec(a, icons);
   const art = spec.kind === 'img' ? html`<span class="app-img"><img src="${spec.src}" alt=""></span>` : html`<sol-app-icon glyph="${spec.glyph}" hue="${spec.hue}"></sol-app-icon>`;
-  return html`<a class="app" style="--i:${i}" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${art}<span>${a.name}</span></a>`;
+  return html`<a class="app" data-var-i="${i}" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${art}<span>${a.name}</span></a>`;
 }
 function homeView() {
   const now = new Date();
@@ -327,10 +331,10 @@ function homeView() {
   return html`<div class="home">
     <header class="hero"><p class="date" id="date">${dateText(now)}</p><h1 class="clock" id="clock">${clockText(now)}</h1><p class="greet" id="greet">${greetingFor(meName(), now)}</p></header>
     <div class="widgets">
-      <a class="widget" style="--i:0" href="#/people"><span class="widget-title">${ic('people')}People online</span><span class="widget-body"><span class="widget-value">${online.length}</span>
+      <a class="widget" data-var-i="0" href="#/people"><span class="widget-title">${ic('people')}People online</span><span class="widget-body"><span class="widget-value">${online.length}</span>
         <span class="widget-row"><span class="faces">${online.slice(0, 4).map((p) => html`<sol-avatar name="${nameOf(p)}" id="${p.id}" size="24px"></sol-avatar>`)}</span><span class="widget-sub">${ppl.length ? `of ${ppl.length}` : 'No one yet'}</span></span></span></a>
-      <a class="widget" style="--i:1" href="#/devices"><span class="widget-title">${ic('device')}My devices</span><span class="widget-body"><span class="widget-value">${ds.length}</span><span class="widget-sub">${ds.filter((d) => d.online).length} online</span></span></a>
-      ${st ? html`<a class="widget" style="--i:2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><sol-ring value="${pct}" size="40px">${pct}%</sol-ring><span class="widget-body"><span class="widget-value">${bytes(st.used)}</span><span class="widget-sub">of ${bytes(st.total)}</span></span></a>` : ''}
+      <a class="widget" data-var-i="1" href="#/devices"><span class="widget-title">${ic('device')}My devices</span><span class="widget-body"><span class="widget-value">${ds.length}</span><span class="widget-sub">${ds.filter((d) => d.online).length} online</span></span></a>
+      ${st ? html`<a class="widget" data-var-i="2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><sol-ring value="${pct}" size="40px">${pct}%</sol-ring><span class="widget-body"><span class="widget-value">${bytes(st.used)}</span><span class="widget-sub">of ${bytes(st.total)}</span></span></a>` : ''}
     </div>
     <div class="home-cols">
       <section aria-label="Apps">${apps.length ? html`<div class="app-grid">${apps.map(appTile)}</div>` : html`<p class="home-empty">No apps installed yet.</p>`}</section>
@@ -357,7 +361,15 @@ function chrome() {
 // ---------- render loop ----------
 
 let queued = false;
-function draw() { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; paint(); }); } }
+// Paint on the next frame, or within 100 ms when frames are throttled (background tabs, headless
+// browsers): new data must never wait for the tab to become visible again.
+function draw() {
+  if (queued) return;
+  queued = true;
+  const run = () => { if (queued) { queued = false; paint(); } };
+  requestAnimationFrame(run);
+  setTimeout(run, 100);
+}
 
 function paint() {
   $('locked').hidden = !locked;
@@ -459,7 +471,8 @@ loadAll().then(() => { connect(); if (SELFTEST) selftest(); });
 const SELFTEST = new URLSearchParams(location.search).has('selftest');
 // `?shot=1` (test daemons only) holds the load event for a moment and stops animations, for screenshots.
 if (new URLSearchParams(location.search).has('shot')) {
-  document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: '/__hold' }), Object.assign(document.createElement('style'), { textContent: '*{animation:none!important}' }));
+  document.documentElement.toggleAttribute('data-shot', true); // home.css stops animations
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: '/__hold' }));
 }
 async function selftest() {
   const txt = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -483,5 +496,6 @@ async function selftest() {
     };
   }
   location.hash = '#/';
+  out.errors.push(...cspViolations.map((v) => 'CSP ' + v));
   try { await fetch('/__selftest', { method: 'POST', body: JSON.stringify(out) }); } catch { /* the harness will time out */ }
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/apv022/sol/internal/apphost"
 	"github.com/apv022/sol/internal/blob"
 	"github.com/apv022/sol/internal/blobnet"
+	"github.com/apv022/sol/internal/faultnet"
 	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/pairing"
@@ -25,6 +26,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	faultnet.MaybeRunFakeTor() // the tor tests run this binary as their tor
 	session.RedialMin = 20 * time.Millisecond
 	session.RedialMax = 200 * time.Millisecond
 	replicate.RetryMin = 20 * time.Millisecond

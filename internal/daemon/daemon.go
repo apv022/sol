@@ -49,6 +49,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -214,6 +215,12 @@ type Options struct {
 	Log        *slog.Logger
 	// SameUser decides browser auto-login (see peercred.go); nil means the OS lookup. Tests inject.
 	SameUser SameUserFunc
+	// TorProvider runs the tor program for the "tor" transport (nil: the bundled or system
+	// tor). Tests inject a fake tor.
+	TorProvider solruntime.Provider
+	// WrapTransport, if set, wraps every configured transport (tests: taking a device off the
+	// network while its daemon keeps running).
+	WrapTransport func(transport.Transport) transport.Transport
 }
 
 // Daemon is one running device.
@@ -266,6 +273,11 @@ type Daemon struct {
 	settle   *time.Timer          // the second endpoint check after a network change
 
 	netMu sync.Mutex // serializes refreshEndpoints with itself and Close
+
+	tokens     *pairing.Tokens
+	accessKick chan struct{} // wakes watchAccess (toraccess.go)
+	accessMu   sync.Mutex    // serializes refreshAccess
+	lastAccess string        // the client-auth set last published, joined
 }
 
 // appsRef lets the API server reach the host, which is built after it.
@@ -360,9 +372,12 @@ func Start(o Options) (_ *Daemon, err error) {
 	peerMux.HandleFunc("POST "+ServicesPushPath, func(w http.ResponseWriter, r *http.Request) { d.ports.peerPush(w, r) })
 	peerMux.HandleFunc("POST "+UnpairPath, d.peerUnpair)
 	d.transports = d.buildTransports()
+	d.tokens, d.accessKick = pairing.NewTokens(), make(chan struct{}, 1)
+	d.tokens.OnChange = d.kickAccess
 	if d.Sessions, err = session.New(session.Config{Keyring: kr, Cache: d.Cache, Contacts: d.Contacts,
-		Tokens: pairing.NewTokens(), Transports: d.transports, Handler: peerMux, OnSession: d.onSession,
-		OnBundle: d.peers.put, Log: d.log}); err != nil {
+		Tokens: d.tokens, Transports: d.transports, Handler: peerMux, OnSession: d.onSession,
+		OnBundle: func(b identity.Bundle) { d.peers.put(b); d.kickAccess() }, OnIdentity: d.kickAccess,
+		Log: d.log}); err != nil {
 		return nil, err
 	}
 	if d.ports, err = openPortShare(d, filepath.Join(o.Dir, "services.json"), filepath.Join(o.Dir, "tunnels.json")); err != nil {
@@ -408,6 +423,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	d.watchThemes()
 	d.watchNetwork()
 	d.watchContacts()
+	d.watchAccess()
 	return d, nil
 }
 
@@ -432,12 +448,18 @@ func (d *Daemon) anchor() bool {
 
 // buildTransports constructs the configured transports.
 func (d *Daemon) buildTransports() []transport.Transport {
-	return newTransports(d.dir, d.cfg.Transports, d.Keyring.Signer(), d.log)
+	ts := newTransports(d.dir, d.cfg.Transports, d.Keyring.Signer(), d.opt.TorProvider, d.log)
+	if d.opt.WrapTransport != nil {
+		for i, t := range ts {
+			ts[i] = d.opt.WrapTransport(t)
+		}
+	}
+	return ts
 }
 
 // newTransports constructs transports from their configuration; signer is the device key the
-// direct transport's TLS certificate is made from.
-func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, log *slog.Logger) []transport.Transport {
+// direct transport's TLS certificate is made from, torp runs tor (nil: bundled or system).
+func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp solruntime.Provider, log *slog.Logger) []transport.Transport {
 	var out []transport.Transport
 	for _, tc := range tcs {
 		adv := ""
@@ -452,7 +474,10 @@ func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, log 
 		case "wg":
 			out = append(out, transport.NewWG(tc.Listen, filepath.Join(dir, "wg.key"), tc.Advertise, tc.STUN))
 		case "tor":
-			p, err := solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin")})
+			p, err := torp, error(nil)
+			if p == nil {
+				p, err = solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin")})
+			}
 			if err != nil {
 				out = append(out, transport.NewUnavailable("tor", err))
 				continue
@@ -474,17 +499,23 @@ func (d *Daemon) startNet() error {
 	}
 	d.nodeLn = ln
 	var eps []identity.Endpoint
+	auth, _ := d.accessSet()
+	d.lastAccess = strings.Join(auth, ",")
 	for _, t := range d.transports {
 		if err := t.Start(d.ctx); err != nil {
 			d.log.Warn("transport did not start", "transport", t.Name(), "err", err)
 			continue
 		}
-		addr, err := t.Publish(d.ctx, transport.Publication{ID: "node", Target: ln.Addr().String()})
+		p := transport.Publication{ID: "node", Target: ln.Addr().String()}
+		if issuesAccess(t) {
+			p.ClientAuth = auth // never an open onion, not even for a moment
+		}
+		addr, err := t.Publish(d.ctx, p)
 		if err != nil {
 			d.log.Warn("transport did not publish", "transport", t.Name(), "err", err)
 			continue
 		}
-		eps = append(eps, identity.Endpoint{Transport: t.Name(), Address: addr})
+		eps = append(eps, endpointOf(t, addr))
 	}
 	if _, err := d.Keyring.SetEndpoints(eps, time.Now()); err != nil {
 		return err
@@ -636,7 +667,8 @@ func (d *Daemon) Invite(join bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return l.String(), nil
+	d.refreshAccess() // the secret opens the onion before anyone has the link
+	return l.Encode()
 }
 
 // Pair redeems a pair link (adds a person) or a join link (this device joins the person

@@ -62,11 +62,19 @@ function line(text, ok) {
  * reported), then every registered test runs in order.
  */
 export async function run(load) {
+  // Suite pages carry the UI origins' style policy (cmd/browsertest): an inline style
+  // attribute anywhere fails the suite. CSSOM (element.style) is allowed.
+  const violations = [];
+  document.addEventListener('securitypolicyviolation', (e) => violations.push(`${e.violatedDirective} ${e.sample || e.blockedURI || ''}`.trim()));
+  document.body.style.fontFamily = 'system-ui';
+  document.body.style.padding = '16px';
   let failed = 0;
   try { await load(); line('top-level checks', true); } catch (e) { failed++; line(`top-level: ${e.message}`, false); }
   for (const t of tests) {
     try { await t.fn(); line(t.name, true); } catch (e) { failed++; line(`${t.name}: ${e.message}`, false); }
   }
+  await new Promise((r) => setTimeout(r, 0)); // violation events are queued
+  if (violations.length) { failed++; line(`CSP: ${violations.join('; ')}`, false); }
   const total = tests.length + 1;
   document.title = failed ? `FAIL ${failed}/${total}` : `PASS ${total}`;
   document.getElementById('summary').textContent = document.title;

@@ -216,6 +216,30 @@ func TestScanFallbackWithoutWatcher(t *testing.T) {
 	waitFor(t, "scan finds it", func() bool { return b.has("s/scan.txt", "found by scan") })
 }
 
+// Themes follow the person between devices: .sol/theme and .sol/themes/*.css sync, the rest of
+// .sol (settings, scratch) does not, and a change on one device reaches the other's disk.
+func TestThemeFilesSync(t *testing.T) {
+	w := newWorld()
+	a := startNode(t, w.a1, nil)
+	b := startNode(t, w.a2, nil)
+	a.write(t, ".sol/themes/paper.css", "/* @theme Paper */")
+	a.write(t, ".sol/theme", "paper\n")
+	a.write(t, ".sol/theme-settings.json", "{}")
+	a.write(t, ".sol/themes/notes.txt", "x")
+	a.write(t, ".sol/themes/Bad Name.css", "x")
+	waitFor(t, "b has the theme", func() bool {
+		return b.has(".sol/themes/paper.css", "/* @theme Paper */") && b.has(".sol/theme", "paper\n")
+	})
+	a.write(t, ".sol/theme", "sol\n")
+	waitFor(t, "b sees the change", func() bool { return b.has(".sol/theme", "sol\n") })
+	a.settle(t)
+	b.settle(t)
+	got := strings.Join(b.files(), ",")
+	if got != ".sol/theme,.sol/themes/paper.css" {
+		t.Fatalf("synced files: %s", got)
+	}
+}
+
 func TestIgnoredFilesAreNotSynced(t *testing.T) {
 	w := newWorld()
 	a := startNode(t, w.a1, nil)

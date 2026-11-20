@@ -12,7 +12,7 @@ import (
 var unsafeInner = regexp.MustCompile("innerHTML\\s*\\+?=\\s*(`|.*\\+|.*\\$\\{)")
 
 func TestEmbedAndNoUnsafeInnerHTML(t *testing.T) {
-	for _, name := range []string{"tokens.css", "kit.css", "kit.js", "icons.js", "demo.html", "TOKENS.md", "fonts/InterVariable.woff2", "fonts/OFL.txt", "fonts/VENDORED.txt", "themes/sol.css", "themes/graphite.css", "themes/terminal.css", "themes/paper.css"} {
+	for _, name := range []string{"tokens.css", "kit.css", "kit.js", "icons.js", "demo.html", "demo.css", "demo.js", "TOKENS.md", "fonts/InterVariable.woff2", "fonts/OFL.txt", "fonts/VENDORED.txt", "themes/sol.css", "themes/graphite.css", "themes/terminal.css", "themes/paper.css"} {
 		b, err := fs.ReadFile(FS, name)
 		if err != nil || len(b) == 0 {
 			t.Fatalf("%s not embedded: %v", name, err)
@@ -133,6 +133,36 @@ func TestKitCSSOldBrowserSafe(t *testing.T) {
 						ruleDecls = ruleDecls[:len(ruleDecls)-1]
 					}
 				}
+			}
+		}
+	}
+}
+
+var inlineStyle = regexp.MustCompile(`(?i)\sstyle\s*=|<style[\s>]`)
+
+// UI origins forbid inline styles (internal/apphost.CSP, style-src 'self'): no UI markup may
+// carry a style attribute or a <style> element. element.style (CSSOM) is fine.
+func TestNoInlineStyles(t *testing.T) {
+	var files []string
+	for _, g := range []string{"*.js", "*.html", "../home/*.js", "../home/*.html", "../../apps/*/ui/*.js", "../../apps/*/ui/*.html",
+		"../../sdk/js/*.js", "../../internal/daemon/*.go"} {
+		m, _ := filepath.Glob(g)
+		files = append(files, m...)
+	}
+	if len(files) < 10 {
+		t.Fatalf("too few UI files: %v", files)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if inlineStyle.MatchString(line) {
+				t.Errorf("%s:%d: inline style (use a class or the CSSOM): %s", f, i+1, strings.TrimSpace(line))
 			}
 		}
 	}

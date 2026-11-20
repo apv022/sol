@@ -257,6 +257,20 @@ func (a *App) localChange(ctx context.Context, p string) error {
 }
 
 func (a *App) localDir(ctx context.Context, p string) error {
+	if solContainer(p) {
+		// Walk it for the synced files inside, but never publish the folder itself.
+		ents, err := os.ReadDir(a.disk(p))
+		var first error
+		for _, e := range ents {
+			if err := a.localChange(ctx, join(p, e.Name())); err != nil && first == nil {
+				first = err
+			}
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return first
+	}
 	if err := ValidatePath(p, false); err != nil {
 		a.skip(p, err.Error())
 		return nil

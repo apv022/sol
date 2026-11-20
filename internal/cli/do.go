@@ -101,7 +101,7 @@ func Do(ctx context.Context, c Conn, args []string, stdin io.Reader, stdout, std
 		fmt.Fprintln(stdout, strings.TrimSpace(string(out)))
 		return ExitOK
 	}
-	if Render(stdout, out) != nil {
+	if RenderColumns(stdout, out, spec.Columns) != nil {
 		return ExitError
 	}
 	return ExitOK

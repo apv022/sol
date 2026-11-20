@@ -51,6 +51,10 @@ import (
 // RevocationsFeed is the internal feed (under feeds.InternalApp) of revoked agent keys.
 const RevocationsFeed = "revocations"
 
+// AgentsFeed is the internal feed where each device announces the agents it issues (name, id,
+// scopes, times; never the certificate), so `sol agent list` shows agents of all my devices.
+const AgentsFeed = "agents"
+
 // AgentClockSkew bounds how far an agent request's time may be from the daemon's.
 const AgentClockSkew = 2 * time.Minute
 
@@ -67,6 +71,10 @@ type AgentInfo struct {
 	Issued  time.Time `json:"issued"`
 	Expires time.Time `json:"expires"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Device and DeviceName are the device that issued the agent (this one, or another of
+	// mine learned through the replicated agents feed).
+	Device     string `json:"device,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
 	// Cert is the current certificate's wire form, for renewal.
 	Cert []byte `json:"cert"`
 }
@@ -246,6 +254,7 @@ func (d *Daemon) IssueAgent(name string, pub ed25519.PublicKey, scopes []string,
 	if err := d.agents.put(info); err != nil {
 		return AgentInfo{}, err
 	}
+	d.announceAgent(info)
 	d.log.Info("issued an agent key", "agent", name, "id", info.ID[:8])
 	return info, nil
 }
@@ -272,7 +281,78 @@ func (d *Daemon) RenewAgent(name string, ttl time.Duration) (AgentInfo, error) {
 		return AgentInfo{}, sol.Errorf("bad_request", err.Error())
 	}
 	info = infoOf(nc)
+	d.announceAgent(info)
 	return info, d.agents.put(info)
+}
+
+// announceAgent appends the agent's public facts to the agents feed (best effort: the local
+// registry is the source of truth on the issuing device).
+func (d *Daemon) announceAgent(info AgentInfo) {
+	b, _ := json.Marshal(AgentInfo{Name: info.Name, ID: info.ID, Scopes: info.Scopes, Issued: info.Issued, Expires: info.Expires})
+	if _, err := d.Store.Append(feeds.InternalApp, AgentsFeed, b); err != nil {
+		d.log.Warn("announcing an agent to my other devices", "err", err)
+	}
+}
+
+// thisDevice returns this device's ID and name.
+func (d *Daemon) thisDevice() (id, name string) {
+	for _, dv := range d.Devices() {
+		if dv.This {
+			return dv.ID, dv.Name
+		}
+	}
+	_, id = d.me()
+	return id, ""
+}
+
+// AllAgents lists the agents of all my devices: those this device issued from its registry,
+// the others from the agents feed (without certificates: only the issuing device can renew
+// one). Revoked comes from the replicated revocations feed.
+func (d *Daemon) AllAgents() []AgentInfo {
+	revoked := d.revokedSet()
+	me, meName := d.thisDevice()
+	names := map[string]string{}
+	for _, dv := range d.Devices() {
+		names[dv.ID] = dv.Name
+	}
+	out := []AgentInfo{}
+	have := map[string]bool{}
+	for _, a := range d.agents.all() {
+		a.Device, a.DeviceName = me, meName
+		a.Revoked = a.Revoked || revoked[a.ID]
+		have[a.ID] = true
+		out = append(out, a)
+	}
+	if p := d.PersonID(); p != "" {
+		latest := map[string]AgentInfo{}
+		addr := feeds.Address(p, feeds.InternalApp, AgentsFeed)
+		for from := uint64(1); ; {
+			es, err := d.Store.Read(addr, from, 1000)
+			if err != nil || len(es) == 0 {
+				break
+			}
+			for _, e := range es {
+				from = e.Pos + 1
+				var a AgentInfo
+				if json.Unmarshal(e.Body, &a) != nil || a.ID == "" || e.Device == me || have[a.ID] {
+					continue
+				}
+				a.Cert, a.Device, a.DeviceName = nil, e.Device, names[e.Device]
+				a.Revoked = revoked[a.ID]
+				latest[a.ID] = a
+			}
+		}
+		for _, a := range latest {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // RevokeAgent revokes an agent by name (issued here) or by ID (issued on any device of mine):
@@ -283,7 +363,16 @@ func (d *Daemon) RevokeAgent(key string) (string, error) {
 	if local {
 		id = info.ID
 	} else if _, err := identity.ParseID(key); err != nil {
-		return "", sol.Errorf("not_found", "no agent "+key)
+		// A name: look among the agents my other devices issued.
+		id = ""
+		for _, a := range d.AllAgents() {
+			if a.Name == key && !a.Revoked {
+				id = a.ID
+			}
+		}
+		if id == "" {
+			return "", sol.Errorf("not_found", "no agent "+key)
+		}
 	}
 	if !d.revoked(id) {
 		b, _ := json.Marshal(map[string]any{"agent": id, "time": time.Now().UTC()})
@@ -302,23 +391,27 @@ func (d *Daemon) RevokeAgent(key string) (string, error) {
 }
 
 // revoked reports whether any device of mine revoked the agent ID.
-func (d *Daemon) revoked(id string) bool {
+func (d *Daemon) revoked(id string) bool { return d.revokedSet()[id] }
+
+// revokedSet reads the replicated revocations feed.
+func (d *Daemon) revokedSet() map[string]bool {
+	out := map[string]bool{}
 	me := d.PersonID()
 	if me == "" {
-		return false
+		return out
 	}
 	addr := feeds.Address(me, feeds.InternalApp, RevocationsFeed)
 	for from := uint64(1); ; {
 		es, err := d.Store.Read(addr, from, 1000)
 		if err != nil || len(es) == 0 {
-			return false
+			return out
 		}
 		for _, e := range es {
 			var r struct {
 				Agent string `json:"agent"`
 			}
-			if json.Unmarshal(e.Body, &r) == nil && r.Agent == id {
-				return true
+			if json.Unmarshal(e.Body, &r) == nil && r.Agent != "" {
+				out[r.Agent] = true
 			}
 			from = e.Pos + 1
 		}
@@ -418,6 +511,17 @@ func (d *Daemon) actionApps(app string, keep func(string) bool) []ActionApp {
 			out = append(out, aa)
 		}
 	}
+	if b := solActions(); app == "" || app == SolAppID {
+		aa := ActionApp{ID: b.ID, Name: b.Name, Description: b.Description, Actions: []sol.ActionSpec{}}
+		for _, s := range b.Actions {
+			if keep == nil || keep(s.Name) {
+				aa.Actions = append(aa.Actions, s)
+			}
+		}
+		if len(aa.Actions) > 0 || keep == nil {
+			out = append(out, aa)
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
@@ -481,6 +585,9 @@ func (d *Daemon) agentHandler() http.Handler {
 		if !c.Allows(call.Action, target) {
 			d.log.Info("refused an agent action outside its scopes", "agent", c.Name, "action", call.Action)
 			return nil, sol.Errorf("forbidden", "the agent's scopes do not cover "+call.Action+" for that person")
+		}
+		if out, ok, err := d.callSol(r.Context(), call); ok {
+			return out, err
 		}
 		return d.API.CallAs(r.Context(), identity.ID(c.Agent), call)
 	})

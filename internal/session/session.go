@@ -86,6 +86,10 @@ type Config struct {
 	// device something new (in a handshake, a push or a relay), so the caller
 	// can persist the identity cache. It must not block.
 	OnBundle func(identity.Bundle)
+	// OnIdentity, if set, is called whenever this device's own bundle may have changed (its
+	// device list, names, endpoints), e.g. to recompute who may reach its onion. It must not
+	// block.
+	OnIdentity func()
 	// OnSession, if set, is called (in its own goroutine) for every session
 	// that comes up and wins the tie-break, e.g. to start feed replication
 	// over it. It should return once the session is Done.
@@ -117,6 +121,7 @@ type Manager struct {
 	dialing   map[string]*sync.Mutex
 	listeners map[net.Listener]struct{}
 	links     map[string]*link // path state per peer device (paths.go)
+	auth      clientAuth       // client-auth keys installed for peers' onions (toraccess.go)
 }
 
 // New returns a Manager. Call Serve to accept connections.
@@ -929,6 +934,7 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 		conn.Close()
 		return nil, fmt.Errorf("session: adopting the device list: %w", err)
 	}
+	m.BundleChanged() // this device has a person now
 	m.NoteEndpoints(res.Bundle.Endpoints)
 	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic(), path, pk)
 	if s == nil {
@@ -955,12 +961,8 @@ func (m *Manager) Invite(kind pairing.Kind) (pairing.Link, error) {
 	if err != nil {
 		return pairing.Link{}, err
 	}
-	l := pairing.Link{Kind: kind, Person: b.Person.Person, Device: m.kr.DevicePublic(),
-		Secret: secret, Endpoints: b.Endpoints}
-	if kind == pairing.KindPair {
-		l.Name = b.Person.Name
-	}
-	return l, nil
+	return pairing.Link{Kind: kind, Person: b.Person.Person, Device: m.kr.DevicePublic(),
+		Secret: secret, Endpoints: b.Endpoints}, nil
 }
 
 // keeper keeps a session with one device up.
@@ -1009,6 +1011,7 @@ func (m *Manager) Forget(device ed25519.PublicKey) {
 	if s != nil {
 		s.Close()
 	}
+	m.deauthorize(device)
 }
 
 // NetworkChanged reacts to a network change or a wake from sleep: every

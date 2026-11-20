@@ -85,7 +85,10 @@ because an agent always acts through one of your devices.
 ```
 lp("sol endpoints v1") | lp(D_pub) | u64(seq) | list of (lp(transport) | lp(address) | lp(access))
 ```
-Where a device can be reached (onion address + client-auth key, WireGuard key + endpoint, …).
+Where a device can be reached (onion address, WireGuard key + endpoint, …). `access` never holds
+a secret, since the record is relayed to all my devices and contacts: for an onion it is
+`x25519-dh1`, meaning the client-auth keys are derived from the two device keys (PROTOCOL.md
+§Tor client authorization).
 Changes often; highest `seq` wins; pushed over sessions and to paired people.
 
 ## The identity bundle

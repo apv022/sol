@@ -21,6 +21,30 @@ The handshake runs on any byte stream. Confidentiality comes from the transport:
 | Tor | onion service with client authorization | fallback, always available |
 | clearnet | none (tests only, refuses non-loopback unless forced) | the e2e tests |
 
+### Tor client authorization (built in C6b)
+
+A device's onion lists one ClientAuthV3 key per device allowed to reach it, and Tor serves its
+descriptor to nobody else, so a stranger who learns the address can't even tell it is up. The keys
+are derived, never sent: for owner device `O` and client device `C`,
+
+```
+shared = X25519(x(D_O), x(D_C))   x() = the Ed25519 key in Montgomery form (both sides can compute it)
+key    = X25519 private key SHA-256("sol tor access v1" | O_pub | C_pub | shared)
+```
+
+`O` lists the public half, `C` installs the private half (`ONION_CLIENT_AUTH_ADD`) before dialing.
+The endpoint record's `access` for the onion is `x25519-dh1`, which says only that: a record is
+seen by everyone it is relayed to, so it must never carry a per-peer secret. The set on `O`'s onion
+is: every device in my device list (including `O` itself, so an onion with nobody else on it is
+still closed), every device in the newest list of every contact, and one key per pending pair or
+join secret, `SHA-256("sol tor pair v1" | secret)` as an X25519 private key, which whoever holds
+the link derives too (and `sol restore --from <link>` uses). It is recomputed whenever my device
+list, a contact's device list, the contacts list or the pending secrets change, and the onion is
+re-added (`DEL_ONION` + `ADD_ONION` with the same service key, so the same address) only when
+the set really changed. Tor is never sent `SIGNAL NEWNYM` (it drops installed client-auth keys).
+Removing a contact or a device takes its keys off at once; their tor still holds a key that no
+longer matches anything.
+
 ## Handshake
 
 All integers big-endian. A frame is `u16 len | bytes` (1..16384); a bundle frame, which carries an
@@ -118,11 +142,27 @@ bundle) and that `sig_b` verifies; otherwise it closes.
 ## Pairing links
 
 ```
-sol://pair?v=2&person=<R_pub id>&device=<D id>&s=<secret>&e=<endpoints, base64url>&n=<name>
-sol://join?v=2&person=…&device=…&s=…&e=…
+sol://pair?v=3&k=<base64url(payload)>
+sol://join?v=3&k=<base64url(payload)>
+
+payload = R_pub (32) | D_pub (32) | secret (32) | up to two addresses
+address = 0x01 | onion v3 public key (32)
+        | 0x02 | IPv4 (4) | port (2)      a candidate of the direct (TLS) transport
+        | 0x03 | IPv6 (16) | port (2)
+        | 0x04 / 0x05                     the same for clearnet (tests)
 ```
 `pair` adds a person (both become contacts). `join` adds a device to *my* identity. Secrets are 32
 random bytes, valid once, for 10 minutes. Shown as a QR code and as text.
+
+A link carries only what first contact needs, so it is at most 200 characters (a QR code a phone
+scans at a glance): the onion if there is one (it works from anywhere) and the best IPv4 address
+that still fits (same room, same Wi-Fi), or without an onion the two best IP addresses. The
+addresses are unsigned hints; the handshake checks that whoever answers is `D_pub` speaking for
+`R_pub`, and brings the full signed bundle, endpoint record included. The onion's checksum is
+recomputed from the key. A pending secret opens the onion (§Tor client authorization).
+
+Version 2 links (full endpoint records and the inviter's name, about 600 characters) are refused
+with "made by an older Sol"; a link with a higher version says to update Sol.
 
 ## Sessions
 

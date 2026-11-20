@@ -266,10 +266,26 @@ export function html(strings, ...vals) {
   return new SafeHtml(out);
 }
 
-/** Replaces the children of `el` with html`` output. Only SafeHtml is accepted. */
+/**
+ * Replaces the children of `el` with html`` output. Only SafeHtml is accepted.
+ *
+ * UI origins forbid inline style attributes (CSP style-src 'self'), so markup sets CSS custom
+ * properties with `data-var-<name>="<value>"` instead: render sets `--<name>` on that element
+ * through the CSSOM, which the policy allows (`<a class="app" data-var-i="3">` → `--i: 3`).
+ */
 export function render(el, safe) {
   if (!(safe instanceof SafeHtml)) throw new TypeError('render() takes html`` output; use esc() or the html tag');
   const t = document.createElement('template');
   t.innerHTML = safe.value; // safe: SafeHtml, every interpolation already escaped (SAFE-HTML)
+  applyVars(t.content);
   el.replaceChildren(t.content);
+}
+
+/** Sets the custom properties named by data-var-* attributes under root (see render). */
+export function applyVars(root) {
+  for (const n of root.querySelectorAll('*')) {
+    for (const a of [...n.attributes]) {
+      if (a.name.startsWith('data-var-')) n.style.setProperty('--' + a.name.slice(9), a.value);
+    }
+  }
 }

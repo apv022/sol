@@ -114,7 +114,7 @@ func recoverFrom(ctx context.Context, dir string, o RestoreOptions, r ed25519.Pr
 		tc.Listen, tc.Advertise = "127.0.0.1:0", nil
 		tcs[i] = tc
 	}
-	ts := newTransports(dir, tcs, dk, o.Log)
+	ts := newTransports(dir, tcs, dk, nil, o.Log)
 	for _, t := range ts {
 		if err := t.Start(ctx); err != nil {
 			o.Log.Warn("transport did not start", "transport", t.Name(), "err", err)
@@ -123,7 +123,7 @@ func recoverFrom(ctx context.Context, dir string, o RestoreOptions, r ed25519.Pr
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	pc, dl, err := session.Recover(ctx, ts, l.Endpoints, r)
+	pc, dl, err := session.Recover(ctx, ts, l.Endpoints, l.Secret, r)
 	if errors.Is(err, session.ErrNothingKnown) {
 		return pc, dl, errors.New("daemon: that device knows nothing of this person (is it yours, or a contact's?)")
 	}

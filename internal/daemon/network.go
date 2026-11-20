@@ -71,15 +71,13 @@ func (d *Daemon) refreshEndpoints() {
 			continue
 		}
 		if a := t.Status().Addresses["node"]; a != "" {
-			eps = append(eps, identity.Endpoint{Transport: t.Name(), Address: a})
+			eps = append(eps, endpointOf(t, a))
 		}
 	}
 	if len(eps) == 0 { // offline for now: keep advertising the last addresses
 		return
 	}
-	if slices.EqualFunc(eps, d.Keyring.Endpoints().Endpoints, func(a, b identity.Endpoint) bool {
-		return a.Transport == b.Transport && a.Address == b.Address
-	}) {
+	if slices.Equal(eps, d.Keyring.Endpoints().Endpoints) {
 		return
 	}
 	if _, err := d.Keyring.SetEndpoints(eps, time.Now()); err != nil {
@@ -107,6 +105,7 @@ func (d *Daemon) watchContacts() {
 			case ev := <-sub.C():
 				if ev.Entry != nil && strings.HasSuffix(ev.Entry.Feed, suffix) {
 					d.Sessions.KeepContacts()
+					d.kickAccess() // a contact came or went: so do their keys on my onion
 				}
 			}
 		}

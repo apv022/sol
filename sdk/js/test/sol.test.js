@@ -120,3 +120,12 @@ function fakeDoc() {
   assert.deepEqual(await got, { settings: { density: 'compact' } });
 }
 void ('theme ok');
+
+// render sets data-var-* as CSS custom properties through the CSSOM (no style attribute in the
+// markup, which the UI origins' CSP forbids).
+{
+  const box = document.createElement('div');
+  sol.render(box, sol.html`<a data-var-i="${3}"><b data-var-sw="${'#e8a100'}"></b></a>`);
+  assert.equal(box.querySelector('a').style.getPropertyValue('--i'), '3');
+  assert.equal(box.querySelector('b').style.getPropertyValue('--sw'), '#e8a100');
+}

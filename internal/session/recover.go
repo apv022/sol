@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/internal/identity"
+	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/transport"
 	"github.com/apv022/sol/internal/wire"
 )
@@ -51,8 +52,9 @@ func (m *Manager) recoverable(person ed25519.PublicKey) ([]byte, error) {
 // r, over the first of transports that reaches it. It runs before this device has an identity:
 // the handshake uses a throwaway device key, and R proves the person. The result is verified
 // (R signed the certificate, its P signed the list), so a restore can start its sequence
-// numbers above it.
-func Recover(ctx context.Context, transports []transport.Transport, target identity.EndpointRecord, r ed25519.PrivateKey) (identity.PersonCert, identity.DeviceList, error) {
+// numbers above it. secret is the link's pairing secret: it opens the target's onion while
+// it is pending (pairing.AccessKey).
+func Recover(ctx context.Context, transports []transport.Transport, target identity.EndpointRecord, secret []byte, r ed25519.PrivateKey) (identity.PersonCert, identity.DeviceList, error) {
 	var pc identity.PersonCert
 	var dl identity.DeviceList
 	_, dk, err := ed25519.GenerateKey(nil)
@@ -75,6 +77,11 @@ func Recover(ctx context.Context, transports []transport.Transport, target ident
 		}
 		if t == nil {
 			continue
+		}
+		if ca, ok := t.(transport.ClientAuthorizer); ok && len(secret) > 0 {
+			if k, err := pairing.AccessKey(secret); err == nil {
+				_ = ca.AuthorizeClient(e.Address, k.TorPrivate())
+			}
 		}
 		dctx, cancel := context.WithTimeout(ctx, DialTimeout)
 		conn, err := t.Dial(dctx, e.Address)

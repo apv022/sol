@@ -161,3 +161,11 @@ code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2)
   .wps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .words { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Utilities that stand in for inline styles (the UI root's CSP forbids style attributes). */
+.flush { margin: 0; }
+.rule { border: 0; border-top: var(--hairline) solid var(--separator); width: 100%; margin: var(--space-2) 0; }
+.dlg-actions.spread { justify-content: space-between; }
+.wraps { white-space: normal; }
+select.fit { width: auto; }
+[data-shot] *, [data-shot] *::before, [data-shot] *::after { animation: none !important; }

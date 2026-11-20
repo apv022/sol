@@ -8,26 +8,7 @@
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="kit.css">
 <link rel="stylesheet" id="demo-theme" href="themes/sol.css">
-<style>
-  /* demo-only layout, on tokens */
-  section { margin-bottom: var(--space-6); }
-  .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3); }
-  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: var(--space-2); }
-  .sw { border-radius: var(--radius-control); overflow: hidden; font-size: var(--fs-footnote); background: var(--surface); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
-  .sw i { display: block; height: 2.25rem; box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
-  .sw span { display: block; padding: var(--space-1) var(--space-2); font-family: var(--font-mono); }
-  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); gap: var(--space-2); }
-  .icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--fs-footnote); color: var(--label-2); border-radius: var(--radius-control); background: var(--surface); }
-  .icons sol-icon { --size: 24px; color: var(--label); }
-  .float { display: grid; place-items: center; width: 7rem; height: 4rem; background: var(--surface); border-radius: var(--radius-group); box-shadow: var(--shadow-float); font-size: var(--fs-footnote); }
-  .wall { padding: var(--space-5); border-radius: var(--radius-sheet); background: linear-gradient(180deg, #8fb4e8 0%, #f3c982 100%); display: flex; gap: var(--space-3); flex-wrap: wrap; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); } }
-  :root[data-theme="dark"] .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); }
-  .apps { display: flex; gap: var(--space-4); flex-wrap: wrap; }
-  .apps > div { display: grid; justify-items: center; gap: var(--space-1); font-size: var(--fs-footnote); }
-  #phone { width: 390px; height: 700px; border: 0; border-radius: 28px; box-shadow: var(--shadow-float); background: var(--canvas); }
-  body.embed sol-app-shell > [slot="nav"] .brand { display: none; }
-</style>
+<link rel="stylesheet" href="demo.css">
 </head>
 <body>
 <sol-app-shell heading="Sol kit">
@@ -49,20 +30,20 @@
       <h2>Appearance</h2>
       <sol-list id="appearance-list">
         <div data-item><span class="grow">Colour scheme</span><div class="segmented" id="scheme" role="group" aria-label="Colour scheme"><button type="button" data-v="auto" aria-pressed="true">Auto</button><button type="button" data-v="light" aria-pressed="false">Light</button><button type="button" data-v="dark" aria-pressed="false">Dark</button></div></div>
-        <div data-item><span class="grow">Theme</span><select id="theme" aria-label="Theme" style="width:auto"><option value="sol">Sol</option><option value="graphite">Graphite</option><option value="terminal">Terminal</option><option value="paper">Paper</option></select></div>
-        <div data-item><span class="grow">Accent colour</span><input id="accent" type="color" value="#e8a100" aria-label="Accent colour" style="width:3rem;padding:2px"><button class="plain" id="accent-reset" type="button">Reset</button></div>
+        <div data-item><span class="grow">Theme</span><select id="theme" aria-label="Theme" class="fit"><option value="sol">Sol</option><option value="graphite">Graphite</option><option value="terminal">Terminal</option><option value="paper">Paper</option></select></div>
+        <div data-item><span class="grow">Accent colour</span><input id="accent" type="color" value="#e8a100" aria-label="Accent colour" class="swatch-input"><button class="plain" id="accent-reset" type="button">Reset</button></div>
         <div data-item><span class="grow">Compact density</span><input id="density" type="checkbox" role="switch" aria-label="Compact density"></div>
         <div data-item><span class="grow">Square corners</span><input id="radius" type="checkbox" role="switch" aria-label="Square corners"></div>
         <div data-item><span class="grow">Glass</span><input id="glass" type="checkbox" role="switch" checked aria-label="Glass"></div>
-        <div data-item><span class="grow">Font</span><select id="font" aria-label="Font" style="width:auto"><option value="system">System</option><option value="inter">Inter</option><option value="mono">Monospace</option></select></div>
+        <div data-item><span class="grow">Font</span><select id="font" aria-label="Font" class="fit"><option value="system">System</option><option value="inter">Inter</option><option value="mono">Monospace</option></select></div>
       </sol-list>
-      <div class="row" style="margin-top: var(--space-3)"><button id="phone-btn" type="button" class="tinted"><sol-icon name="phone"></sol-icon>Phone preview</button></div>
+      <div class="row gap-above"><button id="phone-btn" type="button" class="tinted"><sol-icon name="phone"></sol-icon>Phone preview</button></div>
     </section>
 
     <section id="colour">
       <h2>Colour</h2>
       <div class="swatches" id="colors"></div>
-      <h2 style="margin-top: var(--space-5)">Type</h2>
+      <h2 class="gap-above">Type</h2>
       <p class="t-large-title">Large title</p>
       <p class="t-title-1">Title 1</p>
       <p class="t-title-2">Title 2</p>
@@ -70,13 +51,13 @@
       <p class="t-body">Body: a calm system font that loads instantly. <code>--font-mono</code></p>
       <p class="t-subhead">Subhead, secondary details.</p>
       <p class="t-footnote">Footnote and caption.</p>
-      <h2 style="margin-top: var(--space-5)">Shape and elevation</h2>
+      <h2 class="gap-above">Shape and elevation</h2>
       <div class="row">
-        <div class="float" style="box-shadow: var(--shadow-1)">shadow-1</div>
+        <div class="float shadow-1">shadow-1</div>
         <div class="float">shadow-float</div>
-        <div class="float" style="border-radius: var(--radius-control)">control</div>
-        <div class="float" style="border-radius: var(--radius-sheet)">sheet</div>
-        <div class="float" style="border-radius: var(--radius-pill)">pill</div>
+        <div class="float r-control">control</div>
+        <div class="float r-sheet">sheet</div>
+        <div class="float r-pill">pill</div>
       </div>
     </section>
 
@@ -94,13 +75,13 @@
         <button class="primary large" type="button">Large</button>
       </div>
       <h2>Fields and switches</h2>
-      <div class="row"><input type="search" placeholder="Search" aria-label="Search" style="max-width:16rem"><input type="text" placeholder="Name" aria-label="Name" style="max-width:12rem"></div>
+      <div class="row"><input type="search" placeholder="Search" aria-label="Search" class="w-16"><input type="text" placeholder="Name" aria-label="Name" class="w-12"></div>
       <div class="row">
         <div class="segmented" role="group" aria-label="View"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Grid</button><button type="button" aria-pressed="false">Gallery</button></div>
         <input type="checkbox" role="switch" checked aria-label="On"><input type="checkbox" role="switch" aria-label="Off">
         <input type="checkbox" checked aria-label="Checked"><input type="radio" checked aria-label="Radio">
       </div>
-      <div class="row chips" style="flex-wrap:wrap"><button type="button" aria-pressed="true">All</button><button type="button" aria-pressed="false">Shared</button><button type="button" aria-pressed="false">#ideas</button>
+      <div class="row chips"><button type="button" aria-pressed="true">All</button><button type="button" aria-pressed="false">Shared</button><button type="button" aria-pressed="false">#ideas</button>
         <span class="badge">Badge</span><span class="badge tint">Shared</span><span class="badge ok">Synced</span><span class="badge warn">Conflict</span><span class="badge err">Failed</span></div>
       <p class="banner"><sol-icon name="info"></sol-icon><span class="grow">A banner: this file changed on another device.</span><button class="plain" type="button">Reload</button></p>
     </section>
@@ -121,9 +102,9 @@
         <div data-item><span class="grow">Shopping list</span><span class="row-value">Yesterday</span>
           <div class="swipe-actions"><button type="button">Pin</button><button type="button" class="danger">Delete</button></div></div>
       </sol-list>
-      <h2 style="margin-top: var(--space-5)">Empty state and skeleton</h2>
+      <h2 class="gap-above">Empty state and skeleton</h2>
       <div class="card"><div class="empty"><sol-icon name="folder"></sol-icon><h3>This folder is empty</h3><p>Drop files here or tap + to add some.</p><button class="primary" type="button">Add files</button></div></div>
-      <div class="row" style="margin-top: var(--space-3)"><sol-list loading style="flex:1"></sol-list></div>
+      <div class="row gap-above"><sol-list loading class="grow"></sol-list></div>
     </section>
 
     <section id="floating">
@@ -135,7 +116,7 @@
         <button type="button" id="toast-btn">Toast</button>
         <button type="button" id="toast-err">Error toast</button>
       </div>
-      <div class="card" id="menu-zone" style="text-align:center">Right-click here, or long-press on a touch screen.</div>
+      <div class="card centered" id="menu-zone">Right-click here, or long-press on a touch screen.</div>
     </section>
 
     <section id="identity">
@@ -168,7 +149,7 @@
 
 <sol-sheet id="sheet" heading="Share folder">
   <p>On a phone this is a bottom sheet with a grabber: drag it down to dismiss. On desktop it is a dialog.</p>
-  <div class="list" style="margin-bottom: var(--space-3)">
+  <div class="list gap-below">
     <div data-item><sol-avatar name="Ada" id="p1"></sol-avatar><span class="grow">Ada</span><input type="checkbox" role="switch" checked aria-label="Share with Ada"></div>
     <div data-item><sol-avatar name="Bo" id="p2" online></sol-avatar><span class="grow">Bo</span><input type="checkbox" role="switch" aria-label="Share with Bo"></div>
   </div>
@@ -176,72 +157,6 @@
 </sol-sheet>
 <sol-dialog id="phone-dlg" heading="Phone preview"><iframe id="phone" title="Phone preview" src="about:blank"></iframe></sol-dialog>
 
-<script type="module">
-import { icons } from './icons.js';
-import { applySettings, showMenu, contextMenu, showPopover, toast } from './kit.js';
-
-if (location.search.includes('embed')) document.body.classList.add('embed');
-const $ = (id) => document.getElementById(id);
-const shell = document.querySelector('sol-app-shell');
-const hash = () => shell.setCurrent(location.hash || '#appearance');
-addEventListener('hashchange', hash); hash();
-
-// swatches read the live computed tokens, so a theme switch shows up at once
-const toks = ['--canvas', '--surface', '--surface-2', '--glass', '--label', '--label-2', '--label-3', '--separator', '--tint', '--tint-hover', '--tint-pressed', '--tint-subtle', '--on-tint', '--green', '--red', '--blue', '--orange'];
-for (const t of toks) {
-  const d = document.createElement('div'); d.className = 'sw';
-  const i = document.createElement('i'); i.style.background = `var(${t})`;
-  const s = document.createElement('span'); s.textContent = t;
-  d.append(i, s); $('colors').append(d);
-}
-for (const name of Object.keys(icons)) {
-  const d = document.createElement('div'), ic = document.createElement('sol-icon');
-  ic.setAttribute('name', name); d.append(ic, document.createTextNode(name)); $('icon-grid').append(d);
-}
-
-// appearance controls: the same settings the Sol app writes
-const state = JSON.parse(localStorage.getItem('demo-state') || '{}');
-const save = () => localStorage.setItem('demo-state', JSON.stringify(state));
-function apply() {
-  $('demo-theme').href = `themes/${state.theme || 'sol'}.css`;
-  applySettings({ scheme: state.scheme || 'auto', accent: state.accent || '', density: state.density ? 'compact' : 'comfortable', radius: state.radius ? 'square' : 'rounded', glass: state.glass === false ? 'off' : 'on', font: state.font || 'system' });
-  $('scheme').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === (state.scheme || 'auto'))));
-  $('theme').value = state.theme || 'sol'; $('font').value = state.font || 'system';
-  $('density').checked = !!state.density; $('radius').checked = !!state.radius; $('glass').checked = state.glass !== false;
-  save();
-  const f = $('phone'); if ($('phone-dlg').open) f.contentWindow?.location.reload();
-}
-$('scheme').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.v; if (v) { state.scheme = v; apply(); } });
-$('theme').addEventListener('change', (e) => { state.theme = e.target.value; apply(); });
-$('font').addEventListener('change', (e) => { state.font = e.target.value; apply(); });
-$('accent').addEventListener('input', (e) => { state.accent = e.target.value; apply(); });
-$('accent-reset').addEventListener('click', () => { state.accent = ''; apply(); });
-for (const k of ['density', 'radius']) $(k).addEventListener('change', (e) => { state[k] = e.target.checked; apply(); });
-$('glass').addEventListener('change', (e) => { state.glass = e.target.checked; apply(); });
-apply();
-
-// floating things
-const items = () => [
-  { label: 'Open', icon: 'folder', onSelect: () => toast('Opened') },
-  { label: 'Share', icon: 'share', onSelect: () => toast('Shared') },
-  { label: 'Copy link', icon: 'link', onSelect: () => toast('Copied') },
-  { separator: true },
-  { label: 'Move to Trash', icon: 'trash', danger: true, onSelect: () => toast('Moved to Trash') },
-];
-$('menu-btn').addEventListener('click', (e) => showMenu(items(), { anchor: e.currentTarget }));
-contextMenu($('menu-zone'), items);
-$('pop-btn').addEventListener('click', (e) => {
-  const c = document.createElement('div');
-  const h = document.createElement('h3'); h.textContent = 'Storage';
-  const p = document.createElement('p'); p.className = 'muted'; p.textContent = '42% of 256 GB used on this device.';
-  c.append(h, p);
-  showPopover(e.currentTarget, c);
-});
-$('sheet-btn').addEventListener('click', () => $('sheet').show());
-$('sheet').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) $('sheet').close(); });
-$('toast-btn').addEventListener('click', () => toast('Shared'));
-$('toast-err').addEventListener('click', () => toast('Could not reach Bo. Check that their device is online.', { kind: 'error' }));
-$('phone-btn').addEventListener('click', () => { $('phone').src = 'demo.html?embed'; $('phone-dlg').show(); });
-</script>
+<script type="module" src="demo.js"></script>
 </body>
 </html>

@@ -11,7 +11,7 @@
   "folders": [{"path": "*", "mode": "write"}],
   "actions": [
     {"name": "files.list", "description": "List a folder (the root when path is empty). Shared folders appear under Shared/<person>/.",
-     "input": {"type": "object", "properties": {"path": {"type": "string"}}}, "effect": "read"},
+     "input": {"type": "object", "properties": {"path": {"type": "string"}}}, "effect": "read", "columns": ["name", "type", "size", "mtime"]},
     {"name": "files.stat", "description": "Describe one file or folder.",
      "input": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}, "effect": "read"},
     {"name": "files.read", "description": "Where a file's content is: its blob hash, and a local path when the folder is kept on this device.",
@@ -28,7 +28,7 @@
      "input": {"type": "object", "required": ["paths"], "properties": {"paths": {"type": "array", "items": {"type": "string"}}}},
      "effect": "destructive", "approval": "agents"},
     {"name": "files.search", "description": "Find files and folders by name.",
-     "input": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "number"}}}, "effect": "read"},
+     "input": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "number"}}}, "effect": "read", "columns": ["path", "type", "size", "mtime"]},
     {"name": "files.share", "description": "Share a folder with people (by id or petname), read or write.",
      "input": {"type": "object", "required": ["path", "people"], "properties": {"path": {"type": "string"}, "people": {"type": "array", "items": {"type": "string"}}, "mode": {"type": "string", "enum": ["read", "write"]}}}, "effect": "write"},
     {"name": "files.unshare", "description": "Stop sharing a folder with people (everyone when people is empty). Copies they already have stay with them.",

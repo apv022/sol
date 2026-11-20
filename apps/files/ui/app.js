@@ -315,17 +315,17 @@ function conflictsView() {
 
 function syncView() {
   const s = state.status;
-  if (!s) return html`<div class="skeleton" style="height:10rem"></div>`;
+  if (!s) return html`<div class="skeleton tall"></div>`;
   return html`<div class="head"><h1 class="large-title">Sync</h1>${phoneQ.matches ? syncPill() : ''}</div>
     <h2>Devices</h2>
     <sol-list>${s.devices.map((d) => html`<div class="dev" data-item><sol-icon name="${d.anchor ? 'device' : 'phone'}"></sol-icon>
       <div class="grow"><div class="title">${d.name}${d.self ? ' (this device)' : ''}</div>
       <small>${d.entries} changes${d.last_entry ? ' · last ' + new Date(d.last_entry).toLocaleString() : ''}</small></div>
       <span class="badge ${d.online ? 'sun' : ''}">${d.online ? 'Online' : 'Offline'}</span></div>`)}</sol-list>
-    <h2 style="margin-top: var(--space-6)">This device</h2>
+    <h2 class="gap-above">This device</h2>
     <dl class="kv"><dt>Folder</dt><dd>${s.folder}</dd><dt>Files</dt><dd>${s.files}</dd><dt>Watching</dt><dd>${s.watcher === 'inotify' ? 'live (inotify)' : 'full scan every few seconds'}</dd>
     <dt>Waiting to sync</dt><dd>${s.pending}</dd>${s.last_error ? html`<dt>Last problem</dt><dd>${s.last_error}</dd>` : ''}</dl>
-    ${s.skipped.length ? html`<h2 class="group-title" style="margin-top: var(--space-6)">Not synced</h2><p class="muted">These names or changes cannot be synced everywhere:</p>
+    ${s.skipped.length ? html`<h2 class="group-title gap-above">Not synced</h2><p class="muted">These names or changes cannot be synced everywhere:</p>
       <sol-list>${s.skipped.map((k) => html`<div data-item><div class="grow"><div class="title">${k.path}</div><small>${k.reason}</small></div></div>`)}</sol-list>` : ''}`;
 }
 

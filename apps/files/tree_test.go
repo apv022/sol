@@ -17,13 +17,13 @@ func put(t *Tree, dev string, seq uint64, p, blob, base string, mtime int64) {
 
 func TestPathValidation(t *testing.T) {
 	bad := []string{"CON", "aux.txt", "dir/NUL", "com1", "LPT9.log", "a:b", `a"b`, "a<b", "a>b", "a|b", "a?b", "a*b", `a\b`,
-		"trail.", "trail /x", "a/../b", "/abs", "a//b", "", ".sol", ".sol/x", "tab\tname", strings.Repeat("x", 300)}
+		"trail.", "trail /x", "a/../b", "/abs", "a//b", "", ".sol", ".sol/x", ".sol/themes", ".sol/themes/a.txt", ".sol/themes/A.css", ".sol/theme-settings.json", "tab\tname", strings.Repeat("x", 300)}
 	for _, p := range bad {
 		if err := ValidatePath(p, false); err == nil {
 			t.Errorf("ValidatePath(%q) accepted", p)
 		}
 	}
-	good := []string{"a", "Notes/ideas.md", "COM10", "日本語/ファイル.txt", "a b/c d", ".hidden", "CONSOLE"}
+	good := []string{"a", "Notes/ideas.md", "COM10", "日本語/ファイル.txt", "a b/c d", ".hidden", "CONSOLE", ".sol/theme", ".sol/themes/paper.css"}
 	for _, p := range good {
 		if err := ValidatePath(p, false); err != nil {
 			t.Errorf("ValidatePath(%q): %v", p, err)

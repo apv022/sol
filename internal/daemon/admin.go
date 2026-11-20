@@ -466,7 +466,10 @@ func (d *Daemon) adminHandler() http.Handler {
 			sol.WriteError(w, err)
 			return
 		}
-		out, err := d.API.CallAs(r.Context(), "", c)
+		out, ok, err := d.callSol(r.Context(), c)
+		if !ok {
+			out, err = d.API.CallAs(r.Context(), "", c)
+		}
 		if err != nil {
 			sol.WriteError(w, err)
 			return
@@ -476,7 +479,7 @@ func (d *Daemon) adminHandler() http.Handler {
 	})
 
 	// Agents.
-	j("GET /admin/v1/agents", "", func(r *http.Request) (any, error) { return d.agents.all(), nil })
+	j("GET /admin/v1/agents", "", func(r *http.Request) (any, error) { return d.AllAgents(), nil })
 	j("POST /admin/v1/agents", "agents.issue", func(r *http.Request) (any, error) {
 		if err := tokenOnly(r); err != nil {
 			return nil, err // the key file is written where the agent runs: the CLI's job

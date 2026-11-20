@@ -209,3 +209,36 @@ func TestDoExitCodes(t *testing.T) {
 		t.Fatalf("action help: %d", code)
 	}
 }
+
+func TestRenderColumnsHintAndFormats(t *testing.T) {
+	in := `[{"name":"a.txt","path":"/a.txt","type":"file","size":1536,"mtime":1700000000000,"blob":"sha256:x","kept":true},` +
+		`{"name":"d","path":"/d","type":"dir","size":0,"mtime":0,"blob":"","kept":false}]`
+	var b bytes.Buffer
+	if err := RenderColumns(&b, []byte(in), []string{"name", "size", "mtime", "nope"}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	if f := strings.Fields(lines[0]); strings.Join(f, " ") != "NAME SIZE MTIME" {
+		t.Errorf("header %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "1.5 KiB") || !strings.Contains(lines[1], "2023-11-1") {
+		t.Errorf("row %q", lines[1])
+	}
+	if strings.Contains(lines[2], "1970") {
+		t.Errorf("a zero time is not a date: %q", lines[2])
+	}
+	// No hint: the first five scalar fields.
+	b.Reset()
+	if err := Render(&b, []byte(in)); err != nil {
+		t.Fatal(err)
+	}
+	if h := strings.Fields(strings.SplitN(b.String(), "\n", 2)[0]); strings.Join(h, " ") != "NAME PATH TYPE SIZE MTIME" {
+		t.Errorf("default header %v", h)
+	}
+	// A hint that matches nothing in a table falls back to the default.
+	b.Reset()
+	_ = RenderColumns(&b, []byte(`[{"a":1,"b":2}]`), []string{"zzz"})
+	if !strings.HasPrefix(b.String(), "A  B") {
+		t.Errorf("fallback %q", b.String())
+	}
+}

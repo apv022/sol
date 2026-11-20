@@ -2,9 +2,12 @@ package faultnet
 
 import (
 	"bufio"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha3"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,12 +35,21 @@ import (
 //   - reads the torrc it is given (SocksPort, ControlPort, CookieAuthFile),
 //     writes the cookie, and answers AUTHENTICATE, TAKEOWNERSHIP, GETINFO
 //     status/bootstrap-phase, ADD_ONION, DEL_ONION, ONION_CLIENT_AUTH_ADD /
-//     _REMOVE, HSFETCH and SETEVENTS;
+//     _REMOVE, HSFETCH, SETEVENTS and SIGNAL;
+//   - gives every onion a real v3 address (checksum and version byte), and
+//     enforces client authorization: an onion published with ClientAuthV3
+//     keys is reached only through a fake tor that holds a matching private
+//     key (ONION_CLIENT_AUTH_ADD), else SOCKS fails with 0xF4 or 0xF5, as tor
+//     does;
 //   - exits when the control connection that took ownership closes, or when
 //     the process that owns it is gone;
 //   - carries SOCKS connections to "<id>.onion" to the target of the fake
 //     tor that published that onion (all fake tors sharing one directory
 //     form a tiny "Tor network"), while that fake tor is alive.
+//
+// Every control command that changes onions or circuits is logged
+// (FakeTor.Commands, never with key material), so a test can check what was
+// sent: how often an onion was re-added, and that NEWNYM never was.
 //
 // What a test scripts, per launch (TorPlan): where bootstrap stalls, when
 // the process exits, when the control port drops or freezes, and whether
@@ -113,6 +126,14 @@ func (f *FakeTor) Script(plans ...TorPlan) {
 	os.Rename(tmp, filepath.Join(f.dir, "script.json"))
 }
 
+// Commands returns the logged control commands of every fake tor of this
+// directory, in order: "<pid> ADD_ONION <sid> auth=<n>", "<pid> DEL_ONION <sid>",
+// "<pid> CLIENT_AUTH_ADD <sid>", "<pid> CLIENT_AUTH_REMOVE <sid>", "<pid> SIGNAL <name>".
+func (f *FakeTor) Commands() []string {
+	b, _ := os.ReadFile(filepath.Join(f.dir, "commands"))
+	return strings.FieldsFunc(string(b), func(r rune) bool { return r == '\n' })
+}
+
 // Launches reports how many times the fake tor has been started.
 func (f *FakeTor) Launches() int {
 	b, _ := os.ReadFile(filepath.Join(f.dir, "launches"))
@@ -171,6 +192,7 @@ type fakeTor struct {
 
 	mu      sync.Mutex
 	onions  map[string]string // service id -> target
+	clients map[string]string // service id -> client-auth public key held for it (base32)
 	conns   map[net.Conn]struct{}
 	events  []*textproto.Conn        // connections that asked for HS_DESC events
 	fetched map[string]chan struct{} // StuckFetch: closed once HSFETCH asked for the onion
@@ -220,7 +242,7 @@ func runFakeTor(dir string, args []string) int {
 	if b, err := os.ReadFile(filepath.Join(dir, "script.json")); err == nil {
 		json.Unmarshal(b, &script)
 	}
-	ft := &fakeTor{dir: dir, t0: time.Now(), onions: map[string]string{}, conns: map[net.Conn]struct{}{}, exit: make(chan int, 4)}
+	ft := &fakeTor{dir: dir, t0: time.Now(), onions: map[string]string{}, clients: map[string]string{}, conns: map[net.Conn]struct{}{}, exit: make(chan int, 4)}
 	if len(script.Plans) > 0 {
 		i := min(max(n-script.From, 0), len(script.Plans)-1)
 		ft.plan = script.Plans[i]
@@ -315,6 +337,25 @@ func (ft *fakeTor) hung() bool {
 
 func (ft *fakeTor) onionFile(sid string) string { return filepath.Join(ft.dir, "onions", sid) }
 
+var onionB32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// onionID is the v3 service id of a 32-byte public key: base32 of pubkey | checksum |
+// version, checksum = SHA3-256(".onion checksum" | pubkey | version)[:2].
+func onionID(pub []byte) string {
+	sum := sha3.Sum256(slices.Concat([]byte(".onion checksum"), pub, []byte{3}))
+	return strings.ToLower(onionB32.EncodeToString(slices.Concat(pub, sum[:2], []byte{3})))
+}
+
+// logCommand appends one line to the directory's command log.
+func (ft *fakeTor) logCommand(line string) {
+	f, err := os.OpenFile(filepath.Join(ft.dir, "commands"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "%d %s\n", os.Getpid(), line)
+	f.Close()
+}
+
 func (ft *fakeTor) forgetOnions() {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -363,7 +404,29 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 		}
 		cmd, rest, _ := strings.Cut(line, " ")
 		switch strings.ToUpper(cmd) {
-		case "AUTHENTICATE", "ONION_CLIENT_AUTH_ADD", "ONION_CLIENT_AUTH_REMOVE":
+		case "AUTHENTICATE":
+			reply("250 OK")
+		case "ONION_CLIENT_AUTH_ADD":
+			f := append(strings.Fields(rest), "", "")
+			raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(f[1], "x25519:"))
+			priv, kerr := ecdh.X25519().NewPrivateKey(raw)
+			if f[0] == "" || err != nil || kerr != nil {
+				reply("512 Invalid v3 x25519 private key")
+				continue
+			}
+			ft.mu.Lock()
+			ft.clients[f[0]] = onionB32.EncodeToString(priv.PublicKey().Bytes())
+			ft.mu.Unlock()
+			ft.logCommand("CLIENT_AUTH_ADD " + f[0])
+			reply("250 OK")
+		case "ONION_CLIENT_AUTH_REMOVE":
+			ft.mu.Lock()
+			delete(ft.clients, rest)
+			ft.mu.Unlock()
+			ft.logCommand("CLIENT_AUTH_REMOVE " + rest)
+			reply("250 OK")
+		case "SIGNAL":
+			ft.logCommand("SIGNAL " + rest)
 			reply("250 OK")
 		case "TAKEOWNERSHIP":
 			owner = true
@@ -412,7 +475,7 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 				reply("512 Bad arguments to ADD_ONION")
 				continue
 			}
-			key, target, isNew := f[0], "", strings.HasPrefix(f[0], "NEW:")
+			key, target, isNew, auth := f[0], "", strings.HasPrefix(f[0], "NEW:"), []string{}
 			if isNew {
 				raw := make([]byte, 32)
 				rand.Read(raw)
@@ -422,19 +485,23 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 				if v, ok := strings.CutPrefix(a, "Port="); ok {
 					_, target, _ = strings.Cut(v, ",")
 				}
+				if v, ok := strings.CutPrefix(a, "ClientAuthV3="); ok {
+					auth = append(auth, v)
+				}
 			}
 			if strings.Contains(rest, "ClientAuthV3=") && !strings.Contains(rest, "Flags=V3Auth") {
 				reply("512 No auth type specified")
 				continue
 			}
 			sum := sha256.Sum256([]byte(key))
-			sid := strings.ToLower(base32.StdEncoding.EncodeToString(sum[:]))[:52] + "fake"
+			sid := onionID(sum[:])
 			ft.mu.Lock()
 			ft.onions[sid] = target
 			ft.mu.Unlock()
 			if !ft.plan.NoUpload {
-				os.WriteFile(ft.onionFile(sid), []byte(fmt.Sprintf("%d %s", os.Getpid(), target)), 0o600)
+				os.WriteFile(ft.onionFile(sid), []byte(fmt.Sprintf("%d %s %s", os.Getpid(), target, strings.Join(auth, ","))), 0o600)
 			}
+			ft.logCommand(fmt.Sprintf("ADD_ONION %s auth=%d", sid, len(auth)))
 			reply("250-ServiceID=%s", sid)
 			if isNew {
 				reply("250-PrivateKey=%s", key)
@@ -453,6 +520,7 @@ func (ft *fakeTor) serveControl(c net.Conn) {
 			}
 			ft.mu.Unlock()
 		case "DEL_ONION":
+			ft.logCommand("DEL_ONION " + rest)
 			ft.mu.Lock()
 			delete(ft.onions, rest)
 			ft.mu.Unlock()
@@ -547,11 +615,25 @@ func (ft *fakeTor) serveSOCKS(ln net.Listener) {
 			}
 			// The onion is up while the fake tor that published it is alive.
 			b, err := os.ReadFile(ft.onionFile(sid))
-			pidStr, addr, _ := strings.Cut(string(b), " ")
+			pidStr, rest, _ := strings.Cut(string(b), " ")
+			addr, authList, _ := strings.Cut(rest, " ")
 			pid, _ := strconv.Atoi(pidStr)
 			if err != nil || !alive(pid) {
 				fail(0xF0) // descriptor not found
 				return
+			}
+			if authList != "" {
+				ft.mu.Lock()
+				have := ft.clients[sid]
+				ft.mu.Unlock()
+				switch {
+				case have == "":
+					fail(0xF4) // client authorization missing
+					return
+				case !slices.Contains(strings.Split(authList, ","), have):
+					fail(0xF5) // client authorization wrong
+					return
+				}
 			}
 			out, err := net.DialTimeout("tcp", addr, 5*time.Second)
 			if err != nil {

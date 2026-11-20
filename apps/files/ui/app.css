@@ -97,3 +97,7 @@ sol-dialog > dialog { width: min(46rem, calc(100vw - 1rem)); }
   .selbar button { flex-direction: column; gap: 2px; min-height: 48px; font-size: 10px; padding: 0 var(--space-2); }
   .selbar sol-icon { --size: 22px; }
 }
+
+/* Stand-ins for inline styles (app origins' CSP forbids style attributes). */
+.skeleton.tall { height: 10rem; }
+.gap-above { margin-top: var(--space-6); }

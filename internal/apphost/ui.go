@@ -19,10 +19,13 @@ import (
 	"github.com/apv022/sol/sdk/go/sol"
 )
 
-// CSP is the Content-Security-Policy of every app origin (design/UI.md "Themes", Safety).
-// Inline styles stay allowed (UIs set them from JS); scripts never run inline or from eval.
+// CSP is the Content-Security-Policy of every app origin and the UI root (design/UI.md
+// "Themes", Safety). Scripts never run inline or from eval, and styles come only from the
+// origin's own stylesheets: no style attributes or <style> elements in markup, so injected
+// markup can't restyle a page either. UIs set computed values through the CSSOM
+// (element.style.setProperty, which the policy allows) or sol.js's data-var-* attributes.
 const CSP = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; " +
-	"style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	"style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
 var themeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 

@@ -161,4 +161,7 @@ open app swaps the stylesheet live, with no reload.
 **Safety:** themes are CSS only (no scripts). Every app origin's Content-Security-Policy allows
 fonts and images only from the same origin and `data:`, so a theme can't load anything from the
 network or leak what you look at. Themes received from other people are listed but not applied
-until you choose them.
+until you choose them. Styles come only from the origin's own stylesheets (`style-src 'self'`, on
+app origins and the UI root alike): UI markup has no `style` attributes or `<style>` elements,
+so injected markup can't restyle a page. UIs use classes, the CSSOM (`element.style.setProperty`)
+or `data-var-<name>="v"`, which sol.js `render` turns into the custom property `--<name>`.
