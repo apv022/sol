@@ -27,5 +27,6 @@ you have unsaved changes).
 ## Tests
 
 ```sh
-go test -race ./apps/notes/     # includes node --test test/md.test.mjs when node is installed
+go test -race ./apps/notes/     # Go tests
+# Renderer tests: `python3 -m http.server` in the repo root, open /apps/notes/test/index.html
 ```

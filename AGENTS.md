@@ -22,7 +22,8 @@ make build   # bin/sol
 2. **Apps use only the app API.** Code under `apps/` imports the stdlib and `sdk/go/...`, never
    `internal/`. If an app needs something the API lacks, change `design/API.md` first.
 3. **No third-party Go dependencies.** The one exception is `wireguard-go` in the daemon. No
-   npm, no build step for UIs: plain JS modules and `ui/kit`.
+   Node.js anywhere (not even for tests), no npm, no build step for UIs: plain JS modules and
+   `ui/kit`. Browser JS is tested in a browser with `ui/kit/testing.js` (`<suite>/test/index.html`).
 4. **Agent first.** Every user-visible operation is an action in the app's manifest, reachable
    from `sol do` with `--json`, `--dry-run` and generated `--help`. The CLI is the agent
    interface (no MCP). A button that isn't an action is a bug.

@@ -1,5 +1,5 @@
-// Smoke test for sol.js against a fetch stub. Run: node sdk/js/test/sol.test.mjs
-import assert from 'node:assert/strict';
+// Smoke test for sol.js against a fetch stub. Open sdk/js/test/index.html in a browser.
+import { assert } from '../../../ui/kit/testing.js';
 import * as sol from '../sol.js';
 
 const calls = [];
@@ -39,7 +39,7 @@ assert.equal(sol.esc('<a href="x">&\'</a>'), '&lt;a href=&quot;x&quot;&gt;&amp;&
 const evil = '<img onerror=x>';
 assert.equal(String(sol.html`<p>${evil}</p>`), '<p>&lt;img onerror=x&gt;</p>');
 assert.equal(String(sol.html`<ul>${['a', '<b>'].map((x) => sol.html`<li>${x}</li>`)}</ul>`), '<ul><li>a</li><li>&lt;b&gt;</li></ul>');
-console.log('sol.js ok');
+void ('sol.js ok');
 
 // Theme swap logic against a tiny DOM stub.
 function fakeDoc() {
@@ -119,4 +119,4 @@ function fakeDoc() {
   doc.links[0].fire('load');
   assert.deepEqual(await got, { settings: { density: 'compact' } });
 }
-console.log('theme ok');
+void ('theme ok');

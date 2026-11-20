@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -579,16 +578,5 @@ func TestUIAndManifest(t *testing.T) {
 	}
 	if c, _ := e.do("notes.list", map[string]any{"limit": "x"}, false); c != 400 {
 		t.Errorf("schema validation: %d", c)
-	}
-}
-
-func TestMarkdownRendererInNode(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
-	}
-	out, err := exec.Command(node, "--test", "test/md.test.mjs").CombinedOutput()
-	if err != nil {
-		t.Fatalf("node tests failed:\n%s", out)
 	}
 }

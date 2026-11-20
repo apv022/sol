@@ -31,6 +31,8 @@ type body struct {
 	Mtime int64  `json:"mtime,omitempty"` // Unix milliseconds
 	Base  string `json:"base,omitempty"`  // the blob this edit started from, or empty
 	Dev   string `json:"dev,omitempty"`   // device name, for conflict copy names
+	// Also lists further blobs this put supersedes: a merge of two concurrent edits replaces both.
+	Also []string `json:"also,omitempty"`
 
 	// share ops
 	ID     string   `json:"id,omitempty"`
@@ -47,6 +49,7 @@ type version struct {
 	Device string // device id of the author (tie-break)
 	Dev    string // device name (conflict copy names)
 	From   string // person to fetch the blob from ("" means my own devices)
+	Base   string // the blob this edit started from (merging needs it)
 	seq    uint64
 }
 
@@ -94,7 +97,7 @@ func (t *Tree) Apply(device, from string, seq uint64, b body) {
 		if ValidatePath(b.Path, false) != nil || !sol.ValidHash(b.Blob) {
 			return
 		}
-		t.put(b.Path, version{Blob: b.Blob, Size: b.Size, Mtime: b.Mtime, Device: device, Dev: b.Dev, From: from, seq: seq}, b.Base)
+		t.put(b.Path, version{Blob: b.Blob, Size: b.Size, Mtime: b.Mtime, Device: device, Dev: b.Dev, From: from, Base: b.Base, seq: seq}, b.Base, b.Also...)
 	case opDelete:
 		if ValidatePath(b.Path, false) != nil {
 			return
@@ -114,11 +117,17 @@ func (t *Tree) Apply(device, from string, seq uint64, b body) {
 	}
 }
 
-func (t *Tree) put(p string, v version, base string) {
+func (t *Tree) put(p string, v version, base string, also ...string) {
 	var keep []version
+next:
 	for _, h := range t.files[p] {
 		if h.Blob == v.Blob || (base != "" && h.Blob == base) {
 			continue
+		}
+		for _, o := range also {
+			if o == h.Blob {
+				continue next
+			}
 		}
 		keep = append(keep, h)
 	}

@@ -1,6 +1,5 @@
-// Tests for ui/md.js. Run with: node --test apps/notes/test
-import test from 'node:test';
-import assert from 'node:assert/strict';
+// Tests for ui/md.js. Open apps/notes/test/index.html in a browser.
+import { test, assert } from '../../../ui/kit/testing.js';
 import { render, renderInline, safeUrl, escapeHtml } from '../ui/md.js';
 
 const has = (h, s) => assert.ok(h.includes(s), `expected ${JSON.stringify(s)} in ${h}`);

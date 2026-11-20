@@ -256,6 +256,9 @@ func (a *App) onRetry(ctx context.Context) {
 // afterPull posts an Inbox notice for each newly seen conflict. Only my first device (by id)
 // posts, so one conflict makes one notice.
 func (a *App) afterPull(ctx context.Context) {
+	if a.tryMerges(ctx) {
+		return // the merge's own pull runs afterPull again with the new state
+	}
 	v := a.getView()
 	a.mu.RLock()
 	var fresh []conflictInfo

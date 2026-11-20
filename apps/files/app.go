@@ -96,17 +96,18 @@ type App struct {
 	rev       uint64
 	view      *view
 
-	index    map[string]idxEntry
-	keep     map[string]bool
-	dirsMade map[string]bool
-	noticed  map[string]bool
-	skipped  map[string]string
-	pending  map[string]bool
-	pullErr  bool
-	lastErr  string
-	busy     int
-	stats    Stats
-	saveT    *time.Timer
+	index      map[string]idxEntry
+	keep       map[string]bool
+	dirsMade   map[string]bool
+	noticed    map[string]bool
+	mergeTried map[string]bool // conflicts already given a merge attempt (key: conflictKey)
+	skipped    map[string]string
+	pending    map[string]bool
+	pullErr    bool
+	lastErr    string
+	busy       int
+	stats      Stats
+	saveT      *time.Timer
 
 	ign ignorer
 
@@ -170,7 +171,7 @@ func New(api sol.API, cfg Config) *App {
 		own: NewTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{},
 		cursors: map[string]uint64{}, dirty: map[string]bool{}, petnames: map[string]string{},
 		devStats: map[string]*devStat{}, index: map[string]idxEntry{}, keep: map[string]bool{}, dirsMade: map[string]bool{},
-		noticed: map[string]bool{}, skipped: map[string]string{}, pending: map[string]bool{},
+		noticed: map[string]bool{}, mergeTried: map[string]bool{}, skipped: map[string]string{}, pending: map[string]bool{},
 		wake: make(chan struct{}, 1), fsq: make(chan string, 256)}
 	a.handler = a.buildHandler()
 	return a

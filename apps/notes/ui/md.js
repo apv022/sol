@@ -1,6 +1,6 @@
 // A small Markdown renderer for Notes: a CommonMark subset (headings, emphasis, code spans and
 // blocks, lists, task lists, blockquotes, links, images, tables, rules) plus [[wiki links]] and
-// #tags. It has no dependencies and runs in the browser and in node (the tests).
+// #tags. It has no dependencies and runs in the browser (tests: apps/notes/test/index.html).
 //
 // Safety is the point of the design: raw HTML in the source is never passed through. Every piece
 // of source text reaches the output through escapeHtml, every URL through safeUrl (http, https,
