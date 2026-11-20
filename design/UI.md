@@ -118,3 +118,46 @@ few pixels and the icons settle in on first load. All of it switches off under
 Plain, short, sentence case, active verbs. A button says what happens ("Share", "Move to Trash");
 the toast after it uses the same word ("Shared"). Empty states invite an action ("Drop files
 here or tap + to add some"). Errors say what happened and what to do, without apologising.
+
+## Themes: make it yours
+
+The look above is only the default theme. Sol's look is a public, stable contract (the token
+names in this file), and anything that sets those tokens is a theme. Apps may only style through
+tokens and kit components, so a theme restyles every app at once, including third-party ones.
+
+**Four levels, from a click to full control:**
+
+1. **Settings** in the Sol app: light / dark / auto, accent colour (any colour; the kit derives
+   hover, pressed and on-accent shades), density (comfortable / compact), corner style (rounded /
+   square), glass on or off ("reduce transparency"), font (system, Inter, a monospace font, or any
+   font file you add), and the home wallpaper (any image from your files).
+2. **Built-in themes** to start from: *Sol* (the default above), *Graphite* (neutral, no gold),
+   *Terminal* (monospace, flat, dark, high contrast; for the vim crowd), *Paper* (light,
+   warm, low glass).
+3. **Your own theme file**: one CSS file that overrides tokens, with a short header:
+   ```css
+   /* @theme   Solarvim
+      @author  APV
+      @supports light dark */
+   :root { --tint: #b58900; --font-ui: "Iosevka", monospace; --radius-control: 2px; }
+   @media (prefers-color-scheme: dark) { :root { --canvas: #002b36; --surface: #073642; } }
+   ```
+4. **Deep hacking**: the same file may contain any CSS, including per-app rules
+   (`[data-app="music"] .now-playing { … }`) and component overrides. The kit documents its
+   class names and `data-` hooks as part of the contract.
+
+**Where themes live:** `SolDrive/.sol/themes/*.css`. Because that is inside the synced folder,
+your theme follows you to every device, and you can share a theme with a friend by sharing the
+folder or sending the file.
+
+**How it reaches apps:** the daemon serves the active theme at `/_sol/theme.css` on every app
+origin; `kit.css` loads it last. Changing the theme (or editing the file) pushes an event and every
+open app swaps the stylesheet live, with no reload.
+
+**Agent first, like everything:** `sol do theme.list`, `theme.set`, `theme.preview`,
+`theme.settings` (accent, density, glass, font, wallpaper).
+
+**Safety:** themes are CSS only (no scripts). Every app origin's Content-Security-Policy allows
+fonts and images only from the same origin and `data:`, so a theme can't load anything from the
+network or leak what you look at. Themes received from other people are listed but not applied
+until you choose them.

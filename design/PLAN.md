@@ -72,7 +72,7 @@ Status: `todo` · `doing` · `done`.
 | ID | Ticket | Status |
 |---|---|---|
 | A1 | `sdk/go/sol` client + `memsol` fake (whole API.md) + CRDTs (LWW map, list, block text) with tests; `sdk/js/sol.js` + `crdt.js`; `ui/kit` (tokens, base components, dark/light) | done |
-| A1c | UI kit v2 to design/UI.md: tokens, Inter fallback font vendored, Apple-style components (shell, grouped lists, sheets, menus, segmented, toggles, squircle icons, widgets, dock), demo page; then restyle Files to it | todo |
+| A1c | UI kit v2 to design/UI.md: tokens, Inter fallback font vendored, Apple-style components (shell, grouped lists, sheets, menus, segmented, toggles, squircle icons, widgets, dock), demo page; theming per UI.md "Themes" (token contract doc, 4 built-in themes, theme file loading + live swap in kit/sol.js, settings tokens: accent derivation, density, radius, glass, font); then restyle Files to it | todo |
 | A2 | Files: the synced folder (design/apps/FILES.md): watch + scan, tree feed, blobs, conflict copies, keep-on-device vs online-only folders, share a subfolder, peers' shared folders, UI + actions | done |
 | A3 | Notes: Markdown editor over `.md` files in the synced folder (`Notes/`): live preview, `[[wiki links]]` + backlinks, tags, fast full-text search, checklists, images from the folder; phone-first; actions + UI | doing |
 | A2b | Files: three-way merge for text files (line-based diff3 against the entry's `base`, stdlib Myers diff); conflict copy only for overlapping edits | todo |

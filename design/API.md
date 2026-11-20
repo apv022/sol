@@ -263,6 +263,10 @@ socket with caller headers (always `Sol-Self: 1`; the UI is mine). The path `/_s
 origin is reserved: it is the bridge `sol.js` uses to call this API with the app's own token,
 after the daemon checks the `Host` and `Origin` headers.
 
+`/_sol/theme.css` on every app origin is the active theme (design/UI.md "Themes"); a
+`theme` event on the events stream tells open UIs to swap it live. `sol.js` and `kit.css` handle
+this, so apps do nothing.
+
 A peer's app is opened locally the same way: `http://<app>.<petname>.localhost:<port>/` is
 proxied to that person's app over Sol.
 
