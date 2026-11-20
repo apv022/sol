@@ -81,6 +81,7 @@ Status: `todo` · `doing` · `done`.
 | A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
 | A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | done |
+| A7c | Android follow-ups: test pair/error/paste paths and "Start new" on the emulator; `sol run` on a joining device prints an empty name until joined (show "joining…"); shorten join/pair links (≈600 chars today; QR needs short) e.g. carry only the device's endpoint record digest + one address and fetch the rest after the handshake; test arm64 build on a real Pixel | todo |
 | A8 | Tasks: tasks and lists as feed records (LWW map per task), due dates, today/upcoming, reminders via Inbox, shared lists; export/import Markdown checklists | todo |
 | A9 | Calendar: events as feed records, month/week/agenda, invites to contacts; export/import `.ics` | todo |
 | A10 | Movies: video library, posters, resume, streaming to peers (transcoding decision first) | todo |

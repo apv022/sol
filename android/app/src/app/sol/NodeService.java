@@ -42,6 +42,10 @@ public class NodeService extends Service {
     static final String EXTRA_NAME = "name";
     /** The UI port the node is told to serve on. */
     static final int PORT = 7777;
+    /** String extra: "join" makes the first run `init --join` (a device of an existing person). */
+    static final String EXTRA_MODE = "mode";
+    /** String extra: this device's name for a join (default: the phone model). */
+    static final String EXTRA_DEVICE = "device";
 
     private static final String TAG = "Sol";
     private static final String CHANNEL = "node";
@@ -68,6 +72,9 @@ public class NodeService extends Service {
     /** True while the node reports that it is serving. */
     static boolean isReady() { return ready; }
 
+    /** Alias of {@link #isReady()} for callers that wait on it. */
+    static boolean ready() { return ready; }
+
     @Override
     public IBinder onBind(Intent i) { return null; }
 
@@ -84,8 +91,11 @@ public class NodeService extends Service {
         } else {
             startForeground(NOTE_ID, n);
         }
-        if (in != null && in.hasExtra(EXTRA_NAME)) {
-            getSharedPreferences("sol", MODE_PRIVATE).edit().putString(EXTRA_NAME, in.getStringExtra(EXTRA_NAME)).apply();
+        if (in != null && (in.hasExtra(EXTRA_NAME) || in.hasExtra(EXTRA_MODE))) {
+            getSharedPreferences("sol", MODE_PRIVATE).edit()
+                    .putString(EXTRA_NAME, in.getStringExtra(EXTRA_NAME))
+                    .putString(EXTRA_MODE, in.getStringExtra(EXTRA_MODE))
+                    .putString(EXTRA_DEVICE, in.getStringExtra(EXTRA_DEVICE)).apply();
         }
         watchNetwork();
         synchronized (this) {
@@ -117,15 +127,22 @@ public class NodeService extends Service {
     /** Runs init once, then keeps `run` alive with a growing delay between crashes. */
     private void supervise() {
         if (!initialised(this)) {
-            String name = getSharedPreferences("sol", MODE_PRIVATE).getString(EXTRA_NAME, "");
-            if (name.isEmpty()) { // nothing to init with: the activity asks for a name first
-                note("Waiting for a name");
+            SharedPreferences sp = getSharedPreferences("sol", MODE_PRIVATE);
+            String name = sp.getString(EXTRA_NAME, "");
+            boolean join = "join".equals(sp.getString(EXTRA_MODE, ""));
+            if (name == null || (name.isEmpty() && !join)) { // nothing to init with: the activity asks first
+                note("Waiting for setup");
                 return;
             }
+            String device = sp.getString(EXTRA_DEVICE, "");
+            if (device == null || device.isEmpty()) device = Build.MODEL;
             driveDir(this).mkdirs();
-            int rc = runOnce("init", "--dir", dataDir(this).getAbsolutePath(), "--name", name,
-                    "--device", Build.MODEL, "--files", driveDir(this).getAbsolutePath(),
-                    "--ui", "127.0.0.1:" + PORT, "--transport", "direct");
+            int rc = join
+                    ? runOnce("init", "--dir", dataDir(this).getAbsolutePath(), "--join", "--device", device,
+                            "--files", driveDir(this).getAbsolutePath(), "--ui", "127.0.0.1:" + PORT, "--transport", "direct")
+                    : runOnce("init", "--dir", dataDir(this).getAbsolutePath(), "--name", name,
+                            "--device", device, "--files", driveDir(this).getAbsolutePath(),
+                            "--ui", "127.0.0.1:" + PORT, "--transport", "direct");
             if (rc != 0 || !initialised(this)) {
                 note("Setup failed");
                 return;
@@ -175,6 +192,34 @@ public class NodeService extends Service {
             return -1;
         } catch (InterruptedException e) {
             return -1;
+        }
+    }
+
+    /**
+     * Runs a short `libsol.so` command (such as `pair <link>`) against this device's node and
+     * returns its exit code and combined output, which is user-facing text. The link is passed as
+     * an argument and never logged.
+     */
+    static String[] cli(Context c, String... args) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(c.getApplicationInfo().nativeLibraryDir + "/libsol.so");
+        cmd.add(args[0]);
+        cmd.add("--dir");
+        cmd.add(dataDir(c).getAbsolutePath());
+        for (int i = 1; i < args.length; i++) cmd.add(args[i]);
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+        pb.environment().put("HOME", c.getFilesDir().getAbsolutePath());
+        pb.environment().put("TMPDIR", c.getCacheDir().getAbsolutePath());
+        try {
+            Process p = pb.start();
+            StringBuilder out = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = r.readLine()) != null) out.append(line).append('\n');
+            }
+            return new String[]{String.valueOf(p.waitFor()), out.toString().trim()};
+        } catch (IOException | InterruptedException e) {
+            return new String[]{"-1", "cannot run the node: " + e.getMessage()};
         }
     }
 

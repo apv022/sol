@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
     private String pendingUrl;
     private boolean loaded;
     private final BroadcastReceiver readyReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context c, Intent i) { showWeb(); }
+        @Override public void onReceive(Context c, Intent i) { if (!joinPending() && setup == null) showWeb(); }
     };
 
     @Override
@@ -83,6 +83,12 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent in) {
         super.onNewIntent(in);
         setIntent(in);
+        Uri link = solLink(in);
+        if (link != null) {
+            if (!NodeService.initialised(this) || joinPending()) start(in);
+            else { buildWeb(); handleLink(link); }
+            return;
+        }
         handleShare(in);
     }
 
@@ -96,41 +102,173 @@ public class MainActivity extends Activity {
     private void start(Intent in) {
         boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         String name = in.getStringExtra(NodeService.EXTRA_NAME);
-        if (!NodeService.initialised(this) && (name == null || !debuggable)) {
-            // A debug build accepts `--es name X` so tests can skip the form.
-            name = null;
-            showSetup();
+        Uri link = solLink(in);
+        if (!NodeService.initialised(this)) {
+            if (name != null && debuggable) { // a debug build accepts `--es name X` so tests can skip the form
+                startNode(name, null, null);
+                buildWeb();
+                handleShare(in);
+                return;
+            }
+            if (link != null && "join".equals(link.getHost())) {
+                showJoin(link.toString(), true); // a fresh install opened from a join link: straight in
+            } else {
+                if (link != null) pendingLink = link.toString(); // a pair link waits for setup
+                showWelcome();
+            }
             return;
         }
-        startNode(name);
+        if (joinPending()) {
+            showJoin(link != null && "join".equals(link.getHost()) ? link.toString() : null,
+                    link != null && "join".equals(link.getHost()));
+            return;
+        }
+        startNode(null, null, null);
         buildWeb();
         handleShare(in);
         if (NodeService.isReady()) showWeb();
+        if (link != null) handleLink(link);
     }
 
-    private void startNode(String name) {
+    private void startNode(String name, String mode, String device) {
         Intent s = new Intent(this, NodeService.class);
-        if (name != null) s.putExtra(NodeService.EXTRA_NAME, name);
+        if (name != null || mode != null) {
+            s.putExtra(NodeService.EXTRA_NAME, name == null ? "" : name);
+            s.putExtra(NodeService.EXTRA_MODE, mode == null ? "" : mode);
+            s.putExtra(NodeService.EXTRA_DEVICE, device == null ? "" : device);
+        }
         startForegroundService(s);
     }
 
+    // ---- links (sol://join and sol://pair) ----
+
+    private static Uri solLink(Intent in) {
+        Uri u = Intent.ACTION_VIEW.equals(in.getAction()) ? in.getData() : null;
+        return u != null && "sol".equals(u.getScheme()) && ("join".equals(u.getHost()) || "pair".equals(u.getHost())) ? u : null;
+    }
+
+    /** True from `init --join` until the join link has been redeemed. */
+    private boolean joinPending() { return getSharedPreferences("sol", MODE_PRIVATE).getBoolean("joinPending", false); }
+
+    private void setJoinPending(boolean v) { getSharedPreferences("sol", MODE_PRIVATE).edit().putBoolean("joinPending", v).apply(); }
+
+    /** A link that arrived while the app runs (or after setup). */
+    private void handleLink(Uri link) {
+        setIntent(new Intent());
+        if ("join".equals(link.getHost())) {
+            if (joinPending()) showJoin(link.toString(), true);
+            else toast("This device already belongs to a Sol. Join links are for a new device.");
+            return;
+        }
+        if (joinPending()) { toast("Finish adding this device first, then open the pair link again."); return; }
+        String who = link.getQueryParameter("n");
+        String shown = who == null || who.trim().isEmpty() ? "this person" : who.trim();
+        String text = link.toString();
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Pair with " + shown + "?")
+                .setMessage("You will be able to share with each other.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Pair", (d, w) -> runPair(text, false))
+                .show();
+    }
+
+    /**
+     * Redeems a link with `libsol.so pair`, waiting for the node to serve first, and shows the CLI's
+     * own text as the result. A join then opens the launcher.
+     */
+    private void runPair(String link, boolean join) {
+        TextView status = join ? joinStatus : null;
+        if (status != null) status.setText("Joining…");
+        else toast("Pairing…");
+        if (join && joinSpinner != null) joinSpinner.setVisibility(View.VISIBLE);
+        new Thread(() -> {
+            for (int i = 0; i < 300 && !NodeService.isReady(); i++) {
+                try { Thread.sleep(100); } catch (InterruptedException e) { return; }
+            }
+            String[] r = NodeService.ready() ? NodeService.cli(this, "pair", link) : new String[]{"-1", "The node did not start."};
+            boolean ok = r[0].equals("0");
+            runOnUiThread(() -> {
+                if (join && joinSpinner != null) joinSpinner.setVisibility(View.GONE);
+                if (ok && join) {
+                    setJoinPending(false);
+                    joinedSummary(r[1], status);
+                } else if (ok) {
+                    toast(r[1]);
+                } else if (status != null) {
+                    status.setText(r[1].isEmpty() ? "Joining failed." : r[1]);
+                    joinGo.setEnabled(true);
+                } else {
+                    toast(r[1].isEmpty() ? "Pairing failed." : r[1]);
+                }
+            });
+        }, "sol-pair").start();
+    }
+
+    private void joinedSummary(String cliText, TextView status) {
+        // The CLI says "Joined. This device now belongs to <person>"; show it as "<person>'s <device>".
+        String person = cliText.contains("belongs to ") ? cliText.substring(cliText.indexOf("belongs to ") + 11).trim() : null;
+        String device = deviceField != null ? deviceField.getText().toString().trim() : Build.MODEL;
+        status.setText(person == null ? cliText : "Joined as " + person + "'s " + device);
+        root.postDelayed(() -> {
+            if (setup != null) root.removeView(setup);
+            setup = null;
+            buildWeb();
+            showWeb();
+        }, 1800);
+    }
+
+    private void toast(String t) { Toast.makeText(this, t, Toast.LENGTH_LONG).show(); }
+
     // ---- first run ----
 
-    private void showSetup() {
+    private String pendingLink;
+    private TextView joinStatus;
+    private View joinSpinner;
+    private Button joinGo;
+    private EditText deviceField;
+
+    private void show(View v) {
+        if (setup != null) root.removeView(setup);
+        setup = v;
+        root.addView(v, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private LinearLayout column(String title, String sub) {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_VERTICAL);
         int p = dp(28);
         col.setPadding(p, p, p, p);
-        TextView title = new TextView(this);
-        title.setText("Welcome to Sol");
-        title.setTextSize(30);
-        title.setTextColor(textColor());
-        TextView sub = new TextView(this);
-        sub.setText("What should your devices and the people you share with call you?");
-        sub.setTextSize(16);
-        sub.setPadding(0, dp(8), 0, dp(24));
-        sub.setTextColor(textColor() & 0x00ffffff | 0xb0000000);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(30);
+        t.setTextColor(textColor());
+        TextView s = new TextView(this);
+        s.setText(sub);
+        s.setTextSize(16);
+        s.setPadding(0, dp(8), 0, dp(24));
+        s.setTextColor(textColor() & 0x00ffffff | 0xb0000000);
+        col.addView(t);
+        col.addView(s);
+        return col;
+    }
+
+    /** The two ways in: a new Sol, or this phone as another device of an existing person. */
+    private void showWelcome() {
+        LinearLayout col = column("Welcome to Sol", "Start on your own, or add this phone to the Sol you already have.");
+        Button fresh = new Button(this);
+        fresh.setText("Start new");
+        fresh.setOnClickListener(v -> showNewName());
+        Button join = new Button(this);
+        join.setText("Add to my Sol");
+        join.setOnClickListener(v -> showJoin(null, false));
+        col.addView(fresh);
+        col.addView(join);
+        show(col);
+    }
+
+    private void showNewName() {
+        LinearLayout col = column("Welcome to Sol", "What should your devices and the people you share with call you?");
         EditText name = new EditText(this);
         name.setHint("Your name");
         name.setSingleLine();
@@ -139,23 +277,81 @@ public class MainActivity extends Activity {
         name.setTextColor(textColor());
         Button go = new Button(this);
         go.setText("Continue");
+        Button back = new Button(this);
+        back.setText("Back");
+        back.setOnClickListener(v -> showWelcome());
         Runnable submit = () -> {
             String n = name.getText().toString().trim();
             if (n.isEmpty()) { name.setError("Enter a name"); return; }
             root.removeView(setup);
             setup = null;
-            startNode(n);
+            startNode(n, null, null);
             buildWeb();
             handleShare(getIntent());
+            if (pendingLink != null) { // a pair link that opened the app before setup
+                Uri l = Uri.parse(pendingLink);
+                pendingLink = null;
+                handleLink(l);
+            }
         };
         go.setOnClickListener(v -> submit.run());
         name.setOnEditorActionListener((v, a, e) -> { submit.run(); return true; });
-        col.addView(title);
-        col.addView(sub);
         col.addView(name);
         col.addView(go);
-        setup = col;
-        root.addView(col, new FrameLayout.LayoutParams(-1, -1));
+        col.addView(back);
+        show(col);
+    }
+
+    /**
+     * "Add to my Sol": a device name (default the phone model) and the join link, pasted or
+     * delivered by a sol://join tap or QR scan. With a link in hand it starts at once.
+     */
+    private void showJoin(String link, boolean auto) {
+        LinearLayout col = column("Add to my Sol", "On your other device, run `sol invite --join` and scan its QR code with the camera, or paste the link here.");
+        deviceField = new EditText(this);
+        deviceField.setSingleLine();
+        deviceField.setText(Build.MODEL);
+        deviceField.setHint("Device name");
+        deviceField.setTextColor(textColor());
+        EditText linkField = new EditText(this);
+        linkField.setHint("Paste link (sol://join…)");
+        linkField.setSingleLine();
+        linkField.setTextColor(textColor());
+        if (link != null) linkField.setText(link);
+        joinGo = new Button(this);
+        joinGo.setText("Join");
+        joinStatus = new TextView(this);
+        joinStatus.setTextSize(16);
+        joinStatus.setPadding(0, dp(16), 0, 0);
+        joinStatus.setTextColor(textColor());
+        android.widget.ProgressBar spin = new android.widget.ProgressBar(this);
+        spin.setVisibility(View.GONE);
+        joinSpinner = spin;
+        Button back = new Button(this);
+        back.setText("Back");
+        back.setOnClickListener(v -> { if (!NodeService.initialised(this)) showWelcome(); });
+        Runnable submit = () -> {
+            String l = linkField.getText().toString().trim();
+            if (!l.startsWith("sol://join")) { linkField.setError("Paste a sol://join link"); return; }
+            String dev = deviceField.getText().toString().trim();
+            joinGo.setEnabled(false);
+            if (!NodeService.initialised(this) && !joinPending()) {
+                setJoinPending(true);
+                startNode("", "join", dev.isEmpty() ? Build.MODEL : dev);
+            } else {
+                startNode(null, null, null);
+            }
+            runPair(l, true);
+        };
+        joinGo.setOnClickListener(v -> submit.run());
+        col.addView(deviceField);
+        col.addView(linkField);
+        col.addView(joinGo);
+        col.addView(spin);
+        col.addView(joinStatus);
+        col.addView(back);
+        show(col);
+        if (auto) submit.run();
     }
 
     private int textColor() {
