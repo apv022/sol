@@ -55,7 +55,13 @@ computer. A browser GET without `Origin` (EventSource and same-origin fetch omit
 unless `Sec-Fetch-Site` names another site; anything else needs `Origin` equal to the UI root.
 `PATCH devices/{id}` with a changed `admin` answers `not_implemented` until handing over P
 exists. Event data is the same object the matching GET returns (`{"id"|"name": …, "removed":
-true}` once gone; `session` adds `up`). Times are RFC 3339.
+true}` once gone; `session` adds `up`). Times are RFC 3339 strings everywhere (never unix numbers). Shapes the table leaves open, settled
+in A5b (the daemon and `home-dev` both follow them, and `make ui-e2e` checks the app against a real
+daemon): `GET themes` is `{active, settings, themes:[{name, title, author, supports, builtin}]}`
+(`name` is the lowercase id); agents are `{name, id, scopes, issued, expires}`; browser sessions
+are `{id, client, created, last_used, expires, current}`; `peer_sessions` are `{id, person, device,
+peer, relation, since}`; `people[].last_seen` is optional (absent means unknown); `POST invite`
+answers `{link, expires}`.
 
 ## Port sharing (services and tunnels)
 

@@ -42,39 +42,41 @@ type server struct {
 	nextID  int
 }
 
-func now() int64 { return time.Now().Unix() }
+// now and ago give RFC 3339 strings, the one time format of the admin API (design/ADMIN.md).
+func now() string { return ago(0) }
+
+func ago(d time.Duration) string { return time.Now().Add(-d).UTC().Format(time.RFC3339) }
 
 func newServer() *server {
-	n := now()
 	return &server{
 		subs: map[chan string]bool{},
 		people: []m{
 			{"id": "bob", "name": "Bob Okafor", "petname": "Bob", "online": true,
 				"devices":        []m{{"id": "bob-phone", "name": "Bob's phone", "online": true, "anchor": false}, {"id": "bob-nas", "name": "Home server", "online": false, "anchor": true}},
 				"shares_with_me": []m{{"kind": "app", "name": "Files", "url": "http://files.bob.localhost:7777/"}, {"kind": "service", "name": "jellyfin", "http": true}},
-				"i_share":        []m{{"kind": "app", "name": "Notes"}}, "last_seen": n},
+				"i_share":        []m{{"kind": "app", "name": "Notes"}}, "last_seen": now()},
 			{"id": "carol", "name": "Carol Reyes", "petname": "Carol", "online": false,
 				"devices":        []m{{"id": "carol-laptop", "name": "Carol's laptop", "online": false, "anchor": false}},
-				"shares_with_me": []m{}, "i_share": []m{{"kind": "service", "name": "blog"}}, "last_seen": n - 5400},
+				"shares_with_me": []m{}, "i_share": []m{{"kind": "service", "name": "blog"}}, "last_seen": ago(90 * time.Minute)},
 		},
 		devices: []m{
-			{"id": "alice-laptop", "name": "Alice's laptop", "online": true, "admin": true, "anchor": false, "last_seen": n, "this": true},
-			{"id": "alice-phone", "name": "Alice's phone", "online": true, "admin": true, "anchor": false, "last_seen": n - 60},
+			{"id": "alice-laptop", "name": "Alice's laptop", "online": true, "admin": true, "anchor": false, "last_seen": now(), "this": true},
+			{"id": "alice-phone", "name": "Alice's phone", "online": true, "admin": true, "anchor": false, "last_seen": ago(time.Minute)},
 		},
 		apps: []m{
 			{"id": "files", "name": "Files", "version": "0.4.0", "running": true, "url": "http://files.localhost:7777/", "description": "Your synced folder", "scopes": []string{"files"}},
 			{"id": "notes", "name": "Notes", "version": "0.3.1", "running": true, "url": "http://notes.localhost:7777/", "description": "Markdown notes", "scopes": []string{"files"}},
 		},
 		inbox: []m{
-			{"id": "i1", "app": "Files", "kind": "approval", "title": "Bob wants to open Photos 2024", "body": "Read-only access to one folder.", "time": n - 300},
-			{"id": "i2", "app": "Notes", "kind": "approval", "title": "Carol asked to edit Trip plan", "body": "She can change this note until you remove her.", "time": n - 7200},
+			{"id": "i1", "app": "Files", "kind": "approval", "title": "Bob wants to open Photos 2024", "body": "Read-only access to one folder.", "time": ago(5 * time.Minute)},
+			{"id": "i2", "app": "Notes", "kind": "approval", "title": "Carol asked to edit Trip plan", "body": "She can change this note until you remove her.", "time": ago(2 * time.Hour)},
 		},
 		svcs:    []m{{"name": "blog", "port": 8080, "http": true, "people": []string{"carol"}}},
 		tunnels: []m{{"id": "t1", "person": "bob", "service": "jellyfin", "port": 18096, "state": "open", "http": true}},
-		theme:   m{"name": "Sol", "settings": m{"scheme": "auto", "accent": "", "density": "comfortable", "radius": "rounded", "glass": "on", "font": "system", "wallpaper": "dusk"}},
+		theme:   m{"name": "sol", "settings": m{"scheme": "auto", "accent": "", "density": "comfortable", "radius": "rounded", "glass": "on", "font": "system", "wallpaper": "dusk"}},
 		backup: m{"words": strings.Fields("orchard velvet anchor candle meadow harbor lantern pepper quiet ribbon silver timber " +
 			"unfold violet whisper yellow zephyr acorn bridge copper dolphin ember falcon garden"), "confirmed": false},
-		agents: []m{{"name": "claude-laptop", "scopes": []string{"notes:write", "files:read"}, "created": n - 86400*3, "last_used": n - 900}},
+		agents: []m{{"name": "claude-laptop", "scopes": []string{"notes:write", "files:read"}, "issued": ago(72 * time.Hour), "expires": time.Now().Add(27 * 24 * time.Hour).UTC().Format(time.RFC3339)}},
 	}
 }
 
@@ -111,8 +113,8 @@ func (s *server) status() m {
 		"me":            m{"person": m{"id": "alice", "name": "Alice Lindqvist"}, "device": m{"id": "alice-laptop", "name": "Alice's laptop"}},
 		"endpoints":     []m{{"addr": "203.0.113.7:7777", "kind": "public"}, {"addr": "192.168.1.20:7777", "kind": "lan"}},
 		"transports":    []m{{"name": "clearnet", "state": "up"}, {"name": "relay", "state": "up"}, {"name": "tor", "state": "off"}},
-		"peer_sessions": []m{{"id": "s1", "peer": "Bob's phone", "transport": "clearnet", "since": now() - 1200}},
-		"sessions":      []m{{"id": "b1", "name": "Firefox on Linux", "created": now() - 86400, "last_used": now(), "current": true}, {"id": "b2", "name": "Chrome on Android", "created": now() - 86400*9, "last_used": now() - 86400*2}},
+		"peer_sessions": []m{{"id": "s1", "peer": "Bob \u00b7 Bob's phone", "relation": "contact", "since": ago(20 * time.Minute)}},
+		"sessions":      []m{{"id": "b1", "client": "Firefox on Linux", "created": ago(24 * time.Hour), "last_used": now(), "expires": ago(-29 * 24 * time.Hour), "current": true}, {"id": "b2", "client": "Chrome on Android", "created": ago(9 * 24 * time.Hour), "last_used": ago(48 * time.Hour), "expires": ago(-21 * 24 * time.Hour)}},
 		"storage":       m{"used": 14_200_000_000, "total": 64_000_000_000},
 	}
 }
@@ -167,7 +169,7 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 		if j, _ := body["join"].(bool); j {
 			kind = "join"
 		}
-		write(w, 200, m{"link": "sol://" + kind + "?t=2Wq9xKd7mTz4Lr0bVn3HsYfJ8aCe5uPgXo1iQw6RhEkNtMyDcZvB", "expires": now() + 600})
+		write(w, 200, m{"link": "sol://" + kind + "?t=2Wq9xKd7mTz4Lr0bVn3HsYfJ8aCe5uPgXo1iQw6RhEkNtMyDcZvB", "expires": ago(-10 * time.Minute)})
 	case p == "pair":
 		write(w, 200, m{"person": "dave"})
 	case p == "apps":
@@ -226,8 +228,9 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 		s.publish("theme", s.theme)
 		ok()
 	case p == "themes":
-		write(w, 200, []m{{"name": "Sol", "author": "Sol", "supports": []string{"light", "dark"}}, {"name": "Graphite", "author": "Sol", "supports": []string{"light", "dark"}},
-			{"name": "Terminal", "author": "Sol", "supports": []string{"dark"}}, {"name": "Paper", "author": "Sol", "supports": []string{"light"}}})
+		write(w, 200, m{"active": s.theme["name"], "settings": s.theme["settings"], "themes": []m{
+			{"name": "sol", "title": "Sol", "author": "Sol", "supports": []string{"light", "dark"}, "builtin": true}, {"name": "graphite", "title": "Graphite", "author": "Sol", "supports": []string{"light", "dark"}, "builtin": true},
+			{"name": "terminal", "title": "Terminal", "author": "Sol", "supports": []string{"dark"}, "builtin": true}, {"name": "paper", "title": "Paper", "author": "Sol", "supports": []string{"light"}, "builtin": true}}})
 	case p == "backup" && r.Method == "GET":
 		write(w, 200, s.backup)
 	case p == "backup/confirm":

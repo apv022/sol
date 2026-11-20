@@ -220,7 +220,7 @@ function confirmBackup(words) {
 function personRow(p) {
   const on = isOnline(p), n = onlineDevices(p);
   return html`<a data-item data-chevron href="#/people/${encodeURIComponent(p.id)}"><sol-avatar name="${nameOf(p)}" id="${p.id}" ${on ? raw('online') : ''}></sol-avatar>
-    <span class="grow"><span class="row-title">${nameOf(p)}</span><span class="row-sub">${on ? `Online on ${n} device${n === 1 ? '' : 's'}` : `Last seen ${relTime(p.last_seen)}`}</span></span></a>`;
+    <span class="grow"><span class="row-title">${nameOf(p)}</span><span class="row-sub">${on ? `Online on ${n} device${n === 1 ? '' : 's'}` : (p.last_seen ? `Last seen ${relTime(p.last_seen)}` : 'Offline')}</span></span></a>`;
 }
 
 function pageHead(title, actions = '', back = '') {
@@ -298,17 +298,17 @@ function settingsView() {
       <div data-item><span class="grow">Corners</span>${seg('radius', [['rounded', 'Rounded'], ['square', 'Square']], s.radius || 'rounded')}</div>
       <div data-item><span class="grow">Glass<span class="row-sub">Translucent bars and panels</span></span><input type="checkbox" role="switch" data-toggle="glass" aria-label="Glass" ${s.glass === 'off' ? '' : raw('checked')}></div>
       <div data-item><span class="grow">Font</span><select data-select="font" style="width:auto" aria-label="Font">${[['system', 'System'], ['inter', 'Inter'], ['mono', 'Monospace']].map(([v, l]) => html`<option value="${v}" ${(s.font || 'system') === v ? raw('selected') : ''}>${l}</option>`)}</select></div>
-      <div data-item><span class="grow">Theme</span><select data-select="theme" style="width:auto" aria-label="Theme">${list(state.themes).map((t) => html`<option ${t.name === state.theme?.name ? raw('selected') : ''}>${t.name}</option>`)}</select></div></div></section>
+      <div data-item><span class="grow">Theme</span><select data-select="theme" style="width:auto" aria-label="Theme">${list(state.themes?.themes).map((t) => html`<option value="${t.name}" ${t.name === (state.theme?.name || state.themes?.active) ? raw('selected') : ''}>${t.title || t.name}</option>`)}</select></div></div></section>
     <section class="section"><h3 class="group-title">Wallpaper</h3><div class="list"><div class="wps">${WALLPAPERS.map(([v, l]) => html`<button type="button" data-set="wallpaper" data-v="${v}" aria-pressed="${(s.wallpaper || 'dusk') === v}"><span class="wp" data-wallpaper="${v}"><span class="sun"></span></span>${l}</button>`)}</div></div></section>
     <section class="section"><h3 class="group-title">Backup</h3><div class="list"><div data-item><span class="grow">Backup words<span class="row-sub">${bk.confirmed ? 'You confirmed your backup.' : 'Write down your 24 words so you can restore Sol.'}</span></span>${bk.confirmed ? html`<span class="badge ok">Backed up</span>` : list(bk.words).length ? html`<button class="primary" type="button" data-act="backup">Show words</button>` : ''}</div></div>
       <p class="group-footer">To restore on a new device, choose “Restore from backup words” when you set up Sol.</p></section>
-    <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · used ${relTime(a.last_used)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
+    <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
       <p class="group-footer">Agents run <code class="inline">sol do</code> with a key you issued, limited to its scopes.</p></section>
-    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span><button type="button" data-act="logout">Sign out</button>` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
+    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span><button type="button" data-act="logout">Sign out</button>` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
     <section class="section"><details class="adv"><summary class="group-title" style="cursor:pointer">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
       <h3 class="group-title">Transports</h3><div class="list">${list(st.transports).map((t) => html`<div data-item><span class="grow">${t.name}</span><span class="badge ${t.state === 'up' ? 'ok' : ''}">${t.state}</span></div>`)}</div>
-      <h3 class="group-title">Connections</h3><div class="list">${list(st.peer_sessions).length ? list(st.peer_sessions).map((x) => html`<div data-item><span class="grow"><span class="row-title">${x.peer}</span><span class="row-sub">${x.transport} · since ${relTime(x.since)}</span></span></div>`) : html`<div data-item class="muted">None</div>`}</div>
+      <h3 class="group-title">Connections</h3><div class="list">${list(st.peer_sessions).length ? list(st.peer_sessions).map((x) => html`<div data-item><span class="grow"><span class="row-title">${x.peer}</span><span class="row-sub">${x.relation || ''} · since ${relTime(x.since)}</span></span></div>`) : html`<div data-item class="muted">None</div>`}</div>
       <p class="group-footer"><button type="button" class="tinted" data-act="network">${ic('refresh')}Check network now</button></p></details></section></div>`;
 }
 
@@ -449,4 +449,39 @@ function connect() {
 applyTheme();
 go();
 tick();
-loadAll().then(() => { connect(); });
+loadAll().then(() => { connect(); if (SELFTEST) selftest(); });
+
+// ---------- self-test hook ----------
+
+// `?selftest=1` (honoured by the daemon's login redirect only when it runs with SOL_UI_SELFTEST=1)
+// walks the main screens and POSTs a summary of the rendered DOM to /__selftest, so `make ui-e2e`
+// can assert what a real daemon's data looks like on screen. Normal runs never use it.
+const SELFTEST = new URLSearchParams(location.search).has('selftest');
+// `?shot=1` (test daemons only) holds the load event for a moment and stops animations, for screenshots.
+if (new URLSearchParams(location.search).has('shot')) {
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: '/__hold' }), Object.assign(document.createElement('style'), { textContent: '*{animation:none!important}' }));
+}
+async function selftest() {
+  const txt = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+  const all = (sel) => [...document.querySelectorAll(sel)];
+  const settle = async (r) => { for (let i = 0; i < 40 && $('shell').dataset.route !== (r || 'home'); i++) await new Promise((x) => setTimeout(x, 50)); await new Promise((x) => setTimeout(x, 100)); };
+  const out = { screens: {}, errors: [] };
+  addEventListener('error', (e) => out.errors.push(String(e.message)));
+  for (const r of ['', 'people', 'devices', 'sharing', 'inbox', 'settings']) {
+    location.hash = '#/' + r; await settle(r);
+    const main = $('main');
+    out.screens[r || 'home'] = {
+      title: txt(main.querySelector('h1.clock, .page-head h1')),
+      greet: txt($('greet')),
+      widgets: all('.widget').map((w) => ({ title: txt(w.querySelector('.widget-title')), value: txt(w.querySelector('.widget-value')), sub: txt(w.querySelector('.widget-sub')) })),
+      apps: all('.app-grid .app').map((a) => txt(a)),
+      rows: all('#main [data-item]').map(txt),
+      me: txt(document.querySelector('#side .me')),
+      avatar: document.querySelector('#side sol-avatar')?.getAttribute('name') || '',
+      empty: txt(document.querySelector('.home-empty')),
+      overflow: document.documentElement.scrollWidth > innerWidth + 1,
+    };
+  }
+  location.hash = '#/';
+  try { await fetch('/__selftest', { method: 'POST', body: JSON.stringify(out) }); } catch { /* the harness will time out */ }
+}

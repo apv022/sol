@@ -1,4 +1,4 @@
-.PHONY: build check test fmt browser-test
+.PHONY: build check test fmt browser-test ui-e2e
 
 build:                ## bin/sol
 	go build -trimpath -o bin/sol ./cmd/sol
@@ -16,3 +16,6 @@ fmt:
 
 browser-test:         ## browser JS suites in headless Firefox (no Node)
 	go run ./cmd/browsertest
+
+ui-e2e:               ## the Sol app against two real daemons in headless Firefox (SOL_UI_SHOTS=dir saves screenshots)
+	SOL_UI_E2E=1 go test -count=1 -v ./test/uie2e

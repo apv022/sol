@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -261,6 +263,7 @@ var loginFailed = template.Must(template.New("login").Parse(`<!doctype html>
 // rootHandler serves the UI root: the Sol app (ui/home), /login, and the admin API for the
 // browser at /admin/v1/.
 func (d *Daemon) rootHandler() http.Handler {
+	selftest := os.Getenv("SOL_UI_SELFTEST") == "1"
 	mx := http.NewServeMux()
 	mx.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -274,8 +277,25 @@ func (d *Daemon) rootHandler() http.Handler {
 		}
 		setSessionCookie(w, tok, int(SessionTTL/time.Second))
 		d.activity("sol.login", map[string]string{"session": s.ID}, nil)
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		to := "/"
+		if selftest && r.URL.Query().Has("selftest") {
+			to = "/?selftest=1"
+		}
+		http.Redirect(w, r, to, http.StatusSeeOther)
 	})
+	if selftest {
+		// Test hook for `make ui-e2e`: the page reports what it rendered. Off unless the
+		// daemon runs with SOL_UI_SELFTEST=1; the body lands in <dir>/selftest.json.
+		// ?shot=1 pages hold their load event on this, so a screenshot waits for the data.
+		mx.HandleFunc("GET /__hold", func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(1500 * time.Millisecond)
+			w.Header().Set("Content-Type", "text/css")
+		})
+		mx.HandleFunc("POST /__selftest", func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			_ = fsutil.WriteFileAtomic(filepath.Join(d.dir, "selftest.json"), b, 0o600)
+		})
+	}
 	mx.HandleFunc("/admin/", d.browserAdmin)
 	files := http.FileServerFS(home.FS)
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

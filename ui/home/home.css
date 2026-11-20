@@ -149,8 +149,9 @@ code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2)
   .hero { padding: var(--space-3) 0 var(--space-4); }
   .hero .clock { font-size: 72px; }
   .hero .greet { font-size: var(--fs-title-2); }
-  .widgets { display: flex; overflow-x: auto; scroll-snap-type: x proximity; scroll-padding-inline: var(--space-4); margin: 0 calc(-1 * var(--space-4)) var(--space-5); padding: 0 var(--space-4) var(--space-2); scrollbar-width: none; }
-  .widgets .widget { flex: 0 0 148px; scroll-snap-align: start; min-height: 112px; }
+  .widgets { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: var(--space-5); }  /* two columns, nothing cut off; the third widget spans both */
+  .widgets .widget { min-height: 112px; }
+  .widgets .widget:nth-child(3) { grid-column: 1 / -1; min-height: 96px; }
   .home-cols { display: flex; flex-direction: column; gap: var(--space-5); }
   .home-cols .inbox-card { order: 2; width: 100%; }
   .app-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4) var(--space-2); }
