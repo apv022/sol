@@ -67,7 +67,7 @@ Status: `todo` · `doing` · `done`.
 | C7 | `sol do <app>.<action>` (args from flags/JSON, `--json`, `--dry-run`, generated `--help` from schemas), agent keys (`sol agent new/list/revoke`, certs per IDENTITY.md, `--as-agent`/`SOL_AGENT_KEY`), Inbox approvals end to end, `theme` events pushed (live swap), `sol backup words/confirm` + `sol restore`, join device names, an SDK method for GET /v1/inbox | API.md §6–8, IDENTITY.md | done |
 | C6b | C6 follow-ups: peer app UIs (`<app>.<petname>.localhost`), my devices learn contacts' endpoints, Tor client auth, offline scenarios in the conformance suite, drop CSP `style-src 'unsafe-inline'` (apps use classes/CSSOM, not inline style attributes) | API.md §10, PROTOCOL.md | todo |
 | C7b | C7 follow-ups: theme file watching on macOS/Windows (scan fallback), themes sync between devices (Files ignores `.sol/`: sync `.sol/themes` or move themes to an internal feed), `theme.*` actions, re-add contacts after restore, agent list across my devices, `sol do` human output picks sensible default columns per action (manifest hint) | todo |
-| C8 | Admin API for the Sol app: people, pairing, devices, port sharing (services), settings | design/ADMIN.md | todo |
+| C8 | Admin API per design/ADMIN.md: browser login (one-time code, cookie, Origin/Host), all endpoints + SSE events, port sharing services + tunnels (port PoC tunnels to `/p/service`), `sol open`, serve `ui/home/` at the UI root | design/ADMIN.md | doing |
 
 ### Apps lane
 
@@ -79,7 +79,7 @@ Status: `todo` · `doing` · `done`.
 | A3 | Notes: Markdown editor over `.md` files in the synced folder (`Notes/`): live preview, `[[wiki links]]` + backlinks, tags, fast full-text search, checklists, images from the folder; phone-first; actions + UI | done |
 | A2b | Files: three-way merge for text files (line-based diff3 against the entry's `base`, stdlib Myers diff); conflict copy only for overlapping edits | done |
 | A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | parked |
-| A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
+| A5 | The Sol app UI in `ui/home/` per design/ADMIN.md + UI.md: home (wallpaper, widgets, app grid, dock), people (QR pairing), devices (join QR), inbox, sharing, settings; dev runner with a fake admin API | doing |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
 | A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | done |
 | A7c | Android follow-ups: test pair/error/paste paths and "Start new" on the emulator; `sol run` on a joining device prints an empty name until joined (show "joining…"); shorten join/pair links (≈600 chars today; QR needs short) e.g. carry only the device's endpoint record digest + one address and fetch the rest after the handshake; test arm64 build on a real Pixel | todo |
