@@ -2,7 +2,13 @@
    @author   Sol
    @supports light dark
    The default look: Sol gold on a calm Apple-style canvas. Nothing to override; this file is the
-   reference for what a theme file looks like, and selecting it clears any other theme. */
-:root {
-  --tint: light-dark(#E8A100, #FFB524);
+   reference for what a theme file looks like (light values in :root, dark values in the two dark
+   selectors, solid shades for browsers without color-mix()), and selecting it clears any other theme. */
+:root { --tint: #E8A100; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tint: #FFB524; } }
+:root[data-theme="dark"] { --tint: #FFB524; }
+@supports not (color: color-mix(in srgb, red, blue)) {
+  :root { --tint-hover: #D39300; --tint-pressed: #BE8400; --tint-subtle: rgba(232, 161, 0, .16); --tint-subtle-hover: rgba(232, 161, 0, .24); --tint-text: #9B6F0C; --focus-ring: rgba(232, 161, 0, .7); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tint-hover: #FFBC38; --tint-pressed: #FFC24B; --tint-subtle: rgba(255, 181, 36, .16); --tint-subtle-hover: rgba(255, 181, 36, .24); --tint-text: #FBCD74; --focus-ring: rgba(255, 181, 36, .7); } }
+  :root[data-theme="dark"] { --tint-hover: #FFBC38; --tint-pressed: #FFC24B; --tint-subtle: rgba(255, 181, 36, .16); --tint-subtle-hover: rgba(255, 181, 36, .24); --tint-text: #FBCD74; --focus-ring: rgba(255, 181, 36, .7); }
 }

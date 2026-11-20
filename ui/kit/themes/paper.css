@@ -1,19 +1,37 @@
 /* @theme    Paper
    @author   Sol
    @supports light dark
-   Warm, light, low glass: cream paper and ink, a terracotta accent, soft serif-free type. */
+   Warm, light, low glass: cream paper and ink, a terracotta accent, soft serif-free type.
+   Light unless the person forces dark (auto stays light), so the dark values sit under
+   :root[data-theme="dark"] only. */
 :root:not([data-theme]) { color-scheme: light; }
 :root {
-  --canvas: light-dark(#F4EFE6, #14110D);
-  --surface: light-dark(#FBF8F2, #1F1B16);
-  --surface-2: light-dark(#EDE6D8, #2C2620);
-  --label: light-dark(#2B2620, #F1EADD);
-  --label-2: light-dark(rgba(60, 50, 35, .64), rgba(241, 234, 221, .6));
-  --label-3: light-dark(rgba(60, 50, 35, .34), rgba(241, 234, 221, .3));
-  --separator: light-dark(rgba(80, 60, 30, .18), rgba(241, 234, 221, .16));
-  --tint: light-dark(#B5532B, #E58A5C);
-  --glass: light-dark(rgba(251, 248, 242, .94), rgba(31, 27, 22, .94));
+  --canvas: #F4EFE6;
+  --surface: #FBF8F2;
+  --surface-2: #EDE6D8;
+  --label: #2B2620;
+  --label-2: rgba(60, 50, 35, .64);
+  --label-3: rgba(60, 50, 35, .34);
+  --separator: rgba(80, 60, 30, .18);
+  --tint: #B5532B;
+  --glass: rgba(251, 248, 242, .94);
   --glass-filter: blur(6px);
   --shadow-1: 0 1px 1px rgba(80, 60, 30, .08);
   --shadow-float: 0 1px 2px rgba(80, 60, 30, .1), 0 6px 16px rgba(80, 60, 30, .12);
+}
+:root[data-theme="dark"] {
+  --canvas: #14110D;
+  --surface: #1F1B16;
+  --surface-2: #2C2620;
+  --label: #F1EADD;
+  --label-2: rgba(241, 234, 221, .6);
+  --label-3: rgba(241, 234, 221, .3);
+  --separator: rgba(241, 234, 221, .16);
+  --tint: #E58A5C;
+  --glass: rgba(31, 27, 22, .94);
+}
+/* solid shades for browsers without color-mix(); elsewhere they derive from --tint */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  :root { --tint-hover: #A54C27; --tint-pressed: #944423; --tint-subtle: rgba(181, 83, 43, .16); --tint-subtle-hover: rgba(181, 83, 43, .24); --tint-text: #814227; --focus-ring: rgba(181, 83, 43, .7); --surface-hover: #DFD9CB; --surface-press: #E3DCCF; }
+  :root[data-theme="dark"] { --tint-hover: #E7956B; --tint-pressed: #EA9F79; --tint-subtle: rgba(229, 138, 92, .16); --tint-subtle-hover: rgba(229, 138, 92, .24); --tint-text: #EAAE8D; --focus-ring: rgba(229, 138, 92, .7); --surface-hover: #3A342D; --surface-press: #36302A; }
 }

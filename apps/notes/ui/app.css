@@ -1,5 +1,5 @@
 /* Notes UI: kit components do the look; this is layout and the editor, on kit tokens only. */
-.notes { display: grid; grid-template-columns: minmax(16rem, 22rem) 1fr; height: 100dvh; background: var(--canvas); color: var(--label); }
+.notes { display: grid; grid-template-columns: minmax(16rem, 22rem) 1fr; height: 100vh; height: 100dvh; background: var(--canvas); color: var(--label); }
 #side { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); box-shadow: inset calc(-1 * var(--hairline)) 0 0 var(--separator); overflow: hidden; min-height: 0; }
 .side-head { display: flex; align-items: center; gap: var(--space-2); }
 .side-head h1 { flex: 1; margin: 0; }

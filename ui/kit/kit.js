@@ -40,7 +40,8 @@ class SolAvatar extends HTMLElement {
     let h = 0;
     for (const c of key) h = (h * 31 + c.codePointAt(0)) % 360;
     this.style.setProperty('--av-bg', `hsl(${h} 45% 52% / 0.22)`);
-    this.style.setProperty('--av-fg', `light-dark(hsl(${h} 50% 32%), hsl(${h} 60% 74%))`);
+    this.style.setProperty('--av-fg-light', `hsl(${h} 50% 32%)`);
+    this.style.setProperty('--av-fg-dark', `hsl(${h} 60% 74%)`);
     if (this.hasAttribute('size')) this.style.setProperty('--size', this.getAttribute('size'));
     this.textContent = [...name.trim()][0]?.toUpperCase() || '?';
     this.setAttribute('role', 'img');

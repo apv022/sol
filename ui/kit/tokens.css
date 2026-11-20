@@ -1,6 +1,6 @@
 /* Sol design tokens (design/UI.md). The names in this file are a public, stable contract: themes
-   and apps rely on them (see TOKENS.md). Light, dark and auto work through light-dark() and
-   color-scheme: `auto` follows the system, [data-theme="light"|"dark"] on <html> forces one.
+   and apps rely on them (see TOKENS.md). Light, dark and auto work through plain custom properties
+   and color-scheme: `auto` follows the system, [data-theme="light"|"dark"] on <html> forces one.
    A theme or a setting only ever overrides tokens, and the derived shades follow. */
 
 @font-face {
@@ -11,40 +11,46 @@
   font-display: swap;
 }
 
+/* Colour tokens: light values in :root, dark values in the two dark selectors below (auto follows
+   the system, [data-theme] forces one). Plain custom properties only: the CSS light/dark function needs Chrome
+   123 and Android WebViews are often older. The kit works on Chromium 100+ / Safari 15.4+. */
 :root {
   color-scheme: light dark;
 
-  /* ---- colour ---- */
-  --canvas: light-dark(#F5F5F7, #000000);
-  --surface: light-dark(#FFFFFF, #1C1C1E);
-  --surface-2: light-dark(#F2F2F7, #2C2C2E);
-  --glass: light-dark(rgba(255, 255, 255, .72), rgba(28, 28, 30, .68));
+  /* ---- colour (light) ---- */
+  --canvas: #F5F5F7;
+  --surface: #FFFFFF;
+  --surface-2: #F2F2F7;
+  --glass: rgba(255, 255, 255, .72);
   --glass-filter: blur(24px) saturate(180%);
-  --glass-edge: light-dark(rgba(255, 255, 255, .5), rgba(255, 255, 255, .08)); /* 0.5px inner highlight */
-  --label: light-dark(#1D1D1F, #F5F5F7);
-  --label-2: light-dark(rgba(60, 60, 67, .60), rgba(235, 235, 245, .60));
-  --label-3: light-dark(rgba(60, 60, 67, .30), rgba(235, 235, 245, .30));
-  --separator: light-dark(rgba(60, 60, 67, .18), rgba(84, 84, 88, .6));
-  --scrim: light-dark(rgba(0, 0, 0, .32), rgba(0, 0, 0, .6));
+  --glass-edge: rgba(255, 255, 255, .5); /* 0.5px inner highlight */
+  --label: #1D1D1F;
+  --label-2: rgba(60, 60, 67, .60);
+  --label-3: rgba(60, 60, 67, .30);
+  --separator: rgba(60, 60, 67, .18);
+  --scrim: rgba(0, 0, 0, .32);
 
-  /* accent: a theme or a setting sets --tint only; everything below is derived from it */
-  --tint: light-dark(#E8A100, #FFB524);
-  --tint-mix: light-dark(#000, #fff);   /* what hover and pressed shades move toward */
-  --tint-hover: color-mix(in srgb, var(--tint), var(--tint-mix) 9%);
-  --tint-pressed: color-mix(in srgb, var(--tint), var(--tint-mix) 18%);
-  --tint-subtle: color-mix(in srgb, var(--tint) 16%, transparent);
-  --tint-subtle-hover: color-mix(in srgb, var(--tint) 24%, transparent);
-  --tint-text: color-mix(in srgb, var(--tint), var(--label) 38%); /* tint as text on --surface: stays readable */
+  /* accent: a theme or a setting sets --tint only; the shades below are derived from it. The
+     solid values are for the default tint, used where color-mix() is missing (see @supports below) */
+  --tint: #E8A100;
+  --tint-mix: #000;   /* what hover and pressed shades move toward */
+  --tint-hover: #D39300;
+  --tint-pressed: #BE8400;
+  --tint-subtle: rgba(232, 161, 0, .16);
+  --tint-subtle-hover: rgba(232, 161, 0, .24);
+  --tint-text: #9B6F0C; /* tint as text on --surface: stays readable */
   --on-tint: #1D1D1F;   /* text on --tint; derived below where the browser can pick black or white */
-  --focus-ring: color-mix(in srgb, var(--tint) 70%, transparent);
+  --focus-ring: rgba(232, 161, 0, .7);
+  --surface-hover: #E3E3E8;   /* --surface-2 moved 7% toward --label: button hover */
+  --surface-press: #E7E7EC;   /* 5%: pressed rows */
 
-  --green: light-dark(#34C759, #30D158);
-  --red: light-dark(#FF3B30, #FF453A);
-  --blue: light-dark(#007AFF, #0A84FF);
-  --orange: light-dark(#FF9500, #FF9F0A);
-  --red-subtle: color-mix(in srgb, var(--red) 14%, transparent);
-  --green-subtle: color-mix(in srgb, var(--green) 16%, transparent);
-  --orange-subtle: color-mix(in srgb, var(--orange) 18%, transparent);
+  --green: #34C759;
+  --red: #FF3B30;
+  --blue: #007AFF;
+  --orange: #FF9500;
+  --red-subtle: rgba(255, 59, 48, .14);
+  --green-subtle: rgba(52, 199, 89, .16);
+  --orange-subtle: rgba(255, 149, 0, .18);
 
   /* ---- type ---- */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Sol", system-ui, Roboto, sans-serif;
@@ -87,24 +93,95 @@
   --dur-sheet: 400ms;
   --press-scale: .97;
 }
-:root[data-theme="light"] { color-scheme: light; }
-:root[data-theme="dark"] { color-scheme: dark; }
-
-/* black or white text on the accent, chosen from the accent's lightness */
-@supports (color: oklch(from red l c h)) {
-  :root { --on-tint: oklch(from var(--tint) clamp(0.2, (l - 0.72) * -1000, 0.98) 0 0); }
-}
-
-/* deeper shadows in dark mode (also when only the data-attribute asks for it) */
+/* dark values: also when only the data-attribute asks for it. Themes override both blocks. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    --canvas: #000000;
+    --surface: #1C1C1E;
+    --surface-2: #2C2C2E;
+    --glass: rgba(28, 28, 30, .68);
+    --glass-edge: rgba(255, 255, 255, .08);
+    --label: #F5F5F7;
+    --label-2: rgba(235, 235, 245, .60);
+    --label-3: rgba(235, 235, 245, .30);
+    --separator: rgba(84, 84, 88, .6);
+    --scrim: rgba(0, 0, 0, .6);
+    --tint: #FFB524;
+    --tint-mix: #fff;
+    --tint-hover: #FFBC38;
+    --tint-pressed: #FFC24B;
+    --tint-subtle: rgba(255, 181, 36, .16);
+    --tint-subtle-hover: rgba(255, 181, 36, .24);
+    --tint-text: #FBCD74;
+    --focus-ring: rgba(255, 181, 36, .7);
+    --surface-hover: #3A3A3C;
+    --surface-press: #363638;
+    --green: #30D158;
+    --red: #FF453A;
+    --blue: #0A84FF;
+    --orange: #FF9F0A;
+    --red-subtle: rgba(255, 69, 58, .14);
+    --green-subtle: rgba(48, 209, 88, .16);
+    --orange-subtle: rgba(255, 159, 10, .18);
     --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
     --shadow-float: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .5);
   }
 }
 :root[data-theme="dark"] {
+  --canvas: #000000;
+  --surface: #1C1C1E;
+  --surface-2: #2C2C2E;
+  --glass: rgba(28, 28, 30, .68);
+  --glass-edge: rgba(255, 255, 255, .08);
+  --label: #F5F5F7;
+  --label-2: rgba(235, 235, 245, .60);
+  --label-3: rgba(235, 235, 245, .30);
+  --separator: rgba(84, 84, 88, .6);
+  --scrim: rgba(0, 0, 0, .6);
+  --tint: #FFB524;
+  --tint-mix: #fff;
+  --tint-hover: #FFBC38;
+  --tint-pressed: #FFC24B;
+  --tint-subtle: rgba(255, 181, 36, .16);
+  --tint-subtle-hover: rgba(255, 181, 36, .24);
+  --tint-text: #FBCD74;
+  --focus-ring: rgba(255, 181, 36, .7);
+  --surface-hover: #3A3A3C;
+  --surface-press: #363638;
+  --green: #30D158;
+  --red: #FF453A;
+  --blue: #0A84FF;
+  --orange: #FF9F0A;
+  --red-subtle: rgba(255, 69, 58, .14);
+  --green-subtle: rgba(48, 209, 88, .16);
+  --orange-subtle: rgba(255, 159, 10, .18);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .5);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* live derivation from --tint (and --label / --surface-2) where color-mix() exists (Chrome 111+,
+   Safari 16.2+, Firefox 113+); elsewhere the solid values above stand */
+@supports (color: color-mix(in srgb, red, blue)) {
+  :root {
+    --tint-hover: color-mix(in srgb, var(--tint), var(--tint-mix) 9%);
+    --tint-pressed: color-mix(in srgb, var(--tint), var(--tint-mix) 18%);
+    --tint-subtle: color-mix(in srgb, var(--tint) 16%, transparent);
+    --tint-subtle-hover: color-mix(in srgb, var(--tint) 24%, transparent);
+    --tint-text: color-mix(in srgb, var(--tint), var(--label) 38%);
+    --focus-ring: color-mix(in srgb, var(--tint) 70%, transparent);
+    --surface-hover: color-mix(in srgb, var(--surface-2), var(--label) 7%);
+    --surface-press: color-mix(in srgb, var(--surface-2), var(--label) 5%);
+    --red-subtle: color-mix(in srgb, var(--red) 14%, transparent);
+    --green-subtle: color-mix(in srgb, var(--green) 16%, transparent);
+    --orange-subtle: color-mix(in srgb, var(--orange) 18%, transparent);
+  }
+}
+
+/* black or white text on the accent, chosen from the accent's lightness */
+@supports (color: oklch(from red l c h)) {
+  :root { --on-tint: oklch(from var(--tint) clamp(0.2, (l - 0.72) * -1000, 0.98) 0 0); }
 }
 
 /* phone: iOS sizes and 44px touch targets */

@@ -1,22 +1,41 @@
 /* @theme    Terminal
    @author   Sol
    @supports dark
-   Monospace, flat, dark, high contrast. No glass, no rounding, no soft shadows. */
+   Monospace, flat, dark, high contrast. No glass, no rounding, no soft shadows. Dark unless the
+   person forces light, so the dark values sit in :root and the light ones under
+   :root[data-theme="light"]. */
 :root:not([data-theme]) { color-scheme: dark; }
+:root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
+  --canvas: #000000;
+  --surface: #0A0A0A;
+  --surface-2: #161616;
+  --label: #D7FFD7;
+  --label-2: rgba(215, 255, 215, .72);
+  --label-3: rgba(215, 255, 215, .42);
+  --separator: rgba(215, 255, 215, .30);
+  --tint: #39FF7A;
+}
+:root[data-theme="light"] {
+  --canvas: #FFFFFF;
+  --surface: #F4F4F4;
+  --surface-2: #E6E6E6;
+  --label: #000000;
+  --label-2: rgba(0, 0, 0, .72);
+  --label-3: rgba(0, 0, 0, .45);
+  --separator: rgba(0, 0, 0, .45);
+  --tint: #007A33;
+}
 :root {
   --font-ui: var(--font-mono);
-  --canvas: light-dark(#FFFFFF, #000000);
-  --surface: light-dark(#F4F4F4, #0A0A0A);
-  --surface-2: light-dark(#E6E6E6, #161616);
-  --label: light-dark(#000000, #D7FFD7);
-  --label-2: light-dark(rgba(0, 0, 0, .72), rgba(215, 255, 215, .72));
-  --label-3: light-dark(rgba(0, 0, 0, .45), rgba(215, 255, 215, .42));
-  --separator: light-dark(rgba(0, 0, 0, .45), rgba(215, 255, 215, .30));
-  --tint: light-dark(#007A33, #39FF7A);
   --glass: var(--surface);
   --glass-filter: none;
   --glass-edge: transparent;
   --radius-control: 0; --radius-group: 0; --radius-sheet: 0;
   --shadow-1: none; --shadow-float: 0 0 0 1px var(--separator);
   --press-scale: 1;
+}
+/* solid shades for browsers without color-mix(); elsewhere they derive from --tint */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  :root, :root:not([data-theme="light"]), :root[data-theme="dark"] { --tint-hover: #4BFF86; --tint-pressed: #5DFF92; --tint-subtle: rgba(57, 255, 122, .16); --tint-subtle-hover: rgba(57, 255, 122, .24); --tint-text: #75FF9D; --focus-ring: rgba(57, 255, 122, .7); --surface-hover: #242624; --surface-press: #202220; }
+  :root[data-theme="light"] { --tint-hover: #006F2E; --tint-pressed: #00642A; --tint-subtle: rgba(0, 122, 51, .16); --tint-subtle-hover: rgba(0, 122, 51, .24); --tint-text: #004C20; --focus-ring: rgba(0, 122, 51, .7); --surface-hover: #D6D6D6; --surface-press: #DBDBDB; }
 }

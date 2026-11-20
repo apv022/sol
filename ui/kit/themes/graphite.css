@@ -2,8 +2,12 @@
    @author   Sol
    @supports light dark
    Neutral and quiet: the same shapes as Sol, with a graphite accent instead of gold. */
-:root {
-  --tint: light-dark(#5B6572, #A9B2BE);
-  --canvas: light-dark(#F2F2F3, #000000);
-  --green: light-dark(#2FA84F, #30D158);
+:root { --tint: #5B6572; --canvas: #F2F2F3; --green: #2FA84F; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tint: #A9B2BE; --canvas: #000000; --green: #30D158; } }
+:root[data-theme="dark"] { --tint: #A9B2BE; --canvas: #000000; --green: #30D158; }
+/* solid shades for browsers without color-mix(); elsewhere they derive from --tint */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  :root { --tint-hover: #535C68; --tint-pressed: #4B535D; --tint-subtle: rgba(91, 101, 114, .16); --tint-subtle-hover: rgba(91, 101, 114, .24); --tint-text: #434A52; --focus-ring: rgba(91, 101, 114, .7); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tint-hover: #B1B9C4; --tint-pressed: #B8C0CA; --tint-subtle: rgba(169, 178, 190, .16); --tint-subtle-hover: rgba(169, 178, 190, .24); --tint-text: #C6CBD4; --focus-ring: rgba(169, 178, 190, .7); } }
+  :root[data-theme="dark"] { --tint-hover: #B1B9C4; --tint-pressed: #B8C0CA; --tint-subtle: rgba(169, 178, 190, .16); --tint-subtle-hover: rgba(169, 178, 190, .24); --tint-text: #C6CBD4; --focus-ring: rgba(169, 178, 190, .7); }
 }

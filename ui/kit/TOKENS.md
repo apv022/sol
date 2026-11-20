@@ -11,8 +11,13 @@ Files: `tokens.css` (tokens), `kit.css` (components), `kit.js` (custom elements 
 
 ## Colour scheme
 
-`light-dark()` plus `color-scheme`. Auto follows the system; `<html data-theme="light|dark">`
-forces one. Themes give both values: `--canvas: light-dark(#fff, #000)`.
+Plain custom properties plus `color-scheme`; no `light-dark()` (Chrome 123+ only, and Android
+WebViews are often older: the kit targets Chromium 100+ / Safari 15.4+). Light values live in
+`:root`; dark values live in two selectors, `@media (prefers-color-scheme: dark) {
+:root:not([data-theme="light"]) { ... } }` and `:root[data-theme="dark"] { ... }`. Auto follows the
+system; `<html data-theme="light|dark">` forces one. Themes set both the same way (see the theme
+format below). Modern CSS in the kit always has a solid fallback declared first or lives in an
+`@supports` block; a Go test enforces it.
 
 ## Colour tokens
 
@@ -32,8 +37,10 @@ forces one. Themes give both values: `--canvas: light-dark(#fff, #000)`.
 
 ### Accent derivation
 
-Set `--tint` and nothing else; these follow (they are computed from it with `color-mix` and
-relative colour syntax, so they exist in every theme):
+Set `--tint` and nothing else; these follow. Where `color-mix()` exists they are computed live
+from it (an `@supports` block in `tokens.css`), so they follow any theme or accent setting; older
+browsers get solid values precomputed for the default tint (a theme can ship its own under
+`@supports not (color: color-mix(in srgb, red, blue))`, as the built-ins do):
 
 | Token | Derived as |
 |---|---|
@@ -42,6 +49,7 @@ relative colour syntax, so they exist in every theme):
 | `--tint-text` | `--tint` mixed 38% toward `--label`: accent used as text on `--surface` |
 | `--on-tint` | black or white chosen from the accent's lightness (OKLCH); falls back to `#1D1D1F` |
 | `--focus-ring` | `--tint` at 70% |
+| `--surface-hover`, `--surface-press` | `--surface-2` moved 7% / 5% toward `--label` (button hover, pressed rows) |
 
 Also derived: `--red-subtle`, `--green-subtle`, `--orange-subtle`. A theme may override any
 derived token directly if it wants an exact shade.
@@ -119,7 +127,11 @@ for the theme list:
 ```
 
 Rules: CSS only (no scripts, no `@import` of remote URLs: fonts and images load from the app
-origin and `data:` only). Override tokens in `:root`; use `light-dark()` for per-scheme values.
+origin and `data:` only). Override light tokens in `:root` and dark tokens in the two dark selectors
+(`:root:not([data-theme="light"])` inside `@media (prefers-color-scheme: dark)`, and
+`:root[data-theme="dark"]`); never `light-dark()`. A light-only or dark-only theme puts its values
+in `:root` and only overrides the other scheme under `[data-theme]`; see `themes/paper.css` and
+`themes/terminal.css`.
 Anything else (component rules, `[data-app="music"] .now-playing { ... }`) is allowed.
 Themes load after the kit, so equal specificity wins.
 
@@ -133,10 +145,14 @@ Themes load after the kit, so equal specificity wins.
   --tint: #b58900;                     /* hover, pressed, subtle, on-tint all follow */
   --font-ui: "Iosevka", monospace;
   --radius-control: 2px;
-  --canvas: light-dark(#fdf6e3, #002b36);
-  --surface: light-dark(#eee8d5, #073642);
-  --label: light-dark(#073642, #eee8d5);
+  --canvas: #fdf6e3;
+  --surface: #eee8d5;
+  --label: #073642;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --canvas: #002b36; --surface: #073642; --label: #eee8d5; }
+}
+:root[data-theme="dark"] { --canvas: #002b36; --surface: #073642; --label: #eee8d5; }
 /* deep hacking, optional */
 [data-app="notes"] .md a { text-decoration: underline; }
 ```

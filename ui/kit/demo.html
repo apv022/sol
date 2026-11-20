@@ -20,7 +20,9 @@
   .icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--fs-footnote); color: var(--label-2); border-radius: var(--radius-control); background: var(--surface); }
   .icons sol-icon { --size: 24px; color: var(--label); }
   .float { display: grid; place-items: center; width: 7rem; height: 4rem; background: var(--surface); border-radius: var(--radius-group); box-shadow: var(--shadow-float); font-size: var(--fs-footnote); }
-  .wall { padding: var(--space-5); border-radius: var(--radius-sheet); background: linear-gradient(180deg, light-dark(#8fb4e8, #0b1230) 0%, light-dark(#f3c982, #4a3a2a) 100%); display: flex; gap: var(--space-3); flex-wrap: wrap; }
+  .wall { padding: var(--space-5); border-radius: var(--radius-sheet); background: linear-gradient(180deg, #8fb4e8 0%, #f3c982 100%); display: flex; gap: var(--space-3); flex-wrap: wrap; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); } }
+  :root[data-theme="dark"] .wall { background: linear-gradient(180deg, #0b1230 0%, #4a3a2a 100%); }
   .apps { display: flex; gap: var(--space-4); flex-wrap: wrap; }
   .apps > div { display: grid; justify-items: center; gap: var(--space-1); font-size: var(--fs-footnote); }
   #phone { width: 390px; height: 700px; border: 0; border-radius: 28px; box-shadow: var(--shadow-float); background: var(--canvas); }
