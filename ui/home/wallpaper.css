@@ -1,0 +1,69 @@
+/* Wallpapers for the Sol app home screen. This is art, not UI chrome, so it is the one place in
+   ui/home that holds raw colours (the kit's token test skips this file). Each wallpaper is a set of
+   --wp-* variables on [data-wallpaper="name"]; the page and the Settings tiles share them. Dusk is
+   morning in light mode (blue sky, warm horizon) and night in dark mode (deep blue, gold horizon). */
+
+[data-wallpaper="dusk"] {
+  --wp-1: #4f86cf; --wp-2: #86b2e6; --wp-3: #f3d3b3; --wp-4: #f0a56c;
+  --wp-sun-core: #fff6d2; --wp-sun-halo: rgba(255, 214, 120, .6); --wp-sun-y: 74%;
+  --wp-hill-1: #8f77a8; --wp-hill-2: #5d5486;
+  --wp-ink: #fff; --wp-ink-2: rgba(255, 255, 255, .82); --wp-shadow: rgba(10, 30, 70, .35);
+}
+:root[data-theme="dark"] [data-wallpaper="dusk"], :root[data-theme="dark"][data-wallpaper="dusk"] {
+  --wp-1: #050a1d; --wp-2: #0f1c44; --wp-3: #3b3068; --wp-4: #c9803f;
+  --wp-sun-core: #ffd479; --wp-sun-halo: rgba(255, 170, 60, .5); --wp-sun-y: 82%;
+  --wp-hill-1: #1a1a3d; --wp-hill-2: #0a0d24;
+  --wp-shadow: rgba(0, 0, 0, .5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) [data-wallpaper="dusk"], :root:not([data-theme="light"])[data-wallpaper="dusk"] {
+    --wp-1: #050a1d; --wp-2: #0f1c44; --wp-3: #3b3068; --wp-4: #c9803f;
+    --wp-sun-core: #ffd479; --wp-sun-halo: rgba(255, 170, 60, .5); --wp-sun-y: 82%;
+    --wp-hill-1: #1a1a3d; --wp-hill-2: #0a0d24;
+    --wp-shadow: rgba(0, 0, 0, .5);
+  }
+}
+
+[data-wallpaper="aurora"] {
+  --wp-1: #0d2b3e; --wp-2: #166a73; --wp-3: #4fb59a; --wp-4: #c8e8b0;
+  --wp-sun-core: #f2ffd8; --wp-sun-halo: rgba(190, 255, 190, .45); --wp-sun-y: 78%;
+  --wp-hill-1: #1c5a5c; --wp-hill-2: #0e3a46;
+  --wp-ink: #fff; --wp-ink-2: rgba(255, 255, 255, .82); --wp-shadow: rgba(0, 30, 40, .4);
+}
+[data-wallpaper="ember"] {
+  --wp-1: #3a1736; --wp-2: #a13f4b; --wp-3: #ee8a54; --wp-4: #fcc875;
+  --wp-sun-core: #fff0c0; --wp-sun-halo: rgba(255, 190, 90, .55); --wp-sun-y: 76%;
+  --wp-hill-1: #6f2a4a; --wp-hill-2: #3d1a3c;
+  --wp-ink: #fff; --wp-ink-2: rgba(255, 255, 255, .85); --wp-shadow: rgba(50, 10, 20, .4);
+}
+[data-wallpaper="slate"] {
+  --wp-1: #2b2f38; --wp-2: #4a505c; --wp-3: #79808c; --wp-4: #aab0ba;
+  --wp-sun-core: #f4f5f7; --wp-sun-halo: rgba(255, 255, 255, .3); --wp-sun-y: 78%;
+  --wp-hill-1: #414752; --wp-hill-2: #2a2e36;
+  --wp-ink: #fff; --wp-ink-2: rgba(255, 255, 255, .82); --wp-shadow: rgba(0, 0, 0, .4);
+}
+/* Non-dusk wallpapers are one palette; in dark mode they sit under a veil. */
+:root { --wp-veil: transparent; }
+:root[data-theme="dark"]:not([data-wallpaper="dusk"]) { --wp-veil: rgba(0, 0, 0, .5); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-wallpaper="dusk"]) { --wp-veil: rgba(0, 0, 0, .5); }
+}
+
+/* The wallpaper surface: sky, sun glow and two hills as layered gradients (no images). */
+.wp {
+  position: relative; overflow: hidden; isolation: isolate;
+  background:
+    linear-gradient(180deg, var(--wp-1) 0%, var(--wp-2) 38%, var(--wp-3) 70%, var(--wp-4) 100%);
+}
+.wp .sun {
+  position: absolute; left: 62%; top: var(--wp-sun-y); width: 46vmin; height: 46vmin; min-width: 90px; min-height: 90px; translate: -50% -50%; z-index: -1;
+  background: radial-gradient(circle, var(--wp-sun-core) 0 11%, var(--wp-sun-halo) 12%, transparent 62%);
+}
+/* Hills sit in front of the sun so it can set behind them. */
+.wp::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(var(--wp-veil), var(--wp-veil)),
+    radial-gradient(120% 38% at 25% 104%, var(--wp-hill-1) 0 62%, transparent 63%),
+    radial-gradient(130% 34% at 85% 106%, var(--wp-hill-2) 0 62%, transparent 63%);
+}

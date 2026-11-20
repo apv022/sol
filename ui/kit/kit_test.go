@@ -41,6 +41,13 @@ func TestAppCSSUsesTokensOnly(t *testing.T) {
 	if err != nil || len(files) < 2 {
 		t.Fatalf("expected app stylesheets, got %v %v", files, err)
 	}
+	// The Sol app too, except its wallpapers: art with raw colours by design.
+	home, _ := filepath.Glob("../home/*.css")
+	for _, f := range home {
+		if filepath.Base(f) != "wallpaper.css" {
+			files = append(files, f)
+		}
+	}
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {

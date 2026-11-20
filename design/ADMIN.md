@@ -25,7 +25,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 
 | Endpoint | Does |
 |---|---|
-| `GET status` | me (person, device), endpoints, transports and their state, sessions |
+| `GET status` | me (person, device), endpoints, transports and their state, `sessions` (browser), `peer_sessions` (live device sessions), `storage` (`{used, total}` of the synced folder's disk) |
 | `GET people` | contacts: id, name, petname, devices (online, anchor), what they share with me, what I share with them |
 | `PATCH people/{id}` `{petname}` | rename locally |
 | `DELETE people/{id}` | unpair (both sides drop the contact; their copies of shared data stay with them) |
@@ -39,11 +39,12 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `GET services` | shared local services (port sharing): name, port, http, people |
 | `POST services` `{name, port, http, people}` · `PATCH services/{name}` · `DELETE services/{name}` | share a local port with people |
 | `GET tunnels` · `POST tunnels` `{person, service, port?}` · `DELETE tunnels/{id}` | open a contact's service on a local port (`127.0.0.1:<port>`) |
-| `GET inbox` · `POST inbox/{id}/approve` · `POST inbox/{id}/deny` | the Inbox for all apps |
+| `GET inbox` · `POST inbox/{id}/approve` · `POST inbox/{id}/deny` · `POST inbox/{id}/dismiss` | the Inbox for all apps (dismiss is for notices) |
 | `GET theme` · `POST theme` `{name}` · `POST theme/settings` `{…}` · `GET themes` | appearance |
 | `GET backup` (pending words, if any) · `POST backup/confirm` | the 24 words |
 | `GET agents` · `POST agents/{name}/revoke` | agent keys issued on this device |
 | `POST network-changed` | re-dial now |
+| `GET sessions` · `DELETE sessions/{id}` | browser sessions (list, revoke) |
 | `GET events` | SSE: `status`, `person`, `device`, `session`, `app`, `inbox`, `service`, `tunnel`, `theme` with `Last-Event-ID` resume. The page never polls |
 
 Errors use the API.md error shape. Every change is written to the activity log as `sol.*`.

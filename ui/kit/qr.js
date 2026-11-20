@@ -53,8 +53,10 @@ class SolQR extends HTMLElement {
     const svgNS = 'http://www.w3.org/2000/svg';
     this.replaceChildren();
     if (!value) return;
+    const turn = (this.drawTurn = (this.drawTurn || 0) + 1); // a newer draw (attribute change) wins
     try {
       const rows = await qrMatrix(value, this.getAttribute('ecc') || 'M');
+      if (turn !== this.drawTurn) return;
       const size = rows.length + 8;
       const svg = document.createElementNS(svgNS, 'svg');
       svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
