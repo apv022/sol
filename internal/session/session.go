@@ -16,10 +16,11 @@
 //   - Pair and join secrets are burned on first use (internal/pairing).
 //   - A kept peer is redialed whenever its session dies, with exponential
 //     backoff between RedialMin and RedialMax.
+//   - Paths are ranked, dialed hedged, backed off and put on probation as in
+//     paths.go; every session records the path it uses and why (Session.Path).
+//   - Identity changes are pushed to every session at once, and contacts'
+//     bundles are relayed to my other devices (push.go).
 //   - Nothing here logs secrets or request bodies.
-//
-// Path choice is a simple ordered try (Config.Paths); transport ranking,
-// probation and hedging are ticket C3b and plug in there.
 package session
 
 import (
@@ -81,9 +82,10 @@ type Config struct {
 	// Handler serves peer requests other than the built-in ones (GET
 	// /p/bundle). The verified peer is in the request context (PeerFrom).
 	Handler http.Handler
-	// Paths orders a device's endpoints for dialing. nil means the order of
-	// the record. The seam for C3b's ranking and probation.
-	Paths func(identity.EndpointRecord) []identity.Endpoint
+	// OnBundle, if set, is called with every verified bundle that told this
+	// device something new (in a handshake, a push or a relay), so the caller
+	// can persist the identity cache. It must not block.
+	OnBundle func(identity.Bundle)
 	// OnSession, if set, is called (in its own goroutine) for every session
 	// that comes up and wins the tie-break, e.g. to start feed replication
 	// over it. It should return once the session is Done.
@@ -102,6 +104,10 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	slots  chan struct{} // inbound handshakes in progress
+	// announce wakes the announcer (BundleChanged); probes caps concurrent
+	// path probes.
+	announce chan struct{}
+	probes   chan struct{}
 
 	mu        sync.Mutex
 	closed    bool
@@ -110,6 +116,7 @@ type Manager struct {
 	endpoints map[string]identity.EndpointRecord // newest seen per device
 	dialing   map[string]*sync.Mutex
 	listeners map[net.Listener]struct{}
+	links     map[string]*link // path state per peer device (paths.go)
 }
 
 // New returns a Manager. Call Serve to accept connections.
@@ -124,7 +131,7 @@ func New(cfg Config) (*Manager, error) {
 		cfg.Log = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{
+	m := &Manager{
 		cfg: cfg, kr: cfg.Keyring, cache: cfg.Cache,
 		log:       cfg.Log.With("device", short(cfg.Keyring.DevicePublic())),
 		ctx:       ctx,
@@ -135,7 +142,28 @@ func New(cfg Config) (*Manager, error) {
 		endpoints: map[string]identity.EndpointRecord{},
 		dialing:   map[string]*sync.Mutex{},
 		listeners: map[net.Listener]struct{}{},
-	}, nil
+		links:     map[string]*link{},
+		announce:  make(chan struct{}, 1),
+		probes:    make(chan struct{}, maxProbes),
+	}
+	m.wg.Add(1)
+	go m.announcer()
+	return m, nil
+}
+
+// goBG runs f in the background unless the manager is closed; Close waits for it.
+func (m *Manager) goBG(f func()) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		f()
+	}()
+	return true
 }
 
 func short(k ed25519.PublicKey) string {
@@ -153,7 +181,14 @@ type Session struct {
 	caller ed25519.PublicKey // the device that dialed
 	client *http.Client
 	srv    *http.Server
+
+	path    PathInfo  // how it was reached
+	pathKey string    // the endpoint it was dialed over ("" inbound)
+	started time.Time // when it came up
 }
+
+// Path says how the session was reached and why that path.
+func (s *Session) Path() PathInfo { return s.path }
 
 // Peer returns the verified other side.
 func (s *Session) Peer() Peer { return s.peer }
@@ -308,6 +343,7 @@ func (m *Manager) admit(b identity.Bundle, dev ed25519.PublicKey) (Peer, error) 
 		switch err := m.kr.Adopt(b.Person, b.Devices); {
 		case err == nil:
 			m.prune(me)
+			m.BundleChanged()
 		case errors.Is(err, identity.ErrNotInList):
 			return Peer{}, fmt.Errorf("its device list no longer contains this device: %w", err)
 		}
@@ -319,38 +355,45 @@ func (m *Manager) admit(b identity.Bundle, dev ed25519.PublicKey) (Peer, error) 
 			return Peer{}, fmt.Errorf("own person, %w", identity.ErrNotInList)
 		}
 		m.NoteEndpoints(b.Endpoints)
+		m.noteBundle(b)
 		return Peer{Person: person, Device: dev, Relation: Self}, nil
 	}
 	if !m.cfg.Contacts.IsContact(person) {
 		return Peer{}, ErrNotRelated
 	}
-	if err := m.foldContact(b, dev); err != nil {
+	changed, err := m.foldContact(b, dev)
+	if err != nil {
 		return Peer{}, err
 	}
 	m.NoteEndpoints(b.Endpoints)
+	m.noteBundle(b)
+	if changed {
+		m.relay(b)
+	}
 	return Peer{Person: person, Device: dev, Relation: Contact}, nil
 }
 
 // foldContact checks a contact's bundle against the cache. A device that
 // presents an older (but valid) list is still admitted while the newest
 // list we know contains it: it just hasn't caught up.
-func (m *Manager) foldContact(b identity.Bundle, dev ed25519.PublicKey) error {
-	_, err := m.cache.Accept(b, dev)
+// changed reports news (to relay to my other devices).
+func (m *Manager) foldContact(b identity.Bundle, dev ed25519.PublicKey) (changed bool, err error) {
+	_, changed, err = m.cache.Fold(b, dev)
 	if err == nil {
 		m.prune(b.Person.Person)
-		return nil
+		return changed, nil
 	}
 	if !errors.Is(err, identity.ErrRollback) {
-		return err
+		return false, err
 	}
 	_, dl, ok := m.cache.Latest(b.Person.Person)
 	if !ok {
-		return err
+		return false, err
 	}
 	if _, in := dl.Find(dev); !in {
-		return fmt.Errorf("contact device: %w", identity.ErrNotInList)
+		return false, fmt.Errorf("contact device: %w", identity.ErrNotInList)
 	}
-	return nil
+	return false, nil
 }
 
 // listed reports whether device is in the newest list known for person.
@@ -407,6 +450,7 @@ func (m *Manager) RemoveDevice(device ed25519.PublicKey) (identity.DeviceList, e
 		return dl, err
 	}
 	m.prune(m.kr.Person())
+	m.BundleChanged()
 	return dl, nil
 }
 
@@ -445,7 +489,14 @@ func (m *Manager) answer(conn net.Conn) {
 		m.log.Info("answered a recovery request", "person", short(req.Person))
 		return
 	}
-	s := m.start(conn, false, peer, req.Device)
+	if req.Op == wire.OpProbe {
+		conn.Close() // the path works; the live session stays as it is
+		return
+	}
+	if req.Op == wire.OpJoin {
+		m.BundleChanged() // the device list grew: tell everyone
+	}
+	s := m.start(conn, false, peer, req.Device, PathInfo{Inbound: true, Reason: "the peer dialed this device"}, "")
 	if s != nil {
 		m.Keep(peer.Person, peer.Device)
 	}
@@ -454,7 +505,7 @@ func (m *Manager) answer(conn net.Conn) {
 // decide is the callee's policy for each op (PROTOCOL.md §Callee decision).
 func (m *Manager) decide(r *wire.Request) (Peer, error) {
 	switch r.Op {
-	case wire.OpSession:
+	case wire.OpSession, wire.OpProbe:
 		return m.admit(r.Bundle, r.Device)
 	case wire.OpPair:
 		person := r.Bundle.Person.Person
@@ -504,14 +555,14 @@ func (m *Manager) decide(r *wire.Request) (Peer, error) {
 
 // start turns a handshaken connection into a registered session. It returns
 // the session that won the tie-break (nil if the manager is closed).
-func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.PublicKey) *Session {
+func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.PublicKey, path PathInfo, pk string) *Session {
 	var ms *mux.Session
 	if weCalled {
 		ms = mux.Client(conn)
 	} else {
 		ms = mux.Server(conn)
 	}
-	s := &Session{m: m, mux: ms, peer: peer, caller: caller}
+	s := &Session{m: m, mux: ms, peer: peer, caller: caller, path: path, pathKey: pk, started: time.Now()}
 	s.client = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return ms.Open(ctx)
@@ -541,9 +592,13 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 		s.client.CloseIdleConnections()
 		m.unregister(s)
 	}()
-	m.log.Info("session up", "peer", short(peer.Device), "relation", peer.Relation, "caller", short(caller))
+	m.log.Info("session up", "peer", short(peer.Device), "relation", peer.Relation, "caller", short(caller),
+		"path", path.Transport, "why", path.Reason)
 	if m.cfg.OnSession != nil {
 		go m.cfg.OnSession(s)
+	}
+	if peer.Relation == Self {
+		m.goBG(func() { m.relayAll(s) })
 	}
 	return s
 }
@@ -597,7 +652,8 @@ func (m *Manager) unregister(s *Session) {
 
 func (m *Manager) handler() http.Handler {
 	mx := http.NewServeMux()
-	mx.HandleFunc("GET /p/bundle", func(w http.ResponseWriter, r *http.Request) {
+	mx.HandleFunc("POST "+BundlePath, m.servePush)
+	mx.HandleFunc("GET "+BundlePath, func(w http.ResponseWriter, r *http.Request) {
 		b, err := m.myBundle()
 		if err != nil {
 			http.Error(w, "no identity", http.StatusServiceUnavailable)
@@ -742,17 +798,10 @@ func (m *Manager) Connect(ctx context.Context, person, device ed25519.PublicKey)
 	if s, ok := m.Session(device); ok {
 		return s, nil
 	}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
+	dm := m.dialMutex(device)
+	if dm == nil {
 		return nil, ErrClosed
 	}
-	dm := m.dialing[string(device)]
-	if dm == nil {
-		dm = &sync.Mutex{}
-		m.dialing[string(device)] = dm
-	}
-	m.mu.Unlock()
 	dm.Lock()
 	defer dm.Unlock()
 	if s, ok := m.Session(device); ok {
@@ -762,7 +811,7 @@ func (m *Manager) Connect(ctx context.Context, person, device ed25519.PublicKey)
 	if !ok || !bytes.Equal(rec.Device, device) {
 		return nil, ErrNoRoute
 	}
-	conn, res, err := m.dial(ctx, rec, wire.OpSession, nil, person)
+	conn, res, path, pk, err := m.dial(ctx, rec, wire.Call{Op: wire.OpSession}, person)
 	if err != nil {
 		return nil, err
 	}
@@ -771,11 +820,26 @@ func (m *Manager) Connect(ctx context.Context, person, device ed25519.PublicKey)
 		conn.Close()
 		return nil, err
 	}
-	s := m.start(conn, true, peer, m.kr.DevicePublic())
+	s := m.start(conn, true, peer, m.kr.DevicePublic(), path, pk)
 	if s == nil {
 		return nil, ErrClosed
 	}
 	return s, nil
+}
+
+// dialMutex returns the lock that serializes dials to device (nil once closed).
+func (m *Manager) dialMutex(device ed25519.PublicKey) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
+	dm := m.dialing[string(device)]
+	if dm == nil {
+		dm = &sync.Mutex{}
+		m.dialing[string(device)] = dm
+	}
+	return dm
 }
 
 // transportFor returns the first configured transport that can dial ep.
@@ -788,63 +852,30 @@ func (m *Manager) transportFor(ep identity.Endpoint) transport.Transport {
 	return nil
 }
 
-// dial tries rec's endpoints in order and runs the handshake for op on the
-// first connection that opens. The callee must be rec.Device and speak for
-// wantPerson.
-func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, op string, secret []byte, wantPerson ed25519.PublicKey) (net.Conn, *wire.Result, error) {
-	return m.dialNamed(ctx, rec, op, secret, wantPerson, "")
-}
-
-// dialNamed is dial with the joining device's name (join only).
-func (m *Manager) dialNamed(ctx context.Context, rec identity.EndpointRecord, op string, secret []byte, wantPerson ed25519.PublicKey, name string) (net.Conn, *wire.Result, error) {
-	var bundle []byte
-	var err error
-	if op == wire.OpJoin {
-		bundle = m.kr.Endpoints().Marshal()
-	} else if bundle, err = m.myBundle(); err != nil {
-		return nil, nil, err
-	}
-	paths := rec.Endpoints
-	if m.cfg.Paths != nil {
-		paths = m.cfg.Paths(rec)
-	}
-	var errs []error
-	for _, ep := range paths {
-		t := m.transportFor(ep)
-		if t == nil {
-			continue
-		}
-		dctx, cancel := context.WithTimeout(ctx, DialTimeout)
-		conn, err := t.Dial(dctx, ep.Address)
-		cancel()
+// dial reaches rec.Device over its ranked paths, hedged (paths.go), and runs
+// the handshake for c (Want and Bundle are filled in here). The callee must
+// speak for wantPerson. It returns the connection, the handshake result, why
+// that path, and the path's key.
+func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, c wire.Call, wantPerson ed25519.PublicKey) (net.Conn, *wire.Result, PathInfo, string, error) {
+	if c.Op == wire.OpJoin {
+		c.Bundle = m.kr.Endpoints().Marshal()
+	} else {
+		b, err := m.myBundle()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", ep.Transport, err))
-			continue
+			return nil, nil, PathInfo{}, "", err
 		}
-		stop := context.AfterFunc(ctx, func() { conn.Close() })
-		res, err := wire.Dial(conn, m.kr, wire.Call{Op: op, Want: rec.Device, Bundle: bundle, Secret: secret, Name: name})
-		stop()
-		if err != nil {
-			if errors.Is(err, wire.ErrWrongDevice) || errors.Is(err, wire.ErrTruncated) {
-				errs = append(errs, fmt.Errorf("%s: %w", ep.Transport, err))
-				continue // that path leads elsewhere, or broke: try the next
-			}
-			return nil, nil, err // the device itself answered no
-		}
-		if !bytes.Equal(res.Bundle.Person.Person, wantPerson) {
-			conn.Close()
-			return nil, nil, ErrWrongPeer
-		}
-		if ctx.Err() != nil {
-			conn.Close()
-			return nil, nil, ctx.Err()
-		}
-		return conn, res, nil
+		c.Bundle = b
 	}
-	if len(errs) == 0 {
-		return nil, nil, ErrNoRoute
+	c.Want = rec.Device
+	paths := m.rank(rec)
+	if c.Op == wire.OpPair || c.Op == wire.OpJoin {
+		paths = noWG(paths)
 	}
-	return nil, nil, errors.Join(errs...)
+	conn, res, path, ep, err := m.dialHedged(ctx, rec.Device, wantPerson, paths, c)
+	if err != nil {
+		return nil, nil, path, "", err
+	}
+	return conn, res, path, pathKey(ep), nil
 }
 
 // Pair redeems a sol://pair link: the inviter and this person become
@@ -859,7 +890,7 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 	case bytes.Equal(l.Person, me):
 		return nil, errors.New("session: that link is from my own person; use a join link to add a device")
 	}
-	conn, res, err := m.dial(ctx, l.Endpoints, wire.OpPair, l.Secret, l.Person)
+	conn, res, path, pk, err := m.dial(ctx, l.Endpoints, wire.Call{Op: wire.OpPair, Secret: l.Secret}, l.Person)
 	if err != nil {
 		return nil, err
 	}
@@ -872,7 +903,7 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 		return nil, err
 	}
 	m.NoteEndpoints(res.Bundle.Endpoints)
-	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic())
+	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic(), path, pk)
 	if s == nil {
 		return nil, ErrClosed
 	}
@@ -890,7 +921,7 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 	if m.kr.Person() != nil {
 		return nil, errors.New("session: this device already belongs to a person")
 	}
-	conn, res, err := m.dialNamed(ctx, l.Endpoints, wire.OpJoin, l.Secret, l.Person, name)
+	conn, res, path, pk, err := m.dial(ctx, l.Endpoints, wire.Call{Op: wire.OpJoin, Secret: l.Secret, Name: name}, l.Person)
 	if err != nil {
 		return nil, err
 	}
@@ -899,7 +930,7 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 		return nil, fmt.Errorf("session: adopting the device list: %w", err)
 	}
 	m.NoteEndpoints(res.Bundle.Endpoints)
-	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic())
+	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic(), path, pk)
 	if s == nil {
 		return nil, ErrClosed
 	}
@@ -980,8 +1011,14 @@ func (m *Manager) Forget(device ed25519.PublicKey) {
 	}
 }
 
-// NetworkChanged makes every keeper waiting in backoff redial now.
+// NetworkChanged reacts to a network change or a wake from sleep: every
+// keeper waiting in backoff redials now, every failed path is due for a
+// probe, and every session is checked (one whose local address is gone, or
+// that doesn't answer within the probe timeout, is closed and redialed over
+// the best path there is now).
 func (m *Manager) NetworkChanged() {
+	m.pathsDue()
+	m.checkSessions()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, k := range m.keepers {
@@ -992,14 +1029,31 @@ func (m *Manager) NetworkChanged() {
 func (m *Manager) keep(k *keeper) {
 	defer m.wg.Done()
 	backoff := RedialMin
+	var notBefore time.Time // no upgrade attempt before this
 	for k.ctx.Err() == nil {
 		if s, ok := m.Session(k.device); ok {
 			backoff = RedialMin
+			var due <-chan time.Time
+			var t *time.Timer
+			ep, when, up := m.upgradeDue(s)
+			if up {
+				t = time.NewTimer(time.Until(maxTime(when, notBefore)))
+				due = t.C
+			}
 			select {
 			case <-s.Done():
 			case <-k.wake:
+			case <-due:
+				m.tryUpgrade(k.ctx, s, ep)
+				notBefore = time.Now().Add(RedialMin)
 			case <-k.ctx.Done():
+				if t != nil {
+					t.Stop()
+				}
 				return
+			}
+			if t != nil {
+				t.Stop()
 			}
 			continue
 		}
@@ -1020,4 +1074,11 @@ func (m *Manager) keep(k *keeper) {
 			return
 		}
 	}
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

@@ -149,6 +149,29 @@ func (c *Cache) Update(b Bundle, devicePub ed25519.PublicKey) error {
 	return err
 }
 
+// Fold is Accept that also reports whether anything was newer than the
+// cache held (a person certificate, a device list or the device's endpoint
+// record), so a caller can pass news on exactly once.
+func (c *Cache) Fold(b Bundle, devicePub ed25519.PublicKey) (Device, bool, error) {
+	return c.fold(b, devicePub)
+}
+
+// Bundles exports the whole cache as bundles: one per device whose endpoint
+// record is known, each with its person's newest certificate and list. A
+// device relays them to its siblings (session.Manager), and the daemon
+// persists them; every one verifies on its own.
+func (c *Cache) Bundles() []Bundle {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []Bundle
+	for _, cur := range c.m {
+		for _, ep := range cur.eps {
+			out = append(out, Bundle{Person: cur.pc, Devices: cur.dl, Endpoints: ep})
+		}
+	}
+	return out
+}
+
 func (c *Cache) fold(b Bundle, devicePub ed25519.PublicKey) (Device, bool, error) {
 	dev, err := VerifyBundle(b, devicePub)
 	if err != nil {

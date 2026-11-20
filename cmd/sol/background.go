@@ -37,31 +37,42 @@ func logPath(dir string) string { return filepath.Join(dir, logName) }
 // the signal (daemon.WaitUp).
 func startCmd(dir string) error {
 	if !daemon.Initialised(dir) {
-		fmt.Printf("Sol is not set up in %s yet.\n  Set it up:   sol init --name YOURNAME\n  Add a device to someone you already are: sol init --join\n", dir)
-		return nil
+		return firstRun(dir)
 	}
-	if st, err := daemon.Running(dir); err == nil {
-		fmt.Printf("Sol is already running.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`.\n", st.UI, dir)
-		return nil
-	}
-	exited, err := spawn(dir)
+	st, already, err := startDaemon(dir)
 	if err != nil {
 		return err
 	}
-	st, err := daemon.WaitUp(dir, exited, startWait)
+	if already {
+		fmt.Printf("Sol is already running.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`.\n", st.UI, dir)
+		return nil
+	}
+	fmt.Printf("Sol is running in the background.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`. Logs: `sol logs -f`. Stop: `sol stop`.\n", st.UI, dir)
+	return nil
+}
+
+// startDaemon makes sure a daemon answers on an initialised dir; already reports that one
+// was running (or won a race to start).
+func startDaemon(dir string) (st daemon.Status, already bool, err error) {
+	if st, err := daemon.Running(dir); err == nil {
+		return st, true, nil
+	}
+	exited, err := spawn(dir)
+	if err != nil {
+		return st, false, err
+	}
+	st, err = daemon.WaitUp(dir, exited, startWait)
 	switch {
 	case errors.Is(err, daemon.ErrExited):
 		// A racing start may have won; then somebody answers now.
 		if st, err2 := daemon.Running(dir); err2 == nil {
-			fmt.Printf("Sol is already running.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`.\n", st.UI, dir)
-			return nil
+			return st, true, nil
 		}
-		return fmt.Errorf("the daemon stopped right after starting; its last lines (%s):\n%s", logPath(dir), tail(logPath(dir), 8))
+		return st, false, fmt.Errorf("the daemon stopped right after starting; its last lines (%s):\n%s", logPath(dir), tail(logPath(dir), 8))
 	case err != nil:
-		return fmt.Errorf("the daemon did not answer within %s; see %s", startWait, logPath(dir))
+		return st, false, fmt.Errorf("the daemon did not answer within %s; see %s", startWait, logPath(dir))
 	}
-	fmt.Printf("Sol is running in the background.\n  UI:   %s\n  Data: %s\n  Open it with `sol open`. Logs: `sol logs -f`. Stop: `sol stop`.\n", st.UI, dir)
-	return nil
+	return st, false, nil
 }
 
 // spawn starts `sol run --dir dir` detached, output to <dir>/sol.log. The returned channel
@@ -258,11 +269,17 @@ func autostartCmd(dir string, args []string, asJSON bool) error {
 			return err
 		}
 		fmt.Println("Sol will start when you log in.")
+		if err := launcherOn(dir); err != nil && !errors.Is(err, autostart.ErrLauncherNotImplemented) {
+			fmt.Fprintln(os.Stderr, "note: no app-menu entry:", err)
+		}
 	case "off":
 		if err := m.Disable(); err != nil {
 			return err
 		}
 		fmt.Println("Sol will no longer start when you log in.")
+		if err := launcherOff(dir); err != nil && !errors.Is(err, autostart.ErrLauncherNotImplemented) {
+			fmt.Fprintln(os.Stderr, "note: could not remove the app-menu entry:", err)
+		}
 	default:
 		st := m.Status()
 		if asJSON {
@@ -275,6 +292,55 @@ func autostartCmd(dir string, args []string, asJSON bool) error {
 			fmt.Printf("set up for another data directory (%s)\n", st.Path)
 		case st.Enabled:
 			fmt.Printf("on (%s)\n", st.Path)
+		default:
+			fmt.Println("off")
+		}
+	}
+	return nil
+}
+
+func launcherOn(dir string) error {
+	l, err := autostart.LauncherForThisProcess(runtime.GOOS, dir)
+	if err != nil {
+		return err
+	}
+	return l.Enable()
+}
+
+func launcherOff(dir string) error {
+	l, err := autostart.LauncherForThisProcess(runtime.GOOS, dir)
+	if err != nil && !errors.Is(err, autostart.ErrGoRun) {
+		return err
+	}
+	return l.Disable()
+}
+
+// launcherCmd is `sol launcher on|off|status`: the "Sol" entry in the app menu (Linux).
+// `sol autostart on|off` manage it too.
+func launcherCmd(dir string, args []string) error {
+	if len(args) != 1 || (args[0] != "on" && args[0] != "off" && args[0] != "status") {
+		return errors.New("usage: sol launcher on|off|status")
+	}
+	switch args[0] {
+	case "on":
+		if err := launcherOn(dir); err != nil {
+			return err
+		}
+		fmt.Println("Sol is in your app menu.")
+	case "off":
+		if err := launcherOff(dir); err != nil {
+			return err
+		}
+		fmt.Println("Sol is no longer in your app menu.")
+	default:
+		l, err := autostart.LauncherForThisProcess(runtime.GOOS, dir)
+		switch {
+		case runtime.GOOS != "linux":
+			fmt.Println(autostart.ErrLauncherNotImplemented.Error())
+		case err != nil && !errors.Is(err, autostart.ErrGoRun):
+			return err
+		case l.Enabled():
+			fmt.Printf("on (%s)\n", l.DesktopPath())
 		default:
 			fmt.Println("off")
 		}

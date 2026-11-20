@@ -56,9 +56,6 @@ func TestBackgroundLifecycle(t *testing.T) {
 	bin := solBin(t)
 	dir := filepath.Join(t.TempDir(), "d")
 	// A short path keeps unix sockets valid; the daemon falls back to a temp run dir anyway.
-	if out := solRun(t, bin, dir); !strings.Contains(out, "sol init") {
-		t.Fatalf("uninitialised: %s", out)
-	}
 	solRun(t, bin, dir, "init", "--name", "Test", "--device", "t", "--ui", freeAddr(t), "--listen", "127.0.0.1:0")
 	t.Cleanup(func() { _ = exec.Command(bin, "stop", "--dir", dir).Run() })
 
@@ -153,4 +150,43 @@ func TestFollowLog(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// TestFirstRun: plain `sol` with no data directory sets Sol up from the OS account, starts it
+// and prints a one-time login URL (no browser: SSH_CONNECTION is set); it also adds the app-menu
+// entry under HOME.
+func TestFirstRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := solBin(t)
+	home := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "d")
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = append(os.Environ(), "SOL_DIR="+dir, "HOME="+home, "XDG_DATA_HOME=", "SSH_CONNECTION=1 2 3 4", "USER=tester")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sol %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	t.Cleanup(func() { _ = exec.Command(bin, "stop", "--dir", dir).Run() })
+	out := run()
+	for _, w := range []string{"Welcome to Sol", dir, "http://localhost:", "/login?code=", "sol stop", "sol open"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("first run output lacks %q:\n%s", w, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "applications", "sol.desktop")); err != nil && runtime.GOOS == "linux" {
+		t.Fatalf("no launcher: %v", err)
+	}
+	if out := run("status"); !strings.Contains(out, "device") {
+		t.Fatalf("status: %s", out)
+	}
+	if runtime.GOOS == "linux" {
+		if out := run("launcher", "off"); !strings.Contains(out, "no longer") {
+			t.Fatalf("launcher off: %s", out)
+		}
+	}
 }

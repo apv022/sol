@@ -10,7 +10,9 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
@@ -42,6 +44,9 @@ import (
 //     without Origin is accepted only for GET/HEAD, and then not when Sec-Fetch-Site says
 //     another site), and the cookie names a live session. A request from an app origin or
 //     any other origin is refused before the cookie is looked at.
+//   - A browser with no live session may be let in without a code when the TCP connection
+//     belongs to the daemon's own OS user (autoLogin, peercred.go); it passes the same Host and
+//     Origin checks first, and app origins never reach it.
 //   - Minting login codes needs the admin token: a browser session cannot mint more.
 
 // Tunables (package variables so tests can shorten them).
@@ -147,6 +152,17 @@ func (a *browserAuth) redeem(code, client string) (string, *BrowserSession, bool
 	if !ok || now.After(exp) {
 		return "", nil, false
 	}
+	return a.startLocked(client, now)
+}
+
+// start begins a session without a code (same-OS-user auto-login).
+func (a *browserAuth) start(client string) (string, *BrowserSession, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.startLocked(client, time.Now())
+}
+
+func (a *browserAuth) startLocked(client string, now time.Time) (string, *BrowserSession, bool) {
 	tok := randomHex(32)
 	th := hash32(tok)
 	if len(client) > 120 {
@@ -186,6 +202,14 @@ func (a *browserAuth) check(tok string) (BrowserSession, bool, bool) {
 		renewed = true
 	}
 	return s.BrowserSession, true, renewed
+}
+
+// live reports whether tok names an unexpired session, without renewing it.
+func (a *browserAuth) live(tok string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sess[hash32(tok)]
+	return ok && time.Now().Before(s.Expires)
 }
 
 // list returns the live sessions, oldest first; current is marked.
@@ -260,6 +284,56 @@ var loginFailed = template.Must(template.New("login").Parse(`<!doctype html>
 <p>Login links work once, for a minute. Open Sol from the app, or run <code>sol open</code> again.</p>
 </main></body></html>`))
 
+// autoLogin starts a browser session when the request came from the daemon's own OS user: the
+// connection's client end must be a loopback socket owned by the same uid (SID on Windows).
+// The Host was pinned by the router; the Origin / Sec-Fetch-Site check is repeated here so a
+// cross-site navigation cannot trigger it. It looks the owner up on every call and caches
+// nothing. On success the session cookie is set on w and the session ID returned.
+func (d *Daemon) autoLogin(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !sameUIOrigin(r) {
+		return "", false
+	}
+	remote, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return "", false
+	}
+	la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if la == nil {
+		return "", false
+	}
+	local, err := netip.ParseAddrPort(la.String())
+	if err != nil {
+		return "", false
+	}
+	same := d.opt.SameUser
+	if same == nil {
+		same = defaultSameUser
+	}
+	ok, err := same(remote, local)
+	if err != nil || !ok {
+		if err != nil && !errors.Is(err, ErrSameUserUnsupported) {
+			d.log.Debug("same-user check failed", "err", err)
+		}
+		return "", false
+	}
+	tok, s, ok := d.browser.start(r.UserAgent())
+	if !ok {
+		return "", false
+	}
+	setSessionCookie(w, tok, int(SessionTTL/time.Second))
+	d.activity("sol.login", map[string]string{"session": s.ID, "how": "same-user"}, nil)
+	return s.ID, true
+}
+
+// hasSession reports whether the request carries a live session cookie (without renewing).
+func (d *Daemon) hasSession(r *http.Request) bool {
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	return d.browser.live(c.Value)
+}
+
 // rootHandler serves the UI root: the Sol app (ui/home), /login, and the admin API for the
 // browser at /admin/v1/.
 func (d *Daemon) rootHandler() http.Handler {
@@ -315,9 +389,16 @@ func (d *Daemon) rootHandler() http.Handler {
 			if _, err := fs.Stat(home.FS, strings.TrimPrefix(p, "/")); err != nil {
 				r2 := r.Clone(r.Context())
 				r2.URL.Path = "/"
+				if !d.hasSession(r) {
+					d.autoLogin(w, r)
+				}
 				files.ServeHTTP(w, r2)
 				return
 			}
+		}
+		// A page load without a session: let the daemon's own user straight in.
+		if p := path.Clean(r.URL.Path); (p == "/" || path.Ext(p) == "") && !d.hasSession(r) {
+			d.autoLogin(w, r)
 		}
 		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
@@ -333,20 +414,24 @@ func (d *Daemon) browserAdmin(w http.ResponseWriter, r *http.Request) {
 		sol.WriteError(w, sol.Errorf("forbidden", "cross-origin request"))
 		return
 	}
-	c, err := r.Cookie(SessionCookie)
-	if err != nil || c.Value == "" {
-		sol.WriteError(w, sol.Errorf("unauthorized", "Open Sol from the app or run `sol open`"))
-		return
+	id := ""
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		if s, ok, renewed := d.browser.check(c.Value); ok {
+			id = s.ID
+			if renewed {
+				setSessionCookie(w, c.Value, int(SessionTTL/time.Second))
+			}
+		}
 	}
-	s, ok, renewed := d.browser.check(c.Value)
-	if !ok {
-		setSessionCookie(w, "", -1)
-		sol.WriteError(w, sol.Errorf("unauthorized", "Open Sol from the app or run `sol open`"))
-		return
+	if id == "" {
+		// No live session (never had one, expired, or revoked): the daemon's own user is let in.
+		var ok bool
+		if id, ok = d.autoLogin(w, r); !ok {
+			setSessionCookie(w, "", -1)
+			sol.WriteError(w, sol.Errorf("unauthorized", "This browser isn't signed in to Sol. Open Sol from your app menu, or run `sol open`"))
+			return
+		}
 	}
-	if renewed {
-		setSessionCookie(w, c.Value, int(SessionTTL/time.Second))
-	}
-	r = r.WithContext(context.WithValue(r.Context(), browserKey{}, s.ID))
+	r = r.WithContext(context.WithValue(r.Context(), browserKey{}, id))
 	d.admin.ServeHTTP(w, r)
 }

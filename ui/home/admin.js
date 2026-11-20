@@ -1,6 +1,6 @@
 // Client for the admin API (design/ADMIN.md). Same-origin fetch with the session cookie; no
 // imports so it can be tested with a stub fetch. A 401 calls onUnauthorized, so the page can show
-// the "Open Sol from the app or run `sol open`" screen. Errors use the API.md shape.
+// the "This browser isn't signed in to Sol" screen. Errors use the API.md shape.
 
 /** An admin API failure: `code` and `message` from the daemon, `status` the HTTP status (0 offline). */
 export class AdminError extends Error {

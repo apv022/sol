@@ -323,6 +323,7 @@ func (d *Daemon) UpdateDevice(id string, p DevicePatch) (DeviceInfo, error) {
 	if _, err := d.Keyring.AddDevice(pub, name, flags, time.Now()); err != nil {
 		return DeviceInfo{}, err
 	}
+	d.Sessions.BundleChanged() // contacts and my other devices see the new name or flags now
 	di := d.device(id)
 	d.emit(EvDevice, di)
 	return di, nil

@@ -116,3 +116,44 @@ func TestGoRunDetected(t *testing.T) {
 		t.Fatal("not detected")
 	}
 }
+
+func TestDesktopEntryGolden(t *testing.T) {
+	got := DesktopEntry("/opt/my apps/sol", "/home/a/.local/share/sol", "/home/a/.local/share/icons/sol.svg")
+	want := `# Written by "sol autostart on" / "sol launcher on". Remove with "sol launcher off".
+[Desktop Entry]
+Type=Application
+Name=Sol
+Comment=Open Sol in your browser
+Exec="/opt/my apps/sol" open --dir "/home/a/.local/share/sol"
+Icon=/home/a/.local/share/icons/sol.svg
+Terminal=false
+Categories=Network;
+StartupNotify=false
+`
+	if got != want {
+		t.Fatalf("entry:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestLauncherEnableDisable(t *testing.T) {
+	home := t.TempDir()
+	l := Launcher{GOOS: "linux", Home: home, Exe: "/bin/sol", Dir: "/d"}
+	if err := l.Enable(); err != nil || !l.Enabled() {
+		t.Fatalf("enable: %v", err)
+	}
+	if b, _ := os.ReadFile(l.IconPath()); !strings.Contains(string(b), "<svg") {
+		t.Fatal("icon missing")
+	}
+	if err := l.Disable(); err != nil || l.Enabled() {
+		t.Fatalf("disable: %v", err)
+	}
+	if _, err := os.Stat(l.IconPath()); err == nil {
+		t.Fatal("icon left behind")
+	}
+	if err := l.Disable(); err != nil {
+		t.Fatalf("disable twice: %v", err)
+	}
+	if err := (Launcher{GOOS: "darwin"}).Enable(); !errors.Is(err, ErrLauncherNotImplemented) {
+		t.Fatalf("darwin: %v", err)
+	}
+}

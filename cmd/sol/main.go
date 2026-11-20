@@ -1,10 +1,12 @@
 // Command sol is the Sol daemon, its CLI, and the first-party apps in one binary.
 //
 //	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
-//	sol                          start this device in the background (same as sol start)
+//	sol                          start this device in the background (same as sol start); on a
+//	                             machine with no data directory it sets Sol up first and opens it
 //	sol start | stop | restart   manage the background daemon
 //	sol logs [-f] [-n N]         what the background daemon logged
 //	sol autostart on|off|status  start Sol when you log in (systemd user unit, launchd agent)
+//	sol launcher on|off|status   the "Sol" app-menu entry (Linux .desktop; `autostart` manages it too)
 //	sol run                      run this device in the foreground (what the above run)
 //	sol status                   who I am, my endpoints and sessions
 //	sol invite [--join]          print a one-time pair (or join) link
@@ -126,7 +128,8 @@ const usage = `usage: sol <command> [flags]
   init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
   (no command) | start | stop | restart       run Sol in the background; stop it; restart it
   logs [-f] [-n N]                  what the background daemon logged (-f follows)
-  autostart on|off|status           start Sol when you log in
+  autostart on|off|status           start Sol when you log in (and add Sol to the app menu)
+  launcher on|off|status            the "Sol" entry in the app menu (Linux)
   run                               run in the foreground
   status [--json]
   invite [--join]
@@ -230,6 +233,11 @@ func run(args []string) error {
 		return restartCmd(*dir)
 	case "logs":
 		return logsCmd(*dir, rest)
+	case "launcher":
+		if err := parseAnywhere(fs, rest); err != nil {
+			return err
+		}
+		return launcherCmd(*dir, fs.Args())
 	case "autostart":
 		if err := parseAnywhere(fs, rest); err != nil {
 			return err
@@ -657,21 +665,28 @@ func openUI(ctx context.Context, c *daemon.Client, printOnly bool) error {
 	if printOnly {
 		return nil
 	}
+	if !openBrowser(lc.URL) {
+		fmt.Fprintln(os.Stderr, "Could not start a browser; open the link above within a minute.")
+	}
+	return nil
+}
+
+// openBrowser starts the default browser on url; false if it could not.
+func openBrowser(url string) bool {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", lc.URL)
+		cmd = exec.Command("open", url)
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", lc.URL)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
-		cmd = exec.Command("xdg-open", lc.URL)
+		cmd = exec.Command("xdg-open", url)
 	}
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, "Could not start a browser; open the link above within a minute.")
-		return nil
+		return false
 	}
 	go func() { _ = cmd.Wait() }()
-	return nil
+	return true
 }
 
 // portCmd is `sol service ...` and `sol tunnel ...` (port sharing).

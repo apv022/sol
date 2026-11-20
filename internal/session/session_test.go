@@ -22,6 +22,12 @@ import (
 func TestMain(m *testing.M) {
 	RedialMin = 20 * time.Millisecond
 	RedialMax = 200 * time.Millisecond
+	HedgeDelay = 150 * time.Millisecond
+	PathBackoff = 100 * time.Millisecond
+	PathBackoffMax = time.Second
+	StableFor = 400 * time.Millisecond
+	StableProbes = 2
+	ProbeTimeout = 700 * time.Millisecond
 	m.Run()
 }
 

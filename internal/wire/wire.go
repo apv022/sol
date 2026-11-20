@@ -4,8 +4,8 @@
 //
 //	caller -> callee : ClientHello "SOLH" | u16 min | u16 max
 //	callee -> caller : Hello       "SOLH" | u16 min | u16 max | D_b | nonce_b
-//	caller -> callee : frame(Request JSON) | frame(bundle_a)
-//	callee -> caller : 0x01 | frame(bundle_b) | sig_b (64 bytes)
+//	caller -> callee : frame(Request JSON) | bframe(bundle_a)
+//	callee -> caller : 0x01 | bframe(bundle_b) | sig_b (64 bytes)
 //	                   or the callee closes without sending anything
 //
 // Invariants:
@@ -24,6 +24,9 @@
 //     for the decoded value), so no field can be smuggled in a form the
 //     signature doesn't pin.
 //   - The whole handshake runs under one deadline, HandshakeTimeout.
+//
+// A frame is u16 len | bytes (at most MaxFrame); a bframe, which carries an
+// identity bundle, is u32 len | bytes (at most MaxBundleFrame).
 //
 // This package verifies signatures and identity chains. Whether the verified
 // device may connect (contact, own device, a valid pairing token) is decided
@@ -65,6 +68,10 @@ const (
 	// record (like join) and proves the person with a second signature of T by the recovery
 	// key R. The callee answers and closes; no session follows.
 	OpRecover = "recover"
+	// OpProbe checks a path (design/PROTOCOL.md §Liveness): the callee decides as for
+	// OpSession, answers with its Accept and closes. No session follows, so probing a second
+	// path never replaces the live session.
+	OpProbe = "probe"
 )
 
 // Sizes on the wire.
@@ -74,8 +81,11 @@ const (
 	keySize    = ed25519.PublicKeySize
 	NonceSize  = 32
 	helloSize  = prefixSize + keySize + NonceSize
-	// MaxFrame is the largest handshake frame payload.
+	// MaxFrame is the largest handshake frame payload (the Request JSON).
 	MaxFrame = 16384
+	// MaxBundleFrame is the largest bundle frame payload. Bundle frames have
+	// a 4-byte length, so a large device list fits.
+	MaxBundleFrame = 1 << 20
 	// SecretSize is the size of a pair or join secret.
 	SecretSize = 32
 	replyOK    = 0x01
@@ -277,6 +287,30 @@ func readFrame(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
+func appendBundleFrame(b, data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data) > MaxBundleFrame {
+		return nil, fmt.Errorf("wire: bundle frame of %d bytes (1..%d)", len(data), MaxBundleFrame)
+	}
+	b = binary.BigEndian.AppendUint32(b, uint32(len(data)))
+	return append(b, data...), nil
+}
+
+func readBundleFrame(r io.Reader) ([]byte, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, readErr(err)
+	}
+	n := binary.BigEndian.Uint32(hdr[:])
+	if n == 0 || n > MaxBundleFrame {
+		return nil, fmt.Errorf("%w: bundle frame size %d", ErrMalformed, n)
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, readErr(err)
+	}
+	return buf, nil
+}
+
 func randomNonce() ([]byte, error) {
 	n := make([]byte, NonceSize)
 	_, err := rand.Read(n)
@@ -284,7 +318,7 @@ func randomNonce() ([]byte, error) {
 }
 
 func validOp(op string) bool {
-	return op == OpSession || op == OpPair || op == OpJoin || op == OpRecover
+	return op == OpSession || op == OpPair || op == OpJoin || op == OpRecover || op == OpProbe
 }
 
 // bundleless reports whether the caller of op has no identity bundle yet and presents only its

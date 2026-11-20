@@ -23,8 +23,8 @@ The handshake runs on any byte stream. Confidentiality comes from the transport:
 
 ## Handshake
 
-All integers big-endian. A frame is `u16 len | bytes` (1..16384). The handshake must finish within
-45 seconds.
+All integers big-endian. A frame is `u16 len | bytes` (1..16384); a bundle frame, which carries an
+identity bundle, is `u32 len | bytes` (1..1 MiB). The handshake must finish within 45 seconds.
 
 ```
 caller                                         callee
@@ -46,7 +46,7 @@ caller                                         callee
 | Field | Meaning |
 |---|---|
 | `v` | negotiated version (2) |
-| `op` | `session`, `pair` (add a person), `join` (add my device) |
+| `op` | `session`, `pair` (add a person), `join` (add my device), `recover`, `probe` (check a path) |
 | `device` | caller's device public key `D_a` (base64) |
 | `nonce` | caller's 32-byte nonce `nonce_a` (base64) |
 | `secret` | one-time secret, `pair` and `join` only |
@@ -76,6 +76,7 @@ transport that doesn't authenticate the callee (unlike v1).
 | `session` | the caller's verified person is a contact or me, and its device is in that person's current device list | the stream becomes a session |
 | `pair` | `secret` is a valid, unused, unexpired `pair` token (burned on use) | both store each other as contacts, then a session |
 | `join` | `secret` is a valid `join` token issued from an admin device | the admin device adds `D_a` to the device list, signs it, sends it, then a session |
+| `probe` | as `session` | Accept, then close: the path works, and the live session is left alone |
 
 Every other case: close without sending anything (rule: never send bytes to a rejected
 connection). The reason goes to the local log.
@@ -88,7 +89,7 @@ bundle) and that `sig_b` verifies; otherwise it closes.
 - **Layouts.** `T` uses the raw 10 version bytes. Accept is `0x01 | bundle frame | 64-byte sig_b`.
   The Request JSON must be canonical (sorted keys, no extra whitespace).
 - **Bundle frames** use a 4-byte length (max 1 MiB), not the 16 KiB frame limit, so a large device
-  list fits. *(C3b: implement; today's code still uses the small frame.)*
+  list fits. *(Built in C3b.)*
 - **Join.** A joining device has no bundle yet: it sends its signed endpoint record in the bundle
   frame, and the Request carries `name` (the device's display name) for `join`, covered by `T`.
   *(Built in C7.)*
@@ -101,9 +102,18 @@ bundle) and that `sig_b` verifies; otherwise it closes.
   above that state. *(Built in C7.)*
 - **Pushing changes.** Whenever a device list or endpoint record changes, the device pushes it to
   every open session (`POST /p/bundle`), so contacts learn of a removed device immediately, not at
-  their next handshake. *(C3b.)*
-- Contacts are replicated between my own devices through a Sol-internal feed once feeds exist
-  (C4); until then each device keeps its own store.
+  their next handshake. *(Built in C3b.)* Body: one or more `u32 len | bundle` records; each
+  verifies on its own against its endpoint record's device. A peer may push its own person's
+  bundles; only my own devices may push my person's, or relay a contact's.
+- Contacts are replicated between my own devices through the internal feed `sol/contacts` (C4).
+  Their **bundles are relayed** (C3b): whatever a device learns that is new about a contact (in a
+  handshake or a push from them) it pushes to my other devices, and a device of mine that comes up
+  gets every contact bundle the other holds. So my phone can reach a friend first met on my
+  laptop. A relay may arrive before the contacts feed does; it is cached (the cache grants
+  nothing) and the friend is dialed once they are a contact there too. Relays are not relayed
+  again, and only news is, so nothing loops.
+- **Persistence.** Every verified bundle that was news is kept in `peers.json` (0600, atomic) and
+  folded back into the identity cache, oldest first, when the daemon starts. *(Built in C3b.)*
 
 ## Pairing links
 
@@ -134,6 +144,7 @@ The caller's verified person, device and relation (`self` or `contact`) are know
 | Request | Who may call | Does |
 |---|---|---|
 | `GET /p/bundle` | any | latest identity bundle (to pick up rotations) |
+| `POST /p/bundle` | any (see §Settled in C3) | push bundles: my changed bundle, or a contact's relayed between my devices; 204 |
 | `POST /p/sync` | self, contacts | feed replication: body is the list of feeds + `have` seqs; the response streams missing entries, then new ones live |
 | `GET /p/blobs/{hash}` | per API.md §4 rule; self always | blob bytes, `Range` supported |
 | `POST /p/actions/{name}` | per sharing + scopes | run an action on this device's app, caller headers attached |
@@ -188,11 +199,45 @@ Anchors pull pinned blobs themselves when the replicated `sol/pins` feed changes
 
 ## Liveness and healing
 
-Ported from the PoC: dial over the best transport first (LAN, WireGuard direct, TLS direct, relay,
-Tor) with the PoC's backoff, probation and fall-back logic; a network change or wake from sleep
-re-dials immediately; endpoint records are re-pushed whenever they change. One session per
-pair of devices; if both dial at once, the session opened by the device with the lower ID wins
-and the other is closed.
+Built in C3b (`internal/session/paths.go`, `push.go`, `internal/netwatch`), ported from the PoC's
+dialer and liveness supervisor. One session per pair of devices; if both dial at once, the session
+opened by the device with the lower ID wins and the other is closed; between two sessions dialed
+by the same side, the newer wins (the older is likely dead).
+
+- **Ranking.** A device's endpoints are tried in order: WireGuard, TLS direct, clearnet (LAN,
+  tests), relay, Tor, I2P. Among the healthy ones, direct paths come first, then the path that last
+  worked, then transports that are ready right now. A path that failed goes behind every healthy
+  one (a last resort). Pair and join skip WireGuard: the callee can't know this device's key yet.
+- **Hedged dialing.** The best path starts at once; the next starts `HedgeDelay` (2 s) later, or
+  as soon as the one before fails; the first handshake to complete wins. Only one attempt at a
+  time may send its Request (after the Hello), so a losing attempt is abandoned before the callee
+  could complete a second session. An attempt that started before the winner and hasn't answered
+  is slow and counts as failed. A refusal or garbage on one path doesn't stop the others; a bad
+  signature, an incompatible version or the wrong person does. On Tor, the transport also hedges
+  its own descriptor fetch (HSFETCH, `internal/transport/tordial.go`).
+- **Backoff and probation.** A failed path backs off (1 min, doubling to 1 h). While a session
+  this device dialed runs on a worse path, its keeper probes the better one (op `probe`) when the
+  backoff ends; it is preferred again only after 3 probes in a row succeeded over at least 2 min,
+  and then the session moves to it (a new session over that path replaces the old one). Any
+  failure meanwhile doubles the backoff, so a flaky path drifts towards being tried rarely
+  instead of flapping. A healthy better path the session doesn't use (a new endpoint, a lost
+  hedge) is probed a minute after the session came up. Only the dialing side moves a session.
+- **Redial.** A kept peer whose session died is redialed with backoff (2 s to 5 min, jittered).
+  The mux pings every 20 s and closes a session after three missed pongs.
+- **Network changes and sleep.** `internal/netwatch` watches the wall clock against the
+  monotonic clock (a jump of over 20 s means the machine slept), the kernel's route netlink
+  socket on Linux and Android (address, link and default-route changes), and elsewhere scans the
+  interface addresses every 5 s; bursts collapse after 2 s. A change, or `sol network-changed`,
+  tells the transports (Tor, WireGuard re-check themselves), closes sessions whose local address
+  is gone, checks every other session with a request (closed if no answer within 10 s, 60 s over
+  Tor), makes every path backoff and redial due now, and re-signs the endpoint record if this
+  device's published addresses moved (again 5 s later, once transports have relearned them),
+  which pushes it to every peer.
+- **What it chose.** Every session records its path and why (`{transport, inbound, reason}`:
+  "best path", "direct failed: connection refused; tor answered", "direct was slower; tor
+  answered", "direct is stable again"), and each peer device's troubled paths (`backoff` or
+  `probation`, failures, last error, next probe); the admin API's `peer_sessions` shows both for
+  the Sol app's Advanced view.
 
 ## Versioning
 

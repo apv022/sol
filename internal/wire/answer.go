@@ -90,7 +90,7 @@ func answer(conn net.Conn, local Local, decide Decide, v Versions) (*Request, er
 	if err != nil {
 		return nil, err
 	}
-	rawA, err := readFrame(conn)
+	rawA, err := readBundleFrame(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func answer(conn net.Conn, local Local, decide Decide, v Versions) (*Request, er
 	if err != nil {
 		return nil, err
 	}
-	out, err := appendFrame([]byte{replyOK}, rawB)
+	out, err := appendBundleFrame([]byte{replyOK}, rawB)
 	if err != nil {
 		return nil, err
 	}

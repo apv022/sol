@@ -325,6 +325,7 @@ func TestTwoPeopleThreeDevices(t *testing.T) {
 	// 4. Alice removes her second device: its session with her closes at
 	// once and it can no longer connect.
 	old := a1.session(t, a2)
+	toA2 := b.session(t, a2)
 	if _, err := a1.m.RemoveDevice(a2.dev()); err != nil {
 		t.Fatal(err)
 	}
@@ -345,17 +346,16 @@ func TestTwoPeopleThreeDevices(t *testing.T) {
 		t.Fatal("removed device holds a session with Alice")
 	}
 
-	// Bob learns of the removal on his next contact with Alice (here: a
-	// refresh over his session with a1), which closes a2's session and
-	// refuses it from then on.
-	toA2 := b.session(t, a2)
-	if err := b.m.Refresh(ctx, ka1.Person()); err != nil {
-		t.Fatal(err)
-	}
+	// Bob learns of the removal at once: Alice pushes her new list to every
+	// session, which closes a2's session on his side and refuses it from
+	// then on. (Refresh, pulling it, finds nothing newer.)
 	select {
 	case <-toA2.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("bob kept the removed device's session")
+	}
+	if err := b.m.Refresh(ctx, ka1.Person()); err != nil {
+		t.Fatal(err)
 	}
 	a2.m.Forget(b.dev()) // stop its keeper, then try by hand
 	eventually(t, "the removed device to notice", func() bool {

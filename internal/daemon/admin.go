@@ -24,6 +24,7 @@ import (
 	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/pairing"
+	"github.com/apv022/sol/internal/session"
 	"github.com/apv022/sol/internal/transport"
 	"github.com/apv022/sol/sdk/go/sol"
 )
@@ -82,6 +83,10 @@ type SessionInfo struct {
 	Relation string    `json:"relation"`
 	Since    time.Time `json:"since,omitzero"`
 	Up       *bool     `json:"up,omitempty"` // events only
+	// Path says how the session was reached and why (the Sol app's Advanced view); Paths
+	// lists the paths to that device that have had trouble (backoff or probation).
+	Path  *session.PathInfo   `json:"path,omitempty"`
+	Paths []session.PathState `json:"paths,omitempty"`
 }
 
 // Storage is the used and total bytes of the synced folder's disk.
@@ -126,7 +131,7 @@ func (d *Daemon) status(browser string) Status {
 		st.Transports = append(st.Transports, TransportInfo{Name: t.Name(), State: state, Detail: ts.Detail})
 	}
 	for _, s := range d.Sessions.Sessions() {
-		st.PeerSessions = append(st.PeerSessions, d.sessionInfo(s.Peer().Person, s.Peer().Device, string(s.Peer().Relation)))
+		st.PeerSessions = append(st.PeerSessions, d.liveSessionInfo(s))
 	}
 	if d.cfg.Files != "" {
 		if used, total, ok := diskUsage(d.cfg.Files); ok {
@@ -134,6 +139,15 @@ func (d *Daemon) status(browser string) Status {
 		}
 	}
 	return st
+}
+
+// liveSessionInfo describes a live session, with its path.
+func (d *Daemon) liveSessionInfo(s *session.Session) SessionInfo {
+	p := s.Peer()
+	si := d.sessionInfo(p.Person, p.Device, string(p.Relation))
+	path := s.Path()
+	si.Path, si.Paths = &path, d.Sessions.Paths(p.Device)
+	return si
 }
 
 // sessionInfo describes a session with a device.
@@ -565,16 +579,6 @@ func (d *Daemon) resolvePerson(s string) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
-
-// NetworkChanged tells the daemon the network changed (an OS callback, `sol network-changed`):
-// every kept peer is redialed now instead of after its backoff.
-func (d *Daemon) NetworkChanged(reason string) {
-	if len(reason) > 64 {
-		reason = reason[:64]
-	}
-	d.log.Info("network changed; redialing", "reason", reason)
-	d.Sessions.NetworkChanged()
-}
 
 // Client is the CLI's connection to a running daemon: its admin API (Connect), or its agent
 // API as one agent key (ConnectAgent).

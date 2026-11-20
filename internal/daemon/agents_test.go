@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +22,8 @@ func testDaemon(t *testing.T) *Daemon {
 	if err := Init(dir, InitOptions{Name: "A", Device: "d", Config: cfg}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Start(Options{Dir: dir, InProcessApps: true, APIOverTCP: true, Log: slog.New(slog.DiscardHandler)})
+	d, err := Start(Options{Dir: dir, InProcessApps: true, APIOverTCP: true, Log: slog.New(slog.DiscardHandler),
+		SameUser: func(_, _ netip.AddrPort) (bool, error) { return false, nil }}) // login-code tests need a signed-out browser
 	if err != nil {
 		t.Fatal(err)
 	}

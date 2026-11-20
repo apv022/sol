@@ -18,7 +18,29 @@ other users on the same computer can reach loopback. So the browser needs a sess
 - Every admin request from the browser needs that cookie **and** an `Origin` equal to the UI
   root origin **and** `Host` equal to `localhost:<port>` or `127.0.0.1:<port>`. App origins
   (`<app>.localhost`) never get the cookie (it is host-only) and are refused.
-- Without a session the page shows "Open Sol from the app or run `sol open`" and nothing else.
+- **Same OS user, no code.** A browser request (page load or admin call) with no live session is
+  signed in transparently when the TCP connection it arrived on belongs to the daemon's own OS
+  user. The daemon maps the client end of the loopback connection to its owner: Linux and
+  Android read `/proc/net/tcp` and `/proc/net/tcp6` (the row whose local address is the
+  request's remote address:port, whose remote is the daemon's listener, and take its uid);
+  Windows uses `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_ALL`) and compares the owning
+  process token's user SID with the daemon's; macOS is not supported yet and uses the login
+  screen. Why this is safe: the kernel, not the peer, says who owns a socket; both ends must be
+  loopback; the lookup runs on every request and nothing is cached, so a recycled port or a
+  different user never inherits an earlier answer; any error or missing row means "not the same
+  user". The Host/Origin rules above apply first (a cross-site navigation or an app origin never
+  triggers it), and the session is the ordinary cookie (revocable in Settings; logging out
+  signs a same-user browser back in on its next page load). Other users on the machine and
+  other Android apps (other uids) get the login screen. Anything running as the same user can
+  already read the admin token, so this grants it nothing new; the one thing to know is that a
+  same-user tunnel (`ssh -L`, a reverse proxy) forwards its remote peers as that user.
+- Without a session the page shows "This browser isn't signed in to Sol. Open Sol from your
+  app menu, or run `sol open`." and nothing else.
+- Plain `sol` on a fresh machine sets Sol up (person = the OS account's full name, device =
+  host name), starts it in the background and opens the app signed in with a login code (it
+  only prints the URL over SSH or without a display). `sol autostart on` and that first run
+  add a "Sol" app-menu entry on Linux (`~/.local/share/applications/sol.desktop` running
+  `sol open`); `sol autostart off` or `sol launcher off` removes it.
 - `POST /admin/v1/logout` clears it. Sessions are listed and revocable in Settings.
 
 ## Endpoints (`/admin/v1/…`, JSON)
@@ -60,7 +82,10 @@ in A5b (the daemon and `home-dev` both follow them, and `make ui-e2e` checks the
 daemon): `GET themes` is `{active, settings, themes:[{name, title, author, supports, builtin}]}`
 (`name` is the lowercase id); agents are `{name, id, scopes, issued, expires}`; browser sessions
 are `{id, client, created, last_used, expires, current}`; `peer_sessions` are `{id, person, device,
-peer, relation, since}`; `people[].last_seen` is optional (absent means unknown); `POST invite`
+peer, relation, since, path, paths}`, where `path` is `{transport, inbound, reason}` (how the
+session was reached and why; `transport` is empty and `inbound` true when the peer dialed) and
+`paths` lists the paths to that device in trouble, `{transport, state: backoff|probation,
+failures, last_error, failed_at, next_probe}` (C3b, for the Advanced view); `people[].last_seen` is optional (absent means unknown); `POST invite`
 answers `{link, expires}`.
 
 ## Port sharing (services and tunnels)

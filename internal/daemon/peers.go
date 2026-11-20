@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/apv022/sol/internal/feeds"
@@ -39,7 +40,9 @@ func openPeers(path string) (*peerBook, error) {
 	return p, nil
 }
 
-// bundles returns the stored bundles that still parse.
+// bundles returns the stored bundles that still parse, oldest identity state first (by
+// person-certificate and device-list seq), so folding them in order ends at the newest
+// without an older one being refused as a rollback after it.
 func (p *peerBook) bundles() []identity.Bundle {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -49,10 +52,18 @@ func (p *peerBook) bundles() []identity.Bundle {
 			out = append(out, b)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Person.Seq != b.Person.Seq {
+			return a.Person.Seq < b.Person.Seq
+		}
+		return a.Devices.Seq < b.Devices.Seq
+	})
 	return out
 }
 
-// seed folds the contacts' bundles into the identity cache.
+// seed folds the contacts' bundles into the identity cache: what a restarted daemon knew of
+// its contacts' devices and endpoints (pushed and relayed news included) survives.
 func (p *peerBook) seed(kr *identity.Keyring, cache *identity.Cache) {
 	me := kr.Person()
 	for _, b := range p.bundles() {
@@ -64,7 +75,7 @@ func (p *peerBook) seed(kr *identity.Keyring, cache *identity.Cache) {
 }
 
 // keep makes the session manager redial every remembered device still mine or a contact's.
-func (p *peerBook) keep(kr *identity.Keyring, contacts *feeds.Contacts, m *session.Manager) {
+func (p *peerBook) keep(kr *identity.Keyring, cache *identity.Cache, contacts *feeds.Contacts, m *session.Manager) {
 	me := kr.Person()
 	mine, _ := kr.Bundle()
 	for _, b := range p.bundles() {
@@ -76,13 +87,19 @@ func (p *peerBook) keep(kr *identity.Keyring, contacts *feeds.Contacts, m *sessi
 			}
 		case !contacts.IsContact(b.Person.Person):
 			continue
+		default:
+			if _, dl, ok := cache.Latest(b.Person.Person); !ok {
+				continue
+			} else if _, in := dl.Find(dev); !in {
+				continue // removed from its person's list since
+			}
 		}
 		m.NoteEndpoints(b.Endpoints)
 		m.Keep(b.Person.Person, dev)
 	}
 }
 
-// put remembers a peer's bundle.
+// put remembers a peer's bundle (session.Config.OnBundle: everything verified and new).
 func (p *peerBook) put(b identity.Bundle) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

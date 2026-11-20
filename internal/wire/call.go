@@ -15,7 +15,7 @@ import (
 
 // Call is the caller's input to Dial.
 type Call struct {
-	Op string // OpSession, OpPair or OpJoin
+	Op string // OpSession, OpPair, OpJoin, OpRecover or OpProbe
 	// Want is the device the caller means to reach (from the pairing link
 	// or the cached bundle). Required: the callee is always authenticated.
 	Want ed25519.PublicKey
@@ -30,6 +30,12 @@ type Call struct {
 	// Recovery is the recovery key R (OpRecover only). It signs T next to the device key and
 	// never leaves this process.
 	Recovery ed25519.PrivateKey
+	// Gate, if set, runs after the callee's Hello and before the Request is
+	// sent: the last moment the caller can still back out without the
+	// callee completing its side. A hedged dialer uses it so that only one
+	// of several parallel attempts commits at a time. An error aborts the
+	// handshake; release, if not nil, runs when Dial returns.
+	Gate func() (release func(), err error)
 
 	// tamper, when set (tests only), may rewrite the request and bundle
 	// after signing.
@@ -122,6 +128,15 @@ func dial(conn net.Conn, local Local, c Call, v Versions) (*Result, error) {
 	if c.tamper != nil {
 		c.tamper(&req, &bundle)
 	}
+	if c.Gate != nil {
+		release, err := c.Gate()
+		if err != nil {
+			return nil, err
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	js, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -130,7 +145,7 @@ func dial(conn net.Conn, local Local, c Call, v Versions) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if out, err = appendFrame(out, bundle); err != nil {
+	if out, err = appendBundleFrame(out, bundle); err != nil {
 		return nil, err
 	}
 	if _, err := conn.Write(out); err != nil {
@@ -144,7 +159,7 @@ func dial(conn net.Conn, local Local, c Call, v Versions) (*Result, error) {
 	if reply[0] != replyOK {
 		return nil, fmt.Errorf("%w: reply byte %#x", ErrMalformed, reply[0])
 	}
-	rawB, err := readFrame(conn)
+	rawB, err := readBundleFrame(conn)
 	if err != nil {
 		return nil, err
 	}

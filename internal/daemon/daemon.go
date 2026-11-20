@@ -212,6 +212,8 @@ type Options struct {
 	// APIOverTCP serves the app API on 127.0.0.1 instead of a unix socket (always on Windows).
 	APIOverTCP bool
 	Log        *slog.Logger
+	// SameUser decides browser auto-login (see peercred.go); nil means the OS lookup. Tests inject.
+	SameUser SameUserFunc
 }
 
 // Daemon is one running device.
@@ -261,6 +263,9 @@ type Daemon struct {
 	online   map[string]int       // person ID -> live sessions
 	since    map[string]time.Time // device ID -> when its live session came up
 	lastSeen map[string]time.Time // device or person ID -> when its last session ended
+	settle   *time.Timer          // the second endpoint check after a network change
+
+	netMu sync.Mutex // serializes refreshEndpoints with itself and Close
 }
 
 // appsRef lets the API server reach the host, which is built after it.
@@ -356,7 +361,8 @@ func Start(o Options) (_ *Daemon, err error) {
 	peerMux.HandleFunc("POST "+UnpairPath, d.peerUnpair)
 	d.transports = d.buildTransports()
 	if d.Sessions, err = session.New(session.Config{Keyring: kr, Cache: d.Cache, Contacts: d.Contacts,
-		Tokens: pairing.NewTokens(), Transports: d.transports, Handler: peerMux, OnSession: d.onSession, Log: d.log}); err != nil {
+		Tokens: pairing.NewTokens(), Transports: d.transports, Handler: peerMux, OnSession: d.onSession,
+		OnBundle: d.peers.put, Log: d.log}); err != nil {
 		return nil, err
 	}
 	if d.ports, err = openPortShare(d, filepath.Join(o.Dir, "services.json"), filepath.Join(o.Dir, "tunnels.json")); err != nil {
@@ -374,7 +380,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if err := d.startNet(); err != nil {
 		return nil, err
 	}
-	d.peers.keep(kr, d.Contacts, d.Sessions)
+	d.peers.keep(kr, d.Cache, d.Contacts, d.Sessions)
 	if err := d.startAPI(); err != nil {
 		return nil, err
 	}
@@ -400,6 +406,8 @@ func Start(o Options) (_ *Daemon, err error) {
 		d.Host.Start(d.ctx)
 	}
 	d.watchThemes()
+	d.watchNetwork()
+	d.watchContacts()
 	return d, nil
 }
 
@@ -458,7 +466,7 @@ func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, log 
 }
 
 // startNet listens for sessions, publishes the listener on every transport and signs the
-// resulting endpoint record.
+// resulting endpoint record (refreshEndpoints keeps it current).
 func (d *Daemon) startNet() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -554,7 +562,7 @@ func (d *Daemon) onSession(s *session.Session) {
 	d.since[did] = time.Now().UTC()
 	d.mu.Unlock()
 	up := true
-	si := d.sessionInfo(p.Person, p.Device, string(p.Relation))
+	si := d.liveSessionInfo(s)
 	si.Up = &up
 	d.emit(EvSession, si)
 	d.emitStatus()
@@ -577,13 +585,6 @@ func (d *Daemon) onSession(s *session.Session) {
 		d.emitStatus()
 		if p.Relation == session.Self {
 			d.emit(EvDevice, d.device(did))
-		}
-	}()
-	go func() {
-		ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
-		defer cancel()
-		if b, err := session.FetchBundle(ctx, s); err == nil {
-			d.peers.put(b)
 		}
 	}()
 	if p.Relation == session.Contact {
@@ -685,6 +686,13 @@ func (d *Daemon) tap(kind, id string) {
 func (d *Daemon) Close() error {
 	d.cancel()
 	d.wg.Wait()
+	d.mu.Lock()
+	if d.settle != nil {
+		d.settle.Stop()
+	}
+	d.mu.Unlock()
+	d.netMu.Lock() // a running endpoint refresh finishes first; later ones see ctx done
+	d.netMu.Unlock()
 	if d.events != nil {
 		d.events.close()
 	}
