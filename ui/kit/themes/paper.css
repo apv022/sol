@@ -1,0 +1,19 @@
+/* @theme    Paper
+   @author   Sol
+   @supports light dark
+   Warm, light, low glass: cream paper and ink, a terracotta accent, soft serif-free type. */
+:root:not([data-theme]) { color-scheme: light; }
+:root {
+  --canvas: light-dark(#F4EFE6, #14110D);
+  --surface: light-dark(#FBF8F2, #1F1B16);
+  --surface-2: light-dark(#EDE6D8, #2C2620);
+  --label: light-dark(#2B2620, #F1EADD);
+  --label-2: light-dark(rgba(60, 50, 35, .64), rgba(241, 234, 221, .6));
+  --label-3: light-dark(rgba(60, 50, 35, .34), rgba(241, 234, 221, .3));
+  --separator: light-dark(rgba(80, 60, 30, .18), rgba(241, 234, 221, .16));
+  --tint: light-dark(#B5532B, #E58A5C);
+  --glass: light-dark(rgba(251, 248, 242, .94), rgba(31, 27, 22, .94));
+  --glass-filter: blur(6px);
+  --shadow-1: 0 1px 1px rgba(80, 60, 30, .08);
+  --shadow-float: 0 1px 2px rgba(80, 60, 30, .1), 0 6px 16px rgba(80, 60, 30, .12);
+}

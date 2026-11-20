@@ -136,7 +136,7 @@ export const activity = (opts = {}) => request('GET', `/v1/activity${query(opts)
 
 /**
  * Subscribes to server-sent events. onEvent receives {id, type, entry|feed|person|inbox} where
- * type is "entry", "feed", "person" or "inbox". EventSource reconnects on its own and resends
+ * type is "entry", "feed", "person", "inbox" or "theme" (see onTheme). EventSource reconnects on its own and resends
  * Last-Event-ID, so the stream resumes without gaps. Optional onError(err) is called when the
  * connection drops (it is retried automatically) or the stream closes for good.
  * Returns a function that closes the stream.
@@ -144,7 +144,7 @@ export const activity = (opts = {}) => request('GET', `/v1/activity${query(opts)
 export function events({ feeds: fs = [], people: ppl = false, inbox: ib = false } = {}, onEvent, onError) {
   const url = base + '/v1/events' + query({ feeds: fs.join(','), people: ppl ? 1 : '', inbox: ib ? 1 : '' });
   const es = new EventSource(url);
-  for (const type of ['entry', 'feed', 'person', 'inbox']) {
+  for (const type of ['entry', 'feed', 'person', 'inbox', 'theme']) {
     es.addEventListener(type, (e) => {
       let data;
       try { data = JSON.parse(e.data); } catch { return; }
@@ -155,6 +155,90 @@ export function events({ feeds: fs = [], people: ppl = false, inbox: ib = false 
     es.onerror = () => onError(new SolError('unavailable', es.readyState === 2 ? 'event stream closed' : 'event stream interrupted, retrying'));
   }
   return () => es.close();
+}
+
+// Themes (design/UI.md "Themes", API.md section 10).
+
+const THEME_ID = 'sol-theme';
+const SETTING_VALUES = { density: ['compact'], radius: ['square'], glass: ['off'], font: ['system', 'inter', 'mono'] };
+
+/**
+ * Applies appearance settings to the root element as data- attributes (the kit's contract):
+ * {scheme: 'auto'|'light'|'dark', accent: '#rrggbb'|'', density, radius, glass, font}. Only keys
+ * present are changed; a default or unknown value removes the attribute. Returns what was applied.
+ */
+export function applyThemeSettings(settings, root = globalThis.document && document.documentElement) {
+  if (!root || !settings || typeof settings !== 'object') return {};
+  if ('scheme' in settings) {
+    if (settings.scheme === 'light' || settings.scheme === 'dark') root.setAttribute('data-theme', settings.scheme);
+    else root.removeAttribute('data-theme');
+  }
+  for (const [k, ok] of Object.entries(SETTING_VALUES)) {
+    if (!(k in settings)) continue;
+    if (ok.includes(settings[k])) root.setAttribute('data-' + k, settings[k]); else root.removeAttribute('data-' + k);
+  }
+  if ('accent' in settings) {
+    if (/^#[0-9a-f]{3,8}$/i.test(settings.accent || '')) root.style.setProperty('--tint', settings.accent);
+    else root.style.removeProperty('--tint');
+  }
+  try { // same key kit.js reads, so the next page paints with the new settings at once
+    const prev = JSON.parse(localStorage.getItem('sol-settings') || '{}');
+    localStorage.setItem('sol-settings', JSON.stringify({ ...prev, ...settings }));
+  } catch { /* storage may be unavailable */ }
+  return settings;
+}
+
+/**
+ * Swaps the theme stylesheet without a reload: adds a new <link> with a cache-busting href, and
+ * removes the old one only once the new one has loaded (so the page never flashes unthemed). If
+ * the new file is gone (404: no theme any more) both are removed. Resolves true when a theme is
+ * now applied, false when none is. A swap that is still loading is replaced by the newer one.
+ */
+export function swapThemeStylesheet({ doc = globalThis.document, stamp = Date.now() } = {}) {
+  for (const stale of doc.querySelectorAll('link[data-sol-theme-pending]')) stale.remove();
+  const old = doc.getElementById(THEME_ID);
+  const next = doc.createElement('link');
+  next.rel = 'stylesheet';
+  next.href = `${base}/theme.css?v=${stamp}`;
+  next.setAttribute('data-sol-theme-pending', '');
+  return new Promise((resolve) => {
+    next.addEventListener('load', () => {
+      if (old) old.remove();
+      next.removeAttribute('data-sol-theme-pending');
+      next.id = THEME_ID;
+      resolve(true);
+    });
+    next.addEventListener('error', () => {
+      next.remove();
+      if (old) old.remove();
+      resolve(false);
+    });
+    doc.head.append(next);
+  });
+}
+
+/**
+ * Handles one `theme` event: reapplies the settings it carries ({settings: {...}}, or the
+ * settings directly), then swaps the stylesheet. Resolves to the detail.
+ */
+export async function applyTheme(detail = {}, opts = {}) {
+  const settings = detail && typeof detail.settings === 'object' && detail.settings ? detail.settings : detail;
+  applyThemeSettings(settings, opts.root);
+  await swapThemeStylesheet(opts);
+  return detail;
+}
+
+/**
+ * Keeps this page themed live: when the daemon pushes a `theme` event (the person picked another
+ * theme, changed a setting, or edited the theme file), swaps /_sol/theme.css and reapplies the
+ * settings, with no reload. `handler(detail)` is optional. Returns a function that stops it.
+ * Apps that already call events() need not call this: kit.js pages get it from here.
+ */
+export function onTheme(handler, opts = {}) {
+  return events({}, (ev) => {
+    if (ev.type !== 'theme') return;
+    applyTheme(ev.theme, opts).then((d) => { if (handler) handler(d); });
+  });
 }
 
 // Safe HTML.

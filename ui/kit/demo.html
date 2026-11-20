@@ -2,157 +2,244 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="sol-theme" content="off">
 <title>Sol kit demo</title>
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" id="demo-theme" href="themes/sol.css">
 <style>
-  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: var(--space-2); }
-  .sw { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; font-size: var(--text-xs); background: var(--raised); }
-  .sw i { display: block; height: 2.5rem; }
+  /* demo-only layout, on tokens */
+  section { margin-bottom: var(--space-6); }
+  .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3); }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: var(--space-2); }
+  .sw { border-radius: var(--radius-control); overflow: hidden; font-size: var(--fs-footnote); background: var(--surface); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
+  .sw i { display: block; height: 2.25rem; box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
   .sw span { display: block; padding: var(--space-1) var(--space-2); font-family: var(--font-mono); }
-  .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-4); }
-  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); gap: var(--space-2); }
-  .icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--text-xs); color: var(--ink-2); border-radius: var(--radius-md); background: var(--surface); }
-  section { margin-bottom: var(--space-7); }
-  .shadow { width: 7rem; height: 4rem; background: var(--raised); border-radius: var(--radius-md); display: grid; place-items: center; font-size: var(--text-xs); }
+  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); gap: var(--space-2); }
+  .icons div { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-3) 0; font-size: var(--fs-footnote); color: var(--label-2); border-radius: var(--radius-control); background: var(--surface); }
+  .icons sol-icon { --size: 24px; color: var(--label); }
+  .float { display: grid; place-items: center; width: 7rem; height: 4rem; background: var(--surface); border-radius: var(--radius-group); box-shadow: var(--shadow-float); font-size: var(--fs-footnote); }
+  .wall { padding: var(--space-5); border-radius: var(--radius-sheet); background: linear-gradient(180deg, light-dark(#8fb4e8, #0b1230) 0%, light-dark(#f3c982, #4a3a2a) 100%); display: flex; gap: var(--space-3); flex-wrap: wrap; }
+  .apps { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+  .apps > div { display: grid; justify-items: center; gap: var(--space-1); font-size: var(--fs-footnote); }
+  #phone { width: 390px; height: 700px; border: 0; border-radius: 28px; box-shadow: var(--shadow-float); background: var(--canvas); }
+  body.embed sol-app-shell > [slot="nav"] .brand { display: none; }
 </style>
 </head>
 <body>
-<sol-app-shell>
+<sol-app-shell heading="Sol kit">
   <nav slot="nav">
-    <div class="brand"><sol-icon name="sun" style="color: var(--sun)"></sol-icon> Sol</div>
-    <a class="nav-item" href="#tokens" data-id="#tokens"><sol-icon name="settings"></sol-icon>Tokens</a>
-    <a class="nav-item" href="#components" data-id="#components"><sol-icon name="folder"></sol-icon>Components</a>
-    <a class="nav-item" href="#icons" data-id="#icons"><sol-icon name="image"></sol-icon>Icons</a>
-    <span class="spacer"></span>
-    <button class="nav-item" id="theme" type="button"><sol-icon name="moon"></sol-icon>Theme: auto</button>
+    <div class="brand"><sol-icon name="sun"></sol-icon> Sol kit</div>
+    <a class="nav-item" href="#appearance" data-id="#appearance"><sol-icon name="settings"></sol-icon>Appearance</a>
+    <a class="nav-item" href="#colour" data-id="#colour"><sol-icon name="sun"></sol-icon>Colour and type</a>
+    <a class="nav-item" href="#controls" data-id="#controls"><sol-icon name="check"></sol-icon>Controls</a>
+    <a class="nav-item" href="#lists" data-id="#lists"><sol-icon name="list"></sol-icon>Lists</a>
+    <a class="nav-item" href="#floating" data-id="#floating"><sol-icon name="share"></sol-icon>Floating</a>
+    <a class="nav-item" href="#identity" data-id="#identity"><sol-icon name="people"></sol-icon>Identity</a>
+    <a class="nav-item" href="#icons" data-id="#icons"><sol-icon name="grid"></sol-icon>Icons</a>
   </nav>
   <main>
-    <h1>Sol kit</h1>
-    <p class="muted">One design system for every app. Use the theme button to cycle auto, light and dark.</p>
+    <h1 class="large-title">Sol kit</h1>
+    <p class="muted">One design system for every app. Try the appearance controls: they set the same tokens and data-attributes the Sol app does.</p>
 
-    <section id="tokens">
+    <section id="appearance">
+      <h2>Appearance</h2>
+      <sol-list id="appearance-list">
+        <div data-item><span class="grow">Colour scheme</span><div class="segmented" id="scheme" role="group" aria-label="Colour scheme"><button type="button" data-v="auto" aria-pressed="true">Auto</button><button type="button" data-v="light" aria-pressed="false">Light</button><button type="button" data-v="dark" aria-pressed="false">Dark</button></div></div>
+        <div data-item><span class="grow">Theme</span><select id="theme" aria-label="Theme" style="width:auto"><option value="sol">Sol</option><option value="graphite">Graphite</option><option value="terminal">Terminal</option><option value="paper">Paper</option></select></div>
+        <div data-item><span class="grow">Accent colour</span><input id="accent" type="color" value="#e8a100" aria-label="Accent colour" style="width:3rem;padding:2px"><button class="plain" id="accent-reset" type="button">Reset</button></div>
+        <div data-item><span class="grow">Compact density</span><input id="density" type="checkbox" role="switch" aria-label="Compact density"></div>
+        <div data-item><span class="grow">Square corners</span><input id="radius" type="checkbox" role="switch" aria-label="Square corners"></div>
+        <div data-item><span class="grow">Glass</span><input id="glass" type="checkbox" role="switch" checked aria-label="Glass"></div>
+        <div data-item><span class="grow">Font</span><select id="font" aria-label="Font" style="width:auto"><option value="system">System</option><option value="inter">Inter</option><option value="mono">Monospace</option></select></div>
+      </sol-list>
+      <div class="row" style="margin-top: var(--space-3)"><button id="phone-btn" type="button" class="tinted"><sol-icon name="phone"></sol-icon>Phone preview</button></div>
+    </section>
+
+    <section id="colour">
       <h2>Colour</h2>
       <div class="swatches" id="colors"></div>
-      <h2 style="margin-top: var(--space-6)">Type</h2>
-      <p style="font-size: var(--text-3xl); font-weight: var(--weight-bold); line-height: 1.1">Text 3xl, bold</p>
-      <p style="font-size: var(--text-2xl)">Text 2xl, the page title</p>
-      <p style="font-size: var(--text-xl)">Text xl</p>
-      <p style="font-size: var(--text-lg)">Text lg</p>
-      <p>Text md, the body: a calm system font that loads instantly.</p>
-      <p style="font-size: var(--text-sm)">Text sm, secondary details.</p>
-      <p style="font-size: var(--text-xs)">Text xs, fine print. <code>--font-mono</code></p>
-      <h2 style="margin-top: var(--space-6)">Radii and shadows</h2>
+      <h2 style="margin-top: var(--space-5)">Type</h2>
+      <p class="t-large-title">Large title</p>
+      <p class="t-title-1">Title 1</p>
+      <p class="t-title-2">Title 2</p>
+      <p class="t-headline">Headline</p>
+      <p class="t-body">Body: a calm system font that loads instantly. <code>--font-mono</code></p>
+      <p class="t-subhead">Subhead, secondary details.</p>
+      <p class="t-footnote">Footnote and caption.</p>
+      <h2 style="margin-top: var(--space-5)">Shape and elevation</h2>
       <div class="row">
-        <div class="shadow" style="box-shadow: var(--shadow-1)">shadow-1</div>
-        <div class="shadow" style="box-shadow: var(--shadow-2)">shadow-2</div>
-        <div class="shadow" style="box-shadow: var(--shadow-3)">shadow-3</div>
-        <div class="shadow" style="border-radius: var(--radius-sm)">radius-sm</div>
-        <div class="shadow" style="border-radius: var(--radius-lg)">radius-lg</div>
-        <div class="shadow" style="border-radius: var(--radius-full)">full</div>
+        <div class="float" style="box-shadow: var(--shadow-1)">shadow-1</div>
+        <div class="float">shadow-float</div>
+        <div class="float" style="border-radius: var(--radius-control)">control</div>
+        <div class="float" style="border-radius: var(--radius-sheet)">sheet</div>
+        <div class="float" style="border-radius: var(--radius-pill)">pill</div>
       </div>
-      <h2>Spacing and motion</h2>
-      <div class="row" id="spaces"></div>
-      <p class="muted">Motion: <code>--dur-1</code> 120ms, <code>--dur-2</code> 220ms, <code>--dur-3</code> 360ms, all zero under reduced motion.</p>
     </section>
 
-    <section id="components">
-      <h2>Buttons and fields</h2>
+    <section id="controls">
+      <h2>Buttons</h2>
       <div class="row">
-        <button class="primary" type="button">Save changes</button>
-        <button type="button">Cancel</button>
-        <button class="ghost" type="button"><sol-icon name="plus"></sol-icon>New</button>
-        <button class="danger" type="button"><sol-icon name="trash"></sol-icon>Delete</button>
-        <button type="button" disabled>Disabled</button>
-        <span class="badge">Badge</span><span class="badge sun">Online</span>
+        <button class="primary" type="button">Filled</button>
+        <button class="tinted" type="button">Tinted</button>
+        <button class="plain" type="button">Plain</button>
+        <button type="button">Secondary</button>
+        <button class="danger" type="button"><sol-icon name="trash"></sol-icon>Move to Trash</button>
+        <button class="danger primary" type="button">Delete</button>
+        <button class="primary" type="button" disabled>Disabled</button>
+        <button class="ghost icon-btn" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button>
+        <button class="primary large" type="button">Large</button>
       </div>
-      <div class="row"><label style="flex: 1; min-width: 12rem">Name<input value="Ada"></label><label style="flex: 1; min-width: 12rem">Note<input placeholder="Optional"></label></div>
-
-      <h2>Toolbar and card</h2>
-      <div class="toolbar"><button type="button"><sol-icon name="upload"></sol-icon>Upload</button><span class="grow"></span><button class="ghost" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button></div>
-      <div class="card"><h3>Card</h3><p>A raised surface for one idea. Keep content short and the action obvious.</p></div>
-
-      <h2 style="margin-top: var(--space-5)">Avatars</h2>
+      <h2>Fields and switches</h2>
+      <div class="row"><input type="search" placeholder="Search" aria-label="Search" style="max-width:16rem"><input type="text" placeholder="Name" aria-label="Name" style="max-width:12rem"></div>
       <div class="row">
-        <sol-avatar name="Ada" id="p1" online></sol-avatar>
-        <sol-avatar name="Bo" id="p2"></sol-avatar>
-        <sol-avatar name="Chen" id="p3" online size="3.5rem"></sol-avatar>
-        <sol-avatar name="Dee" id="p4" size="1.75rem"></sol-avatar>
+        <div class="segmented" role="group" aria-label="View"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Grid</button><button type="button" aria-pressed="false">Gallery</button></div>
+        <input type="checkbox" role="switch" checked aria-label="On"><input type="checkbox" role="switch" aria-label="Off">
+        <input type="checkbox" checked aria-label="Checked"><input type="radio" checked aria-label="Radio">
       </div>
+      <div class="row chips" style="flex-wrap:wrap"><button type="button" aria-pressed="true">All</button><button type="button" aria-pressed="false">Shared</button><button type="button" aria-pressed="false">#ideas</button>
+        <span class="badge">Badge</span><span class="badge tint">Shared</span><span class="badge ok">Synced</span><span class="badge warn">Conflict</span><span class="badge err">Failed</span></div>
+      <p class="banner"><sol-icon name="info"></sol-icon><span class="grow">A banner: this file changed on another device.</span><button class="plain" type="button">Reload</button></p>
+    </section>
 
-      <h2>List (arrow keys move, Enter selects)</h2>
-      <sol-list id="people">
-        <div slot="empty" class="empty"><sol-icon name="people"></sol-icon><h3>No one here yet</h3><p>Pair a friend to share with them.</p></div>
+    <section id="lists">
+      <h2>Inset grouped list</h2>
+      <p class="group-title">Devices</p>
+      <sol-list>
+        <div data-item data-chevron><span class="row-icon"><sol-icon name="device"></sol-icon></span><span class="grow"><span class="row-title">Studio</span><span class="row-sub">Online, anchor</span></span><span class="row-value">12 GB</span></div>
+        <div data-item data-chevron aria-selected="true"><span class="row-icon"><sol-icon name="phone"></sol-icon></span><span class="grow"><span class="row-title">Pocket (selected)</span><span class="row-sub">Online</span></span></div>
+        <div data-item data-chevron><span class="row-icon"><sol-icon name="lock"></sol-icon></span><span class="grow"><span class="row-title">Keys</span></span></div>
       </sol-list>
-      <div class="toolbar" style="margin-top: var(--space-3)"><button type="button" id="clear">Empty the list</button><button type="button" id="fill">Fill it</button></div>
-
-      <h2>Skeleton (remote data only)</h2>
-      <sol-list loading></sol-list>
-
-      <h2 style="margin-top: var(--space-5)">Empty state</h2>
-      <div class="card flat empty"><sol-icon name="inbox"></sol-icon><h3>Inbox is clear</h3><p>Notices and approvals from your apps show up here.</p></div>
-
-      <h2 style="margin-top: var(--space-5)">Dialog and toast</h2>
-      <div class="row">
-        <button type="button" id="open">Open dialog</button>
-        <button type="button" id="toast">Show toast</button>
-        <button type="button" id="err">Show error</button>
-      </div>
-      <sol-dialog id="dlg" heading="Share Holiday photos">
-        <p>Bo will be able to see this folder on all their devices.</p>
-        <div class="dlg-actions"><button type="button" id="no">Cancel</button><button class="primary" type="button" id="yes">Share</button></div>
-      </sol-dialog>
+      <p class="group-footer">Selection uses the accent. Rows have chevrons and, on touch screens, swipe actions (try it in the phone preview).</p>
+      <p class="group-title">Swipe me</p>
+      <sol-list>
+        <div data-item><span class="grow">Meeting notes</span><span class="row-value">Today</span>
+          <div class="swipe-actions"><button type="button">Pin</button><button type="button" class="danger">Delete</button></div></div>
+        <div data-item><span class="grow">Shopping list</span><span class="row-value">Yesterday</span>
+          <div class="swipe-actions"><button type="button">Pin</button><button type="button" class="danger">Delete</button></div></div>
+      </sol-list>
+      <h2 style="margin-top: var(--space-5)">Empty state and skeleton</h2>
+      <div class="card"><div class="empty"><sol-icon name="folder"></sol-icon><h3>This folder is empty</h3><p>Drop files here or tap + to add some.</p><button class="primary" type="button">Add files</button></div></div>
+      <div class="row" style="margin-top: var(--space-3)"><sol-list loading style="flex:1"></sol-list></div>
     </section>
 
-    <section id="icons"><h2>Icons</h2><div class="icons" id="iconGrid"></div></section>
+    <section id="floating">
+      <h2>Menus, popovers, sheets, toasts</h2>
+      <div class="row">
+        <button type="button" id="menu-btn">Context menu</button>
+        <button type="button" id="pop-btn">Popover</button>
+        <button type="button" id="sheet-btn">Sheet or dialog</button>
+        <button type="button" id="toast-btn">Toast</button>
+        <button type="button" id="toast-err">Error toast</button>
+      </div>
+      <div class="card" id="menu-zone" style="text-align:center">Right-click here, or long-press on a touch screen.</div>
+    </section>
+
+    <section id="identity">
+      <h2>Identity</h2>
+      <div class="row">
+        <sol-avatar name="Ada" id="p1" size="40px"></sol-avatar>
+        <sol-avatar name="Bo" id="p2" size="40px" online></sol-avatar>
+        <sol-avatar name="Cleo" id="p3" size="56px" online></sol-avatar>
+        <sol-ring value="25"></sol-ring><sol-ring value="68">68</sol-ring><sol-ring value="100" size="56px"></sol-ring><sol-ring indeterminate></sol-ring>
+      </div>
+      <div class="wall">
+        <div class="apps">
+          <div><sol-app-icon glyph="folder" hue="212"></sol-app-icon>Files</div>
+          <div><sol-app-icon glyph="file" hue="32"></sol-app-icon>Notes</div>
+          <div><sol-app-icon glyph="people" hue="145"></sol-app-icon>People</div>
+          <div><sol-app-icon glyph="agent" hue="285"></sol-app-icon>Agents</div>
+          <div><sol-app-icon glyph="sun"></sol-app-icon>Sol</div>
+        </div>
+        <div class="widget"><div class="widget-title"><sol-icon name="people"></sol-icon>People</div><div class="widget-value">3</div><div class="widget-sub">online now</div></div>
+        <div class="widget"><div class="widget-title"><sol-icon name="storage"></sol-icon>Storage</div><div class="widget-value">42%</div><div class="widget-sub">of 256 GB</div></div>
+      </div>
+    </section>
+
+    <section id="icons">
+      <h2>Icons</h2>
+      <div class="icons" id="icon-grid"></div>
+    </section>
   </main>
 </sol-app-shell>
+
+<sol-sheet id="sheet" heading="Share folder">
+  <p>On a phone this is a bottom sheet with a grabber: drag it down to dismiss. On desktop it is a dialog.</p>
+  <div class="list" style="margin-bottom: var(--space-3)">
+    <div data-item><sol-avatar name="Ada" id="p1"></sol-avatar><span class="grow">Ada</span><input type="checkbox" role="switch" checked aria-label="Share with Ada"></div>
+    <div data-item><sol-avatar name="Bo" id="p2" online></sol-avatar><span class="grow">Bo</span><input type="checkbox" role="switch" aria-label="Share with Bo"></div>
+  </div>
+  <div class="dlg-actions"><button type="button" data-close>Cancel</button><button class="primary" type="button" data-close>Share</button></div>
+</sol-sheet>
+<sol-dialog id="phone-dlg" heading="Phone preview"><iframe id="phone" title="Phone preview" src="about:blank"></iframe></sol-dialog>
+
 <script type="module">
-  import { icons } from './icons.js';
-  import { toast, setTheme } from './kit.js';
-  const $ = (id) => document.getElementById(id);
-  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+import { icons } from './icons.js';
+import { applySettings, showMenu, contextMenu, showPopover, toast } from './kit.js';
 
-  for (const n of ['bg','surface','surface-2','raised','ink','ink-2','ink-3','line','primary','primary-soft','sun','sun-strong','ok','warn','danger']) {
-    const i = el('i'); i.style.background = `var(--${n})`;
-    $('colors').append(el('div', { className: 'sw' }, i, el('span', { textContent: '--' + n })));
-  }
-  for (const n of [1,2,3,4,5,6,7]) {
-    const b = el('div'); b.style.cssText = `width:var(--space-${n});height:var(--space-${n});background:var(--primary);border-radius:2px`;
-    $('spaces').append(el('div', { className: 'row', title: 'space-' + n }, b));
-  }
-  for (const name of Object.keys(icons)) {
-    $('iconGrid').append(el('div', {}, el('sol-icon', { name: '' , ...{} }), el('span', { textContent: name })));
-    $('iconGrid').lastChild.firstChild.setAttribute('name', name);
-  }
+if (location.search.includes('embed')) document.body.classList.add('embed');
+const $ = (id) => document.getElementById(id);
+const shell = document.querySelector('sol-app-shell');
+const hash = () => shell.setCurrent(location.hash || '#appearance');
+addEventListener('hashchange', hash); hash();
 
-  const people = $('people');
-  const names = ['Ada', 'Bo', 'Chen'];
-  function fill() {
-    people.querySelectorAll('[data-item]').forEach((r) => r.remove());
-    names.forEach((n, i) => {
-      const av = el('sol-avatar'); av.setAttribute('name', n); av.setAttribute('id', 'p' + (i + 1)); if (i !== 1) av.setAttribute('online', '');
-      people.append(el('div', { className: 'row-item' , tabIndex: 0 }, av, el('div', { className: 'grow' }, el('div', { className: 'title', textContent: n }), el('small', { textContent: i === 1 ? 'Last seen yesterday' : 'Online now' })), el('sol-icon')));
-    });
-    people.querySelectorAll('.row-item').forEach((r) => { r.className = ''; r.setAttribute('data-item', ''); r.lastChild.setAttribute('name', 'chevron'); });
-  }
-  fill();
-  $('clear').onclick = () => people.querySelectorAll('[data-item]').forEach((r) => r.remove());
-  $('fill').onclick = fill;
-  people.addEventListener('sol-select', (e) => toast('Selected ' + e.detail.querySelector('.title').textContent));
+// swatches read the live computed tokens, so a theme switch shows up at once
+const toks = ['--canvas', '--surface', '--surface-2', '--glass', '--label', '--label-2', '--label-3', '--separator', '--tint', '--tint-hover', '--tint-pressed', '--tint-subtle', '--on-tint', '--green', '--red', '--blue', '--orange'];
+for (const t of toks) {
+  const d = document.createElement('div'); d.className = 'sw';
+  const i = document.createElement('i'); i.style.background = `var(${t})`;
+  const s = document.createElement('span'); s.textContent = t;
+  d.append(i, s); $('colors').append(d);
+}
+for (const name of Object.keys(icons)) {
+  const d = document.createElement('div'), ic = document.createElement('sol-icon');
+  ic.setAttribute('name', name); d.append(ic, document.createTextNode(name)); $('icon-grid').append(d);
+}
 
-  $('open').onclick = () => $('dlg').show();
-  $('no').onclick = $('yes').onclick = () => $('dlg').close();
-  $('toast').onclick = () => toast('Shared with Bo');
-  $('err').onclick = () => toast('Bo is offline. Try again when they are back.', { kind: 'error' });
+// appearance controls: the same settings the Sol app writes
+const state = JSON.parse(localStorage.getItem('demo-state') || '{}');
+const save = () => localStorage.setItem('demo-state', JSON.stringify(state));
+function apply() {
+  $('demo-theme').href = `themes/${state.theme || 'sol'}.css`;
+  applySettings({ scheme: state.scheme || 'auto', accent: state.accent || '', density: state.density ? 'compact' : 'comfortable', radius: state.radius ? 'square' : 'rounded', glass: state.glass === false ? 'off' : 'on', font: state.font || 'system' });
+  $('scheme').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === (state.scheme || 'auto'))));
+  $('theme').value = state.theme || 'sol'; $('font').value = state.font || 'system';
+  $('density').checked = !!state.density; $('radius').checked = !!state.radius; $('glass').checked = state.glass !== false;
+  save();
+  const f = $('phone'); if ($('phone-dlg').open) f.contentWindow?.location.reload();
+}
+$('scheme').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.v; if (v) { state.scheme = v; apply(); } });
+$('theme').addEventListener('change', (e) => { state.theme = e.target.value; apply(); });
+$('font').addEventListener('change', (e) => { state.font = e.target.value; apply(); });
+$('accent').addEventListener('input', (e) => { state.accent = e.target.value; apply(); });
+$('accent-reset').addEventListener('click', () => { state.accent = ''; apply(); });
+for (const k of ['density', 'radius']) $(k).addEventListener('change', (e) => { state[k] = e.target.checked; apply(); });
+$('glass').addEventListener('change', (e) => { state.glass = e.target.checked; apply(); });
+apply();
 
-  const modes = ['auto', 'light', 'dark'];
-  let m = 0;
-  $('theme').onclick = () => {
-    m = (m + 1) % 3; setTheme(modes[m]);
-    $('theme').lastChild.textContent = 'Theme: ' + modes[m];
-  };
+// floating things
+const items = () => [
+  { label: 'Open', icon: 'folder', onSelect: () => toast('Opened') },
+  { label: 'Share', icon: 'share', onSelect: () => toast('Shared') },
+  { label: 'Copy link', icon: 'link', onSelect: () => toast('Copied') },
+  { separator: true },
+  { label: 'Move to Trash', icon: 'trash', danger: true, onSelect: () => toast('Moved to Trash') },
+];
+$('menu-btn').addEventListener('click', (e) => showMenu(items(), { anchor: e.currentTarget }));
+contextMenu($('menu-zone'), items);
+$('pop-btn').addEventListener('click', (e) => {
+  const c = document.createElement('div');
+  const h = document.createElement('h3'); h.textContent = 'Storage';
+  const p = document.createElement('p'); p.className = 'muted'; p.textContent = '42% of 256 GB used on this device.';
+  c.append(h, p);
+  showPopover(e.currentTarget, c);
+});
+$('sheet-btn').addEventListener('click', () => $('sheet').show());
+$('sheet').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) $('sheet').close(); });
+$('toast-btn').addEventListener('click', () => toast('Shared'));
+$('toast-err').addEventListener('click', () => toast('Could not reach Bo. Check that their device is online.', { kind: 'error' }));
+$('phone-btn').addEventListener('click', () => { $('phone').src = 'demo.html?embed'; $('phone-dlg').show(); });
 </script>
 </body>
 </html>

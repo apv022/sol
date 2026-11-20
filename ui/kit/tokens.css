@@ -1,130 +1,161 @@
-/* Sol design tokens. Direction: a calm blue-grey dusk with one small sun.
-   Surfaces are cool mist (light) or ink-night (dark); the only warm colour is the marigold "sun",
-   used for presence, focus and the active marker, so it always means "here, now".
-   Apps style with these tokens only; never hard-code a colour. */
+/* Sol design tokens (design/UI.md). The names in this file are a public, stable contract: themes
+   and apps rely on them (see TOKENS.md). Light, dark and auto work through light-dark() and
+   color-scheme: `auto` follows the system, [data-theme="light"|"dark"] on <html> forces one.
+   A theme or a setting only ever overrides tokens, and the derived shades follow. */
+
+@font-face {
+  font-family: "Inter Sol";
+  src: url("fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light dark;
 
-  /* colour: light */
-  --bg: #e9edf1;
-  --surface: #f6f8fa;
-  --surface-2: #dde3e9;
-  --raised: #ffffff;
-  --ink: #18203a;
-  --ink-2: #4a5570;
-  --ink-3: #6a748b;
-  --line: #cdd5de;
-  --primary: #28376b;
-  --on-primary: #f6f8fc;
-  --primary-soft: #dfe5f5;
-  --sun: #f2a516;
-  --sun-strong: #a35f00; /* text and focus rings: 3:1+ on light surfaces */
-  --on-sun: #2a1a00;
-  --ok: #1f7a55;
-  --warn: #9a5b00;
-  --danger: #b3382f;
-  --scrim: rgb(24 32 58 / 0.45);
+  /* ---- colour ---- */
+  --canvas: light-dark(#F5F5F7, #000000);
+  --surface: light-dark(#FFFFFF, #1C1C1E);
+  --surface-2: light-dark(#F2F2F7, #2C2C2E);
+  --glass: light-dark(rgba(255, 255, 255, .72), rgba(28, 28, 30, .68));
+  --glass-filter: blur(24px) saturate(180%);
+  --glass-edge: light-dark(rgba(255, 255, 255, .5), rgba(255, 255, 255, .08)); /* 0.5px inner highlight */
+  --label: light-dark(#1D1D1F, #F5F5F7);
+  --label-2: light-dark(rgba(60, 60, 67, .60), rgba(235, 235, 245, .60));
+  --label-3: light-dark(rgba(60, 60, 67, .30), rgba(235, 235, 245, .30));
+  --separator: light-dark(rgba(60, 60, 67, .18), rgba(84, 84, 88, .6));
+  --scrim: light-dark(rgba(0, 0, 0, .32), rgba(0, 0, 0, .6));
 
-  /* type: system stack, modular scale 1.2 */
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
-  --text-md: 1rem;
-  --text-lg: 1.2rem;
-  --text-xl: 1.44rem;
-  --text-2xl: 1.88rem;
-  --text-3xl: 2.5rem;
-  --leading: 1.5;
-  --leading-tight: 1.2;
-  --weight-regular: 420;
-  --weight-medium: 560;
-  --weight-bold: 680;
+  /* accent: a theme or a setting sets --tint only; everything below is derived from it */
+  --tint: light-dark(#E8A100, #FFB524);
+  --tint-mix: light-dark(#000, #fff);   /* what hover and pressed shades move toward */
+  --tint-hover: color-mix(in srgb, var(--tint), var(--tint-mix) 9%);
+  --tint-pressed: color-mix(in srgb, var(--tint), var(--tint-mix) 18%);
+  --tint-subtle: color-mix(in srgb, var(--tint) 16%, transparent);
+  --tint-subtle-hover: color-mix(in srgb, var(--tint) 24%, transparent);
+  --tint-text: color-mix(in srgb, var(--tint), var(--label) 38%); /* tint as text on --surface: stays readable */
+  --on-tint: #1D1D1F;   /* text on --tint; derived below where the browser can pick black or white */
+  --focus-ring: color-mix(in srgb, var(--tint) 70%, transparent);
 
-  /* spacing (4px base) */
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-5: 1.5rem;
-  --space-6: 2rem;
-  --space-7: 3rem;
-  --space-8: 4.5rem;
-  --touch: 2.75rem; /* 44px minimum target */
+  --green: light-dark(#34C759, #30D158);
+  --red: light-dark(#FF3B30, #FF453A);
+  --blue: light-dark(#007AFF, #0A84FF);
+  --orange: light-dark(#FF9500, #FF9F0A);
+  --red-subtle: color-mix(in srgb, var(--red) 14%, transparent);
+  --green-subtle: color-mix(in srgb, var(--green) 16%, transparent);
+  --orange-subtle: color-mix(in srgb, var(--orange) 18%, transparent);
 
-  /* radii: small controls are tight, containers are generous, avatars are discs */
-  --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 22px;
-  --radius-full: 999px;
+  /* ---- type ---- */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Sol", system-ui, Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  /* desktop sizes; the phone block below raises them. Each style is size / line height / weight / tracking */
+  --fs-large-title: 26px; --lh-large-title: 32px; --fw-large-title: 700; --tr-large-title: -0.02em;
+  --fs-title-1: 22px;     --lh-title-1: 28px;     --fw-title-1: 700;     --tr-title-1: -0.015em;
+  --fs-title-2: 17px;     --lh-title-2: 22px;     --fw-title-2: 600;     --tr-title-2: -0.01em;
+  --fs-headline: 13px;    --lh-headline: 16px;    --fw-headline: 600;    --tr-headline: -0.005em;
+  --fs-body: 13px;        --lh-body: 18px;        --fw-body: 400;        --tr-body: 0;
+  --fs-subhead: 12px;     --lh-subhead: 16px;     --fw-subhead: 400;     --tr-subhead: 0;
+  --fs-footnote: 11px;    --lh-footnote: 14px;    --fw-footnote: 400;    --tr-footnote: 0;
+  --fs-caption: 11px;     --lh-caption: 14px;     --fw-caption: 400;     --tr-caption: 0;
 
-  /* shadows are tinted with the ink colour, never grey */
-  --shadow-1: 0 1px 2px rgb(24 32 58 / 0.08);
-  --shadow-2: 0 6px 18px -6px rgb(24 32 58 / 0.22), 0 1px 3px rgb(24 32 58 / 0.08);
-  --shadow-3: 0 24px 56px -16px rgb(24 32 58 / 0.4), 0 4px 12px rgb(24 32 58 / 0.1);
+  /* ---- shape and spacing (4px grid) ---- */
+  --radius-control: 8px;
+  --radius-group: 12px;     /* list groups, cards */
+  --radius-sheet: 16px;     /* top corners of sheets, corners of dialogs */
+  --radius-pill: 999px;
+  --radius-icon: 22.37%;    /* app icons: a squircle */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 72px;
+  --control-h: 28px;        /* buttons, fields, segmented controls */
+  --row-h: 32px;            /* list rows */
+  --row-pad: 12px;          /* horizontal padding in rows and cards */
+  --hairline: 0.5px;
+  --sidebar-w: 220px;
+  --bar-h: 52px;            /* toolbar / nav bar */
+  --tab-h: 50px;            /* phone tab bar, without the safe-area inset */
 
-  /* motion */
-  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --dur-1: 120ms;
-  --dur-2: 220ms;
-  --dur-3: 360ms;
+  /* ---- elevation: only for things that float ---- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .06), 0 1px 1px rgba(0, 0, 0, .04);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, .06), 0 8px 24px rgba(0, 0, 0, .12);
 
-  --sidebar: 15.5rem;
-  --bottom-nav: 3.75rem;
+  /* ---- motion ---- */
+  --ease-spring: cubic-bezier(.32, .72, 0, 1);
+  --ease: cubic-bezier(.25, .1, .25, 1);
+  --dur-press: 120ms;
+  --dur-fade: 200ms;
+  --dur-sheet: 400ms;
+  --press-scale: .97;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* black or white text on the accent, chosen from the accent's lightness */
+@supports (color: oklch(from red l c h)) {
+  :root { --on-tint: oklch(from var(--tint) clamp(0.2, (l - 0.72) * -1000, 0.98) 0 0); }
 }
 
-/* colour: dark */
+/* deeper shadows in dark mode (also when only the data-attribute asks for it) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d1222;
-    --surface: #151b30;
-    --surface-2: #1e2641;
-    --raised: #1a2240;
-    --ink: #e8ecf6;
-    --ink-2: #aab3c9;
-    --ink-3: #8993ac;
-    --line: #2a3454;
-    --primary: #aebcff;
-    --on-primary: #0d1530;
-    --primary-soft: #232d57;
-    --sun: #f7b73a;
-    --sun-strong: #f7b73a;
-    --on-sun: #2a1a00;
-    --ok: #4fd1a0;
-    --warn: #f0b04a;
-    --danger: #ff8b80;
-    --scrim: rgb(2 4 12 / 0.6);
-    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow-2: 0 8px 22px -8px rgb(0 0 0 / 0.6), 0 1px 3px rgb(0 0 0 / 0.4);
-    --shadow-3: 0 28px 60px -16px rgb(0 0 0 / 0.75), 0 4px 12px rgb(0 0 0 / 0.4);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-float: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .5);
   }
 }
 :root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0d1222;
-  --surface: #151b30;
-  --surface-2: #1e2641;
-  --raised: #1a2240;
-  --ink: #e8ecf6;
-  --ink-2: #aab3c9;
-  --ink-3: #8993ac;
-  --line: #2a3454;
-  --primary: #aebcff;
-  --on-primary: #0d1530;
-  --primary-soft: #232d57;
-  --sun: #f7b73a;
-  --sun-strong: #f7b73a;
-  --on-sun: #2a1a00;
-  --ok: #4fd1a0;
-  --warn: #f0b04a;
-  --danger: #ff8b80;
-  --scrim: rgb(2 4 12 / 0.6);
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-2: 0 8px 22px -8px rgb(0 0 0 / 0.6), 0 1px 3px rgb(0 0 0 / 0.4);
-  --shadow-3: 0 28px 60px -16px rgb(0 0 0 / 0.75), 0 4px 12px rgb(0 0 0 / 0.4);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .5);
 }
-:root[data-theme="light"] { color-scheme: light; }
 
+/* phone: iOS sizes and 44px touch targets */
+@media (max-width: 760px) {
+  :root {
+    --fs-large-title: 34px; --lh-large-title: 41px;
+    --fs-title-1: 28px;     --lh-title-1: 34px;
+    --fs-title-2: 22px;     --lh-title-2: 28px;
+    --fs-headline: 17px;    --lh-headline: 22px;
+    --fs-body: 17px;        --lh-body: 22px;
+    --fs-subhead: 15px;     --lh-subhead: 20px;
+    --fs-footnote: 13px;    --lh-footnote: 18px;
+    --fs-caption: 12px;     --lh-caption: 16px;
+    --radius-control: 10px;
+    --control-h: 44px;
+    --row-h: 44px;
+    --row-pad: 16px;
+    --bar-h: 44px;
+  }
+}
+
+/* ---- settings (data-attributes on <html>; the Sol app sets them, see TOKENS.md) ---- */
+:root[data-density="compact"] { --control-h: 24px; --row-h: 26px; --row-pad: 10px; --space-3: 10px; --space-4: 12px; --bar-h: 44px; }
+@media (max-width: 760px) {
+  :root[data-density="compact"] { --control-h: 36px; --row-h: 38px; --row-pad: 14px; --bar-h: 40px; }
+}
+:root[data-radius="square"] { --radius-control: 2px; --radius-group: 4px; --radius-sheet: 4px; }
+:root[data-glass="off"] { --glass: var(--surface); --glass-filter: none; --glass-edge: transparent; }
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass: var(--surface); --glass-filter: none; --glass-edge: transparent; }
+}
+:root[data-font="system"] { --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Sol", system-ui, Roboto, sans-serif; }
+:root[data-font="inter"] { --font-ui: "Inter Sol", system-ui, sans-serif; }
+:root[data-font="mono"] { --font-ui: var(--font-mono); }
+
+/* everything moves only in answer to the person, and not at all when they ask for less */
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
+  :root { --dur-press: 0ms; --dur-fade: 0ms; --dur-sheet: 0ms; --press-scale: 1; }
+}
+
+/* ---- deprecated aliases: the first kit's names, kept so old UIs keep working. Do not use in new code. ---- */
+:root {
+  --bg: var(--canvas); --raised: var(--surface); --ink: var(--label); --ink-2: var(--label-2); --ink-3: var(--label-3);
+  --line: var(--separator); --primary: var(--tint); --on-primary: var(--on-tint); --primary-soft: var(--tint-subtle);
+  --sun: var(--tint); --sun-strong: var(--tint-text); --on-sun: var(--on-tint);
+  --ok: var(--green); --warn: var(--orange); --danger: var(--red);
+  --font: var(--font-ui);
+  --text-xs: 11px; --text-sm: 12px; --text-md: var(--fs-body); --text-lg: var(--fs-title-2); --text-xl: var(--fs-title-1); --text-2xl: var(--fs-large-title); --text-3xl: 34px;
+  --weight-regular: 400; --weight-medium: 500; --weight-bold: 700; --leading: 1.4; --leading-tight: 1.2;
+  --radius-sm: 6px; --radius-md: var(--radius-control); --radius-lg: var(--radius-group); --radius-full: var(--radius-pill);
+  --shadow-2: var(--shadow-float); --shadow-3: var(--shadow-float);
+  --touch: 44px; --sidebar: var(--sidebar-w); --bottom-nav: var(--tab-h);
+  --dur-1: var(--dur-press); --dur-2: var(--dur-fade); --dur-3: var(--dur-sheet);
 }

@@ -1,0 +1,8 @@
+/* @theme    Sol
+   @author   Sol
+   @supports light dark
+   The default look: Sol gold on a calm Apple-style canvas. Nothing to override; this file is the
+   reference for what a theme file looks like, and selecting it clears any other theme. */
+:root {
+  --tint: light-dark(#E8A100, #FFB524);
+}

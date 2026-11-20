@@ -1,0 +1,22 @@
+/* @theme    Terminal
+   @author   Sol
+   @supports dark
+   Monospace, flat, dark, high contrast. No glass, no rounding, no soft shadows. */
+:root:not([data-theme]) { color-scheme: dark; }
+:root {
+  --font-ui: var(--font-mono);
+  --canvas: light-dark(#FFFFFF, #000000);
+  --surface: light-dark(#F4F4F4, #0A0A0A);
+  --surface-2: light-dark(#E6E6E6, #161616);
+  --label: light-dark(#000000, #D7FFD7);
+  --label-2: light-dark(rgba(0, 0, 0, .72), rgba(215, 255, 215, .72));
+  --label-3: light-dark(rgba(0, 0, 0, .45), rgba(215, 255, 215, .42));
+  --separator: light-dark(rgba(0, 0, 0, .45), rgba(215, 255, 215, .30));
+  --tint: light-dark(#007A33, #39FF7A);
+  --glass: var(--surface);
+  --glass-filter: none;
+  --glass-edge: transparent;
+  --radius-control: 0; --radius-group: 0; --radius-sheet: 0;
+  --shadow-1: none; --shadow-float: 0 0 0 1px var(--separator);
+  --press-scale: 1;
+}

@@ -2,6 +2,7 @@ package js
 
 import (
 	"io/fs"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -22,5 +23,17 @@ func TestEmbedAndNoUnsafeInnerHTML(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "export function html") {
 		t.Error("sol.js must export html")
+	}
+}
+
+// TestNodeSuite runs the plain-node tests (fetch stub, theme swap logic) when node is installed.
+func TestNodeSuite(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH")
+	}
+	out, err := exec.Command(node, "test/sol.test.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("node test: %v\n%s", err, out)
 	}
 }

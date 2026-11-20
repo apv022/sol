@@ -1,0 +1,9 @@
+/* @theme    Graphite
+   @author   Sol
+   @supports light dark
+   Neutral and quiet: the same shapes as Sol, with a graphite accent instead of gold. */
+:root {
+  --tint: light-dark(#5B6572, #A9B2BE);
+  --canvas: light-dark(#F2F2F3, #000000);
+  --green: light-dark(#2FA84F, #30D158);
+}

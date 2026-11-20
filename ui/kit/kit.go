@@ -6,7 +6,7 @@ package kit
 
 import "embed"
 
-// FS holds tokens.css, kit.css, kit.js, icons.js and demo.html at its root.
+// FS holds tokens.css, kit.css, kit.js, icons.js, demo.html, TOKENS.md, fonts/ and themes/.
 //
-//go:embed tokens.css kit.css kit.js icons.js demo.html
+//go:embed tokens.css kit.css kit.js icons.js demo.html TOKENS.md fonts themes
 var FS embed.FS

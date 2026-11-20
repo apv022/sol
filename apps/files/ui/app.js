@@ -188,10 +188,10 @@ function dirView() {
     : html`<div slot="empty" class="empty"><sol-icon name="folder"></sol-icon><h3>This folder is empty</h3><p>${isVirtual(r.path) ? 'Open one of the folders inside.' : 'Drop files here or use Upload.'}</p></div>`;
   const rows = state.entries.map(state.view === 'list' ? listRow : tile);
   return html`${crumbs(r.path)}
-    <div class="head"><h1>${r.path ? r.path.split('/').pop() : 'My files'}</h1>${syncPill()}
+    <div class="head"><h1 class="large-title">${r.path ? r.path.split('/').pop() : 'My files'}</h1>${syncPill()}
       <input class="search" type="search" id="search" placeholder="Search names" aria-label="Search names" value="${state.query}"></div>
     ${toolbar()}
-    ${state.error ? html`<div class="card flat empty"><sol-icon name="alert"></sol-icon><h3>${state.error}</h3></div>` :
+    ${state.error ? html`<div class="card empty"><sol-icon name="alert"></sol-icon><h3>${state.error}</h3></div>` :
       state.view === 'list'
         ? html`<sol-list class="files" aria-label="Files">${rows}${empty}</sol-list>`
         : html`<div class="grid" role="list">${rows}</div>${state.entries.length ? '' : empty}`}`;
@@ -206,7 +206,7 @@ function syncPill() {
 
 function searchView() {
   const rows = state.entries.map(listRow);
-  return html`<div class="head"><h1>Search</h1>${syncPill()}
+  return html`<div class="head"><h1 class="large-title">Search</h1>${syncPill()}
     <input class="search" type="search" id="search" value="${state.query}" aria-label="Search names"></div>
     ${toolbar()}
     <sol-list class="files">${rows}<div slot="empty" class="empty"><sol-icon name="search"></sol-icon><h3>No match</h3><p>Nothing has a name like that.</p></div></sol-list>`;
@@ -214,9 +214,9 @@ function searchView() {
 
 function conflictsView() {
   const cs = state.conflicts;
-  return html`<div class="head"><h1>Conflicts</h1>${syncPill()}</div>
+  return html`<div class="head"><h1 class="large-title">Conflicts</h1>${syncPill()}</div>
     <p class="muted">When two of your devices (or you and someone you share with) edit the same file at the same time, both versions are kept. Choose what to keep.</p>
-    ${cs.length === 0 ? html`<div class="card flat empty"><sol-icon name="check"></sol-icon><h3>No conflicts</h3><p>Every file has one version everywhere.</p></div>` :
+    ${cs.length === 0 ? html`<div class="card empty"><sol-icon name="check"></sol-icon><h3>No conflicts</h3><p>Every file has one version everywhere.</p></div>` :
       cs.map((c) => html`<div class="card conflict"><div><h3>${c.path}</h3></div>
         <div class="versions">${c.versions.map((v) => html`<div class="version">
           <span class="badge ${v.winner ? 'ok' : 'warn'}">${v.winner ? 'Has the name' : 'Other version'}</span>
@@ -231,16 +231,16 @@ function conflictsView() {
 function syncView() {
   const s = state.status;
   if (!s) return html`<div class="skeleton" style="height:10rem"></div>`;
-  return html`<div class="head"><h1>Sync</h1>${syncPill()}</div>
+  return html`<div class="head"><h1 class="large-title">Sync</h1>${syncPill()}</div>
     <h2>Devices</h2>
-    <sol-list>${s.devices.map((d) => html`<div class="dev"><sol-icon name="${d.anchor ? 'device' : 'phone'}"></sol-icon>
+    <sol-list>${s.devices.map((d) => html`<div class="dev" data-item><sol-icon name="${d.anchor ? 'device' : 'phone'}"></sol-icon>
       <div class="grow"><div class="title">${d.name}${d.self ? ' (this device)' : ''}</div>
       <small>${d.entries} changes${d.last_entry ? ' · last ' + new Date(d.last_entry).toLocaleString() : ''}</small></div>
       <span class="badge ${d.online ? 'sun' : ''}">${d.online ? 'Online' : 'Offline'}</span></div>`)}</sol-list>
     <h2 style="margin-top: var(--space-6)">This device</h2>
     <dl class="kv"><dt>Folder</dt><dd>${s.folder}</dd><dt>Files</dt><dd>${s.files}</dd><dt>Watching</dt><dd>${s.watcher === 'inotify' ? 'live (inotify)' : 'full scan every few seconds'}</dd>
     <dt>Waiting to sync</dt><dd>${s.pending}</dd>${s.last_error ? html`<dt>Last problem</dt><dd>${s.last_error}</dd>` : ''}</dl>
-    ${s.skipped.length ? html`<h2 style="margin-top: var(--space-6)">Not synced</h2><p class="muted">These names or changes cannot be synced everywhere:</p>
+    ${s.skipped.length ? html`<h2 class="group-title" style="margin-top: var(--space-6)">Not synced</h2><p class="muted">These names or changes cannot be synced everywhere:</p>
       <sol-list>${s.skipped.map((k) => html`<div data-item><div class="grow"><div class="title">${k.path}</div><small>${k.reason}</small></div></div>`)}</sol-list>` : ''}`;
 }
 
@@ -289,7 +289,7 @@ function ask({ title, label, value = '', ok = 'OK' }) {
 function confirmBox({ title, body, ok, danger }) {
   return new Promise((resolve) => {
     let done = false;
-    const d = dialog(title, html`<p>${body}</p><div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="${danger ? 'danger' : 'primary'}" type="button" data-yes>${ok}</button></div>`);
+    const d = dialog(title, html`<p>${body}</p><div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="${danger ? 'danger primary' : 'primary'}" type="button" data-yes>${ok}</button></div>`);
     const finish = (v) => { if (!done) { done = true; resolve(v); } d.close(); };
     d.box.querySelector('[data-yes]').addEventListener('click', () => finish(true));
     d.box.querySelector('[data-no]').addEventListener('click', () => finish(false));
