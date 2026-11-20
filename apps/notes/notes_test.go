@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/apv022/sol/sdk/go/sol"
+	"github.com/apv022/sol/sdk/go/sol/memsol"
 )
 
 type env struct {
@@ -22,7 +23,10 @@ type env struct {
 	root string
 }
 
-func newEnv(t *testing.T, files map[string]string) *env {
+func newEnv(t *testing.T, files map[string]string) *env { return newEnvAPI(t, files, nil) }
+
+// newEnvAPI is newEnv with a daemon API (memsol) for the actions that use blobs.
+func newEnvAPI(t *testing.T, files map[string]string, api sol.API) *env {
 	t.Helper()
 	root := t.TempDir()
 	for p, s := range files {
@@ -34,7 +38,7 @@ func newEnv(t *testing.T, files map[string]string) *env {
 			t.Fatal(err)
 		}
 	}
-	app := New(nil, Config{Root: root, DataDir: t.TempDir(), NoWatch: true})
+	app := New(api, Config{Root: root, DataDir: t.TempDir(), NoWatch: true})
 	if err := app.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +382,49 @@ func TestAttach(t *testing.T) {
 	e.app.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/png" {
 		t.Errorf("serve: %d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestAttachBlob(t *testing.T) {
+	dev := memsol.New().AddPerson("Alice").Devices[0]
+	api := dev.Client("notes")
+	e := newEnvAPI(t, seed, api)
+	// Bigger than the inline cap: blobs have none.
+	big := bytes.Repeat([]byte("x"), maxAttach+1000)
+	info, err := api.PutBlob(t.Context(), bytes.NewReader(big), "big.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"note": "Projects/Plan.md", "name": "big.png", "blob": info.Hash}
+	if c, out := e.do("notes.attach", args, true); c != 200 || out["dry_run"] != true || e.exists("Projects/attachments") {
+		t.Fatalf("dry: %d %v", c, out)
+	}
+	r := e.ok("notes.attach", args)
+	if r["path"] != "Projects/attachments/big.png" || r["markdown"] != "![big.png](attachments/big.png)" {
+		t.Fatalf("attach: %v", r)
+	}
+	if got, _ := os.ReadFile(filepath.Join(e.root, NotesDir, "Projects/attachments/big.png")); !bytes.Equal(got, big) {
+		t.Fatal("attachment bytes differ from the blob")
+	}
+	if r2 := e.ok("notes.attach", args); r2["path"] != r["path"] {
+		t.Errorf("same blob must not be copied twice: %v", r2)
+	}
+	other, _ := api.PutBlob(t.Context(), strings.NewReader("different"), "")
+	args["blob"] = other.Hash
+	if r3 := e.ok("notes.attach", args); r3["path"] != "Projects/attachments/big-2.png" {
+		t.Errorf("unique: %v", r3)
+	}
+	for _, bad := range []map[string]any{
+		{"note": "Projects/Plan.md", "name": "x.png", "blob": "sha256:" + strings.Repeat("0", 64)}, // unknown
+		{"note": "Projects/Plan.md", "name": "x.png", "blob": "nope"},
+		{"note": "Projects/Plan.md", "name": "x.png", "blob": info.Hash, "data": "AAAA"},
+		{"note": "Projects/Plan.md", "name": "x.html", "blob": info.Hash},
+		{"note": "Nope.md", "name": "x.png", "blob": info.Hash},
+		{"note": "Projects/Plan.md", "name": "x.png"},
+	} {
+		if c, _ := e.do("notes.attach", bad, false); c < 400 {
+			t.Errorf("accepted %v", bad)
+		}
 	}
 }
 

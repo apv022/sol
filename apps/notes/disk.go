@@ -1,9 +1,11 @@
 package notes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -30,7 +32,11 @@ func ignorePath(rel string) bool {
 
 // writeAtomic replaces the file at full: a temp file in the same folder, then a rename. The temp
 // name starts with ".#", which Files ignores, so a half-written note is never synced.
-func writeAtomic(full string, data []byte) error {
+func writeAtomic(full string, data []byte) error { return writeAtomicFrom(full, bytes.NewReader(data)) }
+
+// writeAtomicFrom streams r into a temp file next to full and renames it into place, so a big
+// attachment is never held in memory and a failed copy leaves nothing behind.
+func writeAtomicFrom(full string, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
@@ -46,7 +52,7 @@ func writeAtomic(full string, data []byte) error {
 			_ = os.Remove(tmp)
 		}
 	}()
-	if _, err := f.Write(data); err != nil {
+	if _, err := io.Copy(f, r); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {

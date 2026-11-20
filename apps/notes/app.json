@@ -31,8 +31,8 @@
      "input": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}, "effect": "read"},
     {"name": "notes.toggle_task", "description": "Check or uncheck the task item on a line (0-based) of a note. Pass base to refuse a stale line number.",
      "input": {"type": "object", "required": ["path", "line"], "properties": {"path": {"type": "string"}, "line": {"type": "number"}, "checked": {"type": "boolean"}, "base": {"type": "string"}}}, "effect": "write"},
-    {"name": "notes.attach", "description": "Store an image or file (base64, up to 3 MiB) in the attachments folder next to a note; returns the Markdown to link it.",
-     "input": {"type": "object", "required": ["note", "name", "data"], "properties": {"note": {"type": "string"}, "name": {"type": "string"}, "data": {"type": "string"}}}, "effect": "write"},
+    {"name": "notes.attach", "description": "Store an image or file in the attachments folder next to a note; returns the Markdown to link it. Upload the file first (PUT /v1/blobs) and pass its blob hash (no size cap); small files may instead be passed inline as base64 data (up to 3 MiB).",
+     "input": {"type": "object", "required": ["note", "name"], "properties": {"note": {"type": "string"}, "name": {"type": "string"}, "blob": {"type": "string", "description": "sha256: hash of an uploaded blob"}, "data": {"type": "string", "description": "base64, up to 3 MiB; use blob instead for anything bigger"}}}, "effect": "write"},
     {"name": "notes.pin", "description": "Pin a note to the top of the list on this device.",
      "input": {"type": "object", "required": ["path", "pinned"], "properties": {"path": {"type": "string"}, "pinned": {"type": "boolean"}}}, "effect": "write"}
   ]

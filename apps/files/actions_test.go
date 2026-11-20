@@ -191,6 +191,8 @@ func TestActionsBasics(t *testing.T) {
 	if got := strings.Join(a.list(t, ""), ","); got != "Docs/" {
 		t.Fatalf("root after delete: %s", got)
 	}
+	// The deletes above are still being published; wait for the sync to go idle.
+	a.settle(t)
 	status := a.must(t, "files.status", map[string]any{})
 	devs := status["devices"].([]any)
 	if len(devs) != 2 || status["state"] != "synced" || status["folder"] != a.root {

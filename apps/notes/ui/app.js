@@ -1,7 +1,7 @@
 // Notes UI. It only calls actions (sol.call): the notes are files on disk that the app reads and
 // writes; Files syncs them. Every API value reaches the DOM through html`` (escaped); the only
 // raw markup is the output of md.js (which escapes all source HTML) and of highlight() below.
-import { call, html, raw, render, esc } from '/sol.js';
+import { call, putBlob, html, raw, render, esc } from '/sol.js';
 import { toast, setTheme } from '/kit/kit.js';
 import { render as mdRender, renderInline } from '/md.js';
 
@@ -483,32 +483,14 @@ $ta.addEventListener('blur', () => setTimeout(acHide, 150));
 
 // ---------- attachments ----------
 
-function toB64(buf) {
-  let s = '';
-  const u = new Uint8Array(buf);
-  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
-  return btoa(s);
-}
-const LIMIT = 3 * 1024 * 1024;
-/** Big photos are shrunk to a JPEG so they fit the action limit and the folder stays light. */
-async function prepare(file) {
-  if (file.size <= LIMIT * 0.8 || !/^image\/(png|jpe?g|webp|bmp|avif)$/.test(file.type)) return { name: file.name, buf: await file.arrayBuffer() };
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
-  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-  const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.85));
-  return { name: file.name.replace(/\.\w+$/, '') + '.jpg', buf: await blob.arrayBuffer() };
-}
+/** The file goes to the daemon as a blob (no size cap, nothing base64'd); the app copies it in. */
 async function attach(files) {
   const c = state.cur;
   if (!c) return;
   for (const f of files) {
     try {
-      const { name, buf } = await prepare(f);
-      if (buf.byteLength > LIMIT) { toast(`${f.name} is larger than 3 MB`, { kind: 'error' }); continue; }
-      const r = await call('notes.attach', { note: c.path, name: name || 'image.png', data: toB64(buf) });
+      const b = await putBlob(f);
+      const r = await call('notes.attach', { note: c.path, name: f.name || 'image.png', blob: b.hash });
       const a = $ta.selectionStart;
       replaceRange(a, $ta.selectionEnd, r.markdown + '\n');
     } catch (e) { fail(e); }

@@ -1,11 +1,13 @@
 package notes
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -22,8 +24,8 @@ func clash(format string, a ...any) error {
 	return sol.Errorf("conflict", fmt.Sprintf(format, a...))
 }
 
-// maxAttach is the largest attachment accepted through notes.attach (actions carry at most 4 MiB
-// of JSON, and base64 adds a third).
+// maxAttach is the largest attachment accepted inline (base64 in the action body; actions carry at
+// most 4 MiB of JSON, and base64 adds a third). Blobs have no cap.
 const maxAttach = 3 << 20
 
 func (a *App) registerActions(act *sol.Actions) {
@@ -617,15 +619,31 @@ func (a *App) actToggle(_ context.Context, c sol.Call) (any, error) {
 	return map[string]any{"path": rel, "line": in.Line, "checked": checked, "text": nt, "etag": etagOf([]byte(nt)), "rev": a.idx.revision()}, nil
 }
 
+// hashFile returns the blob-style hash of a file's content, or the open error (fs.ErrNotExist when
+// it is missing).
+func hashFile(full string) (string, error) {
+	f, err := os.Open(full)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
 var blockedExt = map[string]bool{".html": true, ".htm": true, ".xhtml": true, ".js": true, ".mjs": true, ".exe": true, ".bat": true, ".cmd": true, ".ps1": true, ".sh": true, ".md": true}
 
 var imageExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".avif": true, ".bmp": true, ".svg": true}
 
-func (a *App) actAttach(_ context.Context, c sol.Call) (any, error) {
+func (a *App) actAttach(ctx context.Context, c sol.Call) (any, error) {
 	var in struct {
 		Note string `json:"note"`
 		Name string `json:"name"`
 		Data string `json:"data"`
+		Blob string `json:"blob"`
 	}
 	if err := c.Decode(&in); err != nil {
 		return nil, bad("%v", err)
@@ -634,12 +652,34 @@ func (a *App) actAttach(_ context.Context, c sol.Call) (any, error) {
 	if err != nil {
 		return nil, bad("%v", err)
 	}
-	data, err := base64.StdEncoding.DecodeString(in.Data)
-	if err != nil {
-		return nil, bad("data is not base64")
+	if (in.Blob == "") == (in.Data == "") {
+		return nil, bad("give either blob (a stored blob hash) or data (base64, small files only)")
 	}
-	if len(data) == 0 || len(data) > maxAttach {
-		return nil, bad("attachments must be between 1 byte and 3 MiB")
+	// want is the content hash of the attachment; it decides whether a same-named file is a copy.
+	var data []byte
+	var want string
+	if in.Blob != "" {
+		if !sol.ValidHash(in.Blob) {
+			return nil, bad("blob is not a blob hash")
+		}
+		if a.api == nil {
+			return nil, sol.Errorf("unavailable", "no daemon to read the blob from")
+		}
+		if _, err := a.api.StatBlob(ctx, in.Blob, sol.BlobOptions{}); err != nil {
+			return nil, err
+		}
+		want = in.Blob
+	} else {
+		var err error
+		data, err = base64.StdEncoding.DecodeString(in.Data)
+		if err != nil {
+			return nil, bad("data is not base64")
+		}
+		if len(data) == 0 || len(data) > maxAttach {
+			return nil, bad("inline data must be between 1 byte and 3 MiB; upload bigger files as a blob")
+		}
+		sum := sha256.Sum256(data)
+		want = "sha256:" + hex.EncodeToString(sum[:])
 	}
 	name := baseOf(strings.ReplaceAll(in.Name, `\`, "/"))
 	ext := strings.ToLower(filepath.Ext(name))
@@ -663,6 +703,7 @@ func (a *App) actAttach(_ context.Context, c sol.Call) (any, error) {
 	dir := join(dirOf(note), AttachDir)
 	// Same bytes already stored under this name: reuse it (a re-paste adds no copy).
 	var rel string
+	exists := false
 	for i := 1; ; i++ {
 		n := stem
 		if i > 1 {
@@ -673,14 +714,14 @@ func (a *App) actAttach(_ context.Context, c sol.Call) (any, error) {
 		if err != nil {
 			return nil, bad("%v", err)
 		}
-		cur, err := os.ReadFile(full)
+		got, err := hashFile(full)
 		if errors.Is(err, fs.ErrNotExist) {
 			rel = cand
 			break
 		}
-		if err == nil && bytes.Equal(cur, data) {
+		if err == nil && got == want {
 			rel = cand
-			data = nil
+			exists = true
 			break
 		}
 		if i > 9999 {
@@ -695,9 +736,18 @@ func (a *App) actAttach(_ context.Context, c sol.Call) (any, error) {
 	if c.DryRun {
 		return dry("store "+rel, map[string]any{"path": rel, "href": href, "markdown": md}), nil
 	}
-	if data != nil {
+	if !exists {
 		full, _ := a.abs(rel)
-		if err := writeAtomic(full, data); err != nil {
+		if in.Blob != "" {
+			rc, err := a.api.GetBlob(ctx, in.Blob, sol.BlobOptions{})
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			if err := writeAtomicFrom(full, rc); err != nil {
+				return nil, err
+			}
+		} else if err := writeAtomic(full, data); err != nil {
 			return nil, err
 		}
 	}
