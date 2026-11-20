@@ -38,6 +38,9 @@ func (a *App) commit(ctx context.Context, b body) error {
 			}
 			nb.To = rel2
 		}
+		if err := a.shareBack(ctx, rs); err != nil {
+			return err
+		}
 		if _, err := a.api.Append(ctx, sharePrefix+rs.ID, nb); err != nil {
 			return err
 		}
@@ -64,6 +67,25 @@ func (a *App) commit(ctx context.Context, b body) error {
 		return err
 	}
 	return a.mirror(ctx, b, pre)
+}
+
+// shareBack makes my co-author feed of a folder shared with me for writing readable by its
+// owner (API.md §5): their write share alone grants them nothing of mine, so my edits reach
+// them only once I share the feed back. Once per share and run; sharing is idempotent.
+func (a *App) shareBack(ctx context.Context, rs *recvShare) error {
+	a.mu.RLock()
+	done := a.sharedBack[rs.ID]
+	a.mu.RUnlock()
+	if done || rs.Owner == "" {
+		return nil
+	}
+	if err := a.api.Share(ctx, sol.ShareRequest{Feed: sharePrefix + rs.ID, People: []string{rs.Owner}, Mode: sol.ModeRead}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.sharedBack[rs.ID] = true
+	a.mu.Unlock()
+	return nil
 }
 
 // mirror copies a change under a folder I share into that share's feed (relative paths).

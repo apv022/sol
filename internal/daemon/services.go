@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -270,6 +271,11 @@ func (ps *portShare) checkService(s *Service) error {
 	if s.Port < 1 || s.Port > 65535 {
 		return sol.Errorf("bad_request", "port must be 1-65535")
 	}
+	if ps.d.ownPort(s.Port) {
+		// A shared port is dialed by the daemon itself, so the far end would arrive as this OS
+		// user and be signed in to Sol without a code (security review F7).
+		return sol.Errorf("bad_request", "that port is Sol's own; it cannot be shared")
+	}
 	if s.People == nil {
 		s.People = []string{}
 	}
@@ -282,6 +288,18 @@ func (ps *portShare) checkService(s *Service) error {
 		}
 	}
 	return nil
+}
+
+// ownPort reports whether port is one Sol itself serves on loopback: the UI, or the app API
+// when it is on TCP.
+func (d *Daemon) ownPort(port int) bool {
+	if port == d.UIPort() {
+		return true
+	}
+	if u, err := url.Parse(d.apiURL); err == nil && u.Scheme == "http" && u.Port() == strconv.Itoa(port) {
+		return true
+	}
+	return false
 }
 
 // AddService shares a local port.
@@ -507,7 +525,7 @@ func (ps *portShare) peerService(w http.ResponseWriter, r *http.Request) {
 	ps.mu.Lock()
 	s, ok := ps.services[name]
 	ps.mu.Unlock()
-	if !ok || !allowed(s) {
+	if !ok || !allowed(s) || ps.d.ownPort(s.Port) {
 		// The same answer for "no such service" and "not yours": it reveals nothing.
 		ps.d.log.Info("refused a service stream", "service", name, "person", pid)
 		sol.WriteError(w, sol.Errorf("forbidden", "that service is not shared with you"))
@@ -1087,6 +1105,7 @@ func proxyTo(tr http.RoundTripper) *httputil.ReverseProxy {
 					pr.Out.Header.Del(k)
 				}
 			}
+			stripSolCookies(pr.Out.Header)
 		},
 		Transport: tr,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -1097,6 +1116,22 @@ func proxyTo(tr http.RoundTripper) *httputil.ReverseProxy {
 			}
 			http.Error(w, msg, http.StatusBadGateway)
 		},
+	}
+}
+
+// stripSolCookies removes Sol's own cookies (the sign-in of this origin) from a request about
+// to leave this device, keeping the service's own: the contact must never see them.
+func stripSolCookies(h http.Header) {
+	cs := (&http.Request{Header: h}).Cookies()
+	h.Del("Cookie")
+	var keep []string
+	for _, c := range cs {
+		if c.Name != AppCookie && c.Name != SessionCookie {
+			keep = append(keep, c.Name+"="+c.Value)
+		}
+	}
+	if len(keep) > 0 {
+		h.Set("Cookie", strings.Join(keep, "; "))
 	}
 }
 

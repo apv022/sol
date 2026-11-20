@@ -57,7 +57,8 @@ only. Music and Movies stream online-only files by blob hash without writing the
   tree entries under that folder are mirrored into it.
 - A folder shared with me appears under `Shared/<petname>/<folder>/`. If they granted write, my
   changes there go into my own `share.<id>` feed, which they read as co-author (API.md §5) and
-  fold into theirs with the same conflict rule.
+  fold into theirs with the same conflict rule. Before the first such change Files shares that
+  feed back to the owner (`read`): a write share alone never exposes a feed of mine.
 - Unsharing stops future updates; files already copied stay where they are.
 
 ## Actions (everything the UI can do)

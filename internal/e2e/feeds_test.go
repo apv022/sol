@@ -211,6 +211,14 @@ func TestFeedReplication(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.count(t, doc, 1)
+	// Bob's doc stays his until his app shares it back (security review F1).
+	time.Sleep(300 * time.Millisecond)
+	if n := len(a1.entries(t, bobDoc)); n != 0 {
+		t.Fatalf("Alice pulled %d entries of Bob's doc on her write share alone", n)
+	}
+	if err := b.shares.Share("notes", "doc", []string{alice}, feeds.ModeRead); err != nil {
+		t.Fatal(err)
+	}
 	a1.count(t, bobDoc, 1)
 	b.append(t, "notes", "doc", `{"edit":"bob again"}`)
 	a1.count(t, bobDoc, 2)

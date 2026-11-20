@@ -101,6 +101,12 @@ func TestBlobPermission(t *testing.T) {
 	if err := sh.SetIncoming(bobID, map[string]string{"files/music": ModeWrite}); err != nil {
 		t.Fatal(err)
 	}
+	if refs.MayFetch(bobID, shared) {
+		t.Fatal("an announced write share alone let Bob fetch (security review F1)")
+	}
+	if err := sh.Share("files", "music", []string{bobID}, ModeRead); err != nil {
+		t.Fatal(err)
+	}
 	if !refs.MayFetch(bobID, shared) {
 		t.Fatal("co-author cannot fetch")
 	}

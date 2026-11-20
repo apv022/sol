@@ -449,6 +449,24 @@ func TestViews(t *testing.T) {
 	if ev.Type != EventFeed || ev.Feed != bobID+"/notes/doc" || !ev.Readable {
 		t.Fatalf("event %+v", ev)
 	}
+	// Security review F1: his claim alone grants nothing, or any contact could read any feed
+	// of mine by announcing a write share of a feed with the same name.
+	if ls.CanRead(bobID, doc) || len(ls.ReadableBy(bobID)) != 1 {
+		t.Fatalf("an announced write share granted my same-named feed: %v", ls.ReadableBy(bobID))
+	}
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite, "notes/todo": ModeWrite, "files/tree": ModeWrite}); err != nil {
+		t.Fatal(err)
+	}
+	if ls.CanRead(bobID, Address(me, "files", "tree")) || !ls.CanRead(bobID, todo) || len(ls.ReadableBy(bobID)) != 1 {
+		t.Fatal("announced write shares changed what Bob may read")
+	}
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}); err != nil {
+		t.Fatal(err)
+	}
+	// My app consents by sharing its co-author feed back.
+	if err := ls.Share("notes", "doc", []string{bobID}, ModeRead); err != nil {
+		t.Fatal(err)
+	}
 	if ls.ReadMode(bobID, doc) != ModeCoauthor {
 		t.Fatal("co-author cannot read")
 	}

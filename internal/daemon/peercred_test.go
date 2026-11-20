@@ -38,6 +38,18 @@ func TestParseProcNetUID(t *testing.T) {
 	if uid, ok := parseProcNetUID(strings.NewReader(procTCP6), ap("127.0.0.1:54322"), ap("127.0.0.1:7777")); !ok || uid != 1003 {
 		t.Fatalf("mapped: %d %v", uid, ok)
 	}
+	// Security review F5: a TIME_WAIT row of an earlier connection on the same ports (uid 0)
+	// is not the owner; the live row after it is.
+	const tw = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C350 0100007F:1E61 06 00000000:00000000 03:00000000 00000000     0        0 0 3 0000000000000000
+   1: 0100007F:C350 0100007F:1E61 01 00000000:00000000 00:00000000 00000000  1001        0 22222 1 0000000000000000 20 4 30 10 -1
+`
+	if uid, ok := parseProcNetUID(strings.NewReader(tw), ap("127.0.0.1:50000"), ap("127.0.0.1:7777")); !ok || uid != 1001 {
+		t.Fatalf("time-wait: %d %v", uid, ok)
+	}
+	if _, ok := parseProcNetUID(strings.NewReader(tw[:strings.Index(tw, "   1:")]), ap("127.0.0.1:50000"), ap("127.0.0.1:7777")); ok {
+		t.Fatal("a TIME_WAIT row named an owner")
+	}
 	if _, ok := parseProcNetUID(strings.NewReader("garbage\nnot a row\n"), ap("127.0.0.1:1"), ap("127.0.0.1:2")); ok {
 		t.Fatal("garbage matched")
 	}

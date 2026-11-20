@@ -154,6 +154,11 @@ rule; there is no separate blob ACL.
 ```
 `mode` is `read` or `write`. Write means: the person's own feed with the same name is pulled in
 and offered to this app as a co-author (collaborative apps merge the two). Sol never merges.
+Their feed is theirs to give: a write share never makes the recipient's same-named feed readable
+by itself (otherwise anyone could read any feed of a contact by write-sharing one with the same
+name). The recipient's app consents by sharing its co-author feed back (`read` is enough), which it
+does when it first writes into a feed shared with it for writing; until then the owner sees nothing
+of it.
 
 ### `DELETE /v1/shares` (same body) and `GET /v1/shares?feed=NAME`
 
@@ -194,6 +199,12 @@ The daemon sends `POST /_sol/actions/{name}` to the app's own socket with the ar
 the caller headers from section 1. With `Sol-Dry-Run: 1` the app must describe what it would do
 and change nothing.
 
+### Calling another app's actions
+An app may call any app's `read` actions. An action of another app that changes something
+(`write`, `destructive`) is filed as an approval for the person, whatever its own policy: the
+calling app is not the person, and without this any app with the `actions` scope could delete my
+files as me.
+
 ### The same actions everywhere
 - **CLI:** `sol do files.upload --path /notes.txt --blob sha256:… [--json] [--dry-run]` and
   `sol do --help files` (generated from the schemas).
@@ -211,6 +222,10 @@ The daemon writes every action that changes something to a signed activity log (
 args digest, result), readable through `GET /v1/activity`.
 
 ## 7. Dial: live streams to a peer's app
+
+My own devices and my contacts may dial any app (sharing is not required: a call or a terminal
+has no feed); the app decides by the caller headers. `path` is a plain path and never under the
+reserved `/_sol/`.
 
 For things that aren't data sync: streaming playback negotiation, calls, terminals.
 
@@ -293,6 +308,15 @@ this, so apps do nothing.
 
 A peer's app is opened locally the same way: `http://<app>.<petname>.localhost:<port>/` is
 proxied to that person's app over Sol.
+
+Every app and peer origin is signed in like the UI root (ADMIN.md "Who may use it"): apps trust
+`Sol-Self: 1`, and loopback is reachable by other OS users and other Android apps. A browser of
+the daemon's own OS user is let in by the connection's owner; any other browser holds the
+origin's own `sol_app` cookie, got by a one-time code from the root's session (an unsigned page
+load is sent through `http://localhost:<port>/_sol/open`, which sends it back signed in). And
+whoever is signed in, a request that changes something must carry the origin's own `Origin`, and
+a GET from another site must be a top-level navigation, so no other page in the browser (a
+website, a contact's app, another app) can drive an app.
 
 ## 11. What this API deliberately does not have
 

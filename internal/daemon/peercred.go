@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -51,6 +52,12 @@ func parseProcNetUID(r io.Reader, client, server netip.AddrPort) (uint32, bool) 
 		if len(f) < 8 {
 			continue
 		}
+		// Only a live connection says who owns it: a TIME_WAIT (or any closing) row of an
+		// earlier connection on the same ports carries uid 0, which would pass for a daemon
+		// running as root (security review F5).
+		if f[3] != tcpEstablished {
+			continue
+		}
 		l, ok1 := parseProcAddr(f[1])
 		rm, ok2 := parseProcAddr(f[2])
 		if !ok1 || !ok2 || !sameAddrPort(l, client) || !sameAddrPort(rm, server) {
@@ -69,8 +76,14 @@ func sameAddrPort(a, b netip.AddrPort) bool {
 	return a.Port() == b.Port() && a.Addr().Unmap() == b.Addr().Unmap()
 }
 
+// tcpEstablished is the st column of /proc/net/tcp for an established connection.
+const tcpEstablished = "01"
+
+// littleEndian reports the host byte order, in which the kernel prints address words.
+var littleEndian = binary.NativeEndian.Uint16([]byte{1, 0}) == 1
+
 // parseProcAddr parses "0100007F:1F90" (IPv4) or a 32-hex-digit IPv6 form. The kernel prints
-// each 32-bit word of the address in host (little-endian) byte order.
+// each 32-bit word of the address in host byte order (reversed on little-endian machines).
 func parseProcAddr(s string) (netip.AddrPort, bool) {
 	h, p, ok := strings.Cut(s, ":")
 	if !ok {
@@ -84,8 +97,10 @@ func parseProcAddr(s string) (netip.AddrPort, bool) {
 	if err != nil || (len(b) != 4 && len(b) != 16) {
 		return netip.AddrPort{}, false
 	}
-	for i := 0; i+3 < len(b); i += 4 { // reverse each word
-		b[i], b[i+1], b[i+2], b[i+3] = b[i+3], b[i+2], b[i+1], b[i]
+	if littleEndian {
+		for i := 0; i+3 < len(b); i += 4 { // reverse each word
+			b[i], b[i+1], b[i+2], b[i+3] = b[i+3], b[i+2], b[i+1], b[i]
+		}
 	}
 	a, _ := netip.AddrFromSlice(b)
 	return netip.AddrPortFrom(a, uint16(port)), true

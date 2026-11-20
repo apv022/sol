@@ -85,16 +85,17 @@ type App struct {
 	pullMu sync.Mutex // serialises feed reads so each entry is folded once
 	mu     sync.RWMutex
 
-	own       *Tree
-	shares    map[string]*shareRec // my shares by id
-	myShareID map[string]bool      // every share id I ever created (their feeds are my mirrors)
-	recv      map[string]*recvShare
-	cursors   map[string]uint64
-	dirty     map[string]bool // feed addresses to read again
-	petnames  map[string]string
-	devStats  map[string]*devStat
-	rev       uint64
-	view      *view
+	own        *Tree
+	shares     map[string]*shareRec // my shares by id
+	myShareID  map[string]bool      // every share id I ever created (their feeds are my mirrors)
+	recv       map[string]*recvShare
+	sharedBack map[string]bool // received write shares whose co-author feed I shared back to the owner
+	cursors    map[string]uint64
+	dirty      map[string]bool // feed addresses to read again
+	petnames   map[string]string
+	devStats   map[string]*devStat
+	rev        uint64
+	view       *view
 
 	index      map[string]idxEntry
 	keep       map[string]bool
@@ -168,7 +169,7 @@ func New(api sol.API, cfg Config) *App {
 		cfg.DataDir = os.Getenv("SOL_APP_DATA")
 	}
 	a := &App{api: api, cfg: cfg, manifest: m, root: filepath.Clean(cfg.Root), data: cfg.DataDir,
-		own: NewTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{},
+		own: NewTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{}, sharedBack: map[string]bool{},
 		cursors: map[string]uint64{}, dirty: map[string]bool{}, petnames: map[string]string{},
 		devStats: map[string]*devStat{}, index: map[string]idxEntry{}, keep: map[string]bool{}, dirsMade: map[string]bool{},
 		noticed: map[string]bool{}, mergeTried: map[string]bool{}, skipped: map[string]string{}, pending: map[string]bool{},

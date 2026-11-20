@@ -34,6 +34,22 @@ other users on the same computer can reach loopback. So the browser needs a sess
   other Android apps (other uids) get the login screen. Anything running as the same user can
   already read the admin token, so this grants it nothing new; the one thing to know is that a
   same-user tunnel (`ssh -L`, a reverse proxy) forwards its remote peers as that user.
+- **App and peer origins** (`<app>.localhost`, `<app>.<petname>.localhost`) are signed in too,
+  since apps trust `Sol-Self: 1` and other users and other Android apps can reach loopback. The
+  daemon's own OS user is let in by the connection's owner (looked up per request). Any other
+  browser needs the origin's `sol_app` cookie (HttpOnly, SameSite=Strict, host-only): a page load
+  without it goes to `GET /_sol/open?to=<app>[.<petname>]&next=<path>` on the root, which, with a
+  live session and only for a top-level navigation, mints a one-time code (60 s) for exactly that
+  origin and sends the browser to `/_sol/login?code=` there. The cookie is an HMAC of the origin
+  keyed by the session, so it works on that origin only and ends with the session. On every app
+  origin a request that changes something needs the origin's own `Origin`, and a cross-site GET
+  must be a navigation (CSRF; `apphost.FetchAllowed`).
+- **Same-user sessions are bound to that user.** A session started by same-user auto-login is
+  honoured only on connections of the daemon's OS user: cookies ignore ports, so a page served on
+  any other localhost port receives the cookie, and a copy must be worthless to anyone else.
+  Sessions from login codes (another uid's browser, Android) are bearer sessions.
+- A port Sol itself serves (the UI, the API on TCP) cannot be shared as a service: the daemon
+  dials shared ports itself, so the contact would arrive as this OS user.
 - Without a session the page shows "This browser isn't signed in to Sol. Open Sol from your
   app menu, or run `sol open`." and nothing else.
 - Plain `sol` on a fresh machine sets Sol up (person = the OS account's full name, device =

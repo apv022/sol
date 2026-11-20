@@ -177,7 +177,11 @@ func (s *Server) run(ctx context.Context, requester string, c sol.ActionCall, wh
 	if !ok {
 		return nil, sol.Errorf("not_found", "no such action "+c.Action)
 	}
-	if !approved && !c.DryRun && needsApproval(spec, who.agent) {
+	// An app calling another app's action that changes something is not the person acting:
+	// it needs the person's approval, whatever the action's policy (security review F4).
+	// Otherwise any app with the actions scope could delete my files as me.
+	crossApp := requester != appID && spec.Effect != sol.EffectRead
+	if !approved && !c.DryRun && (needsApproval(spec, who.agent) || crossApp) {
 		return s.fileApproval(requester, sol.ActionCall{Action: c.Action, Args: c.Args}, who.agent)
 	}
 	if a.Addr == "" {

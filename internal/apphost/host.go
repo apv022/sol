@@ -142,6 +142,12 @@ type Config struct {
 	// Peer serves http://<name>.<peer>.localhost:<port>/ (a contact's app UI or HTTP service);
 	// origin is that origin. nil answers not_implemented.
 	Peer func(w http.ResponseWriter, r *http.Request, name, peer, origin string)
+	// Gate, if set, runs before anything is served on an app or peer origin (origin is
+	// "http://<host>:<port>"): it signs the browser in on that origin, or answers the request
+	// itself and returns false. Without it every app origin is open to anything that can reach
+	// loopback (another OS user, another Android app), so the daemon always sets it; tests of
+	// the router alone may leave it nil.
+	Gate func(w http.ResponseWriter, r *http.Request, origin string) bool
 	// OnChange, if set, is called (never with the host's lock held) whenever an app is
 	// installed, removed, restarted, or starts or stops running.
 	OnChange func(id string)

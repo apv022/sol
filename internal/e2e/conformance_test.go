@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +35,10 @@ func startGated(t *testing.T, o sold.InitOptions, builtins map[string]apphost.Bu
 	if err := sold.Init(dir, o); err != nil {
 		t.Fatal(err)
 	}
-	so := sold.Options{Dir: dir, Builtins: builtins, InProcessApps: true, Log: slog.New(slog.DiscardHandler)}
+	// The test is the daemon's own OS user on every OS (macOS has no lookup yet), so its plain
+	// HTTP clients are signed in on app origins as a browser of that user would be.
+	so := sold.Options{Dir: dir, Builtins: builtins, InProcessApps: true, Log: slog.New(slog.DiscardHandler),
+		SameUser: func(_, _ netip.AddrPort) (bool, error) { return true, nil }}
 	if g != nil {
 		so.WrapTransport = g.wrap
 		t.Cleanup(g.close)

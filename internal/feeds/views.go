@@ -26,8 +26,10 @@ const (
 const (
 	ModeRead  = "read"
 	ModeWrite = "write"
-	// ModeCoauthor marks a feed readable to a person only because that
-	// person write-shared their same-named feed with me.
+	// ModeCoauthor marks a feed of mine that I share with a person who
+	// write-shared their same-named feed with me: my contributions to their
+	// feed. A write share alone never makes a feed of mine readable; my app
+	// consents by sharing its co-author feed back (security review F1).
 	ModeCoauthor = "coauthor"
 )
 
@@ -352,9 +354,13 @@ func (sh *Shares) List(app, name string) []Share {
 }
 
 // CanRead reports whether reader (a person ID) may read my feed at addr:
-// it is mine and reader is me, or I share it with reader, or reader
-// write-shared their same-named feed with me (co-author). Internal feeds are
+// it is mine and reader is me, or I share it with reader. Internal feeds are
 // never readable by anyone else. Feeds I don't own are never mine to serve.
+//
+// A contact's write share is only their claim (they announce it over
+// replication), so it never grants anything by itself: otherwise any contact
+// could read any feed of mine by announcing a write share of a feed with the
+// same name. The co-author feed is readable because my app shared it back.
 func (sh *Shares) CanRead(reader, addr string) bool {
 	return sh.ReadMode(reader, addr) != ""
 }
@@ -373,35 +379,31 @@ func (sh *Shares) ReadMode(reader, addr string) string {
 	if app == InternalApp {
 		return ""
 	}
-	if m := sh.Mode(app, name, reader); m != "" {
-		return m
-	}
-	if sh.Incoming(reader, app, name) == ModeWrite {
+	m := sh.Mode(app, name, reader)
+	if m == ModeRead && sh.Incoming(reader, app, name) == ModeWrite {
 		return ModeCoauthor
 	}
-	return ""
+	return m
 }
 
 // ReadableBy returns every feed of mine that person (a contact) may read,
 // with the reason (ModeRead, ModeWrite or ModeCoauthor). It agrees with
-// ReadMode and also names shared feeds that have no entries yet.
+// ReadMode and also names shared feeds that have no entries yet. Only my own
+// sharing records grant anything (see CanRead).
 func (sh *Shares) ReadableBy(person string) map[string]string {
 	out := map[string]string{}
 	me := sh.s.self.Person()
 	if me == nil || person == identity.ID(me) {
 		return out
 	}
+	in := sh.IncomingAll(person)
 	for _, r := range sh.l.all() {
 		if r.Person == person && r.Mode != "" {
-			out[identity.ID(me)+"/"+r.Feed] = r.Mode
-		}
-	}
-	for k, mode := range sh.IncomingAll(person) {
-		addr := identity.ID(me) + "/" + k
-		if _, ok := out[addr]; !ok && mode == ModeWrite {
-			if _, app, _, err := ParseAddress(addr); err == nil && app != InternalApp {
-				out[addr] = ModeCoauthor
+			mode := r.Mode
+			if mode == ModeRead && in[r.Feed] == ModeWrite {
+				mode = ModeCoauthor
 			}
+			out[identity.ID(me)+"/"+r.Feed] = mode
 		}
 	}
 	return out

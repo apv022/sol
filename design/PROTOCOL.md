@@ -188,7 +188,7 @@ The caller's verified person, device and relation (`self` or `contact`) are know
 | `POST /p/sync` | self, contacts | feed replication: body is the list of feeds + `have` seqs; the response streams missing entries, then new ones live |
 | `GET /p/blobs/{hash}` | per API.md §4 rule; self always | blob bytes, `Range` supported |
 | `POST /p/actions/{name}` | per sharing + scopes | run an action on this device's app, caller headers attached |
-| `GET /p/dial/{app}/{path}` | per sharing | upgrade to a raw stream into that app |
+| `POST /p/dial` `{app, path}` | self, contacts (the app decides by the caller headers; `path` never under `/_sol/`) | upgrade to a raw stream into that app |
 | `GET /p/service/{name}` | per sharing | upgrade to a raw stream into a shared local port (port sharing) |
 | `POST /p/services` | self, contacts | the services this device offers the caller, `{"services":[{name,http}]}`; pushed when the session comes up and whenever the list changes (port sharing) |
 | `GET /p/ui/{app}/{path}` | per sharing (any feed of the app shared with the caller; self always) | the app's UI, caller headers attached, for `http://<app>.<petname>.localhost` (API.md §10); `/_sol/` is never passed |

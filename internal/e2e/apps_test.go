@@ -12,6 +12,7 @@ import (
 
 	"github.com/apv022/sol/internal/builtins"
 	sold "github.com/apv022/sol/internal/daemon"
+	"github.com/apv022/sol/internal/identity"
 )
 
 // ui sends a request to an app origin of d's UI server ("" app: the UI root, the Sol app).
@@ -149,6 +150,67 @@ func TestFilesAcrossDevicesAndPeople(t *testing.T) {
 }
 
 // TestAppInstallRemove installs an app from a directory, lists it, and removes it.
+// TestCrossAppActionNeedsApproval (security review F4): an app may call another app's read
+// actions, but one that changes something waits for the person's approval, whatever its policy:
+// before, any app with the actions scope could write or delete my files as me.
+func TestCrossAppActionNeedsApproval(t *testing.T) {
+	d := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, builtins.All())
+	eventually(t, "Files and Notes running", func() bool {
+		c1, _ := call(t, d, "files.list", `{}`)
+		c2, _ := ui(t, d, "notes", "GET", "/_sol/v1/whoami", "", "", nil)
+		return c1 == 200 && c2 == 200
+	})
+	// Notes' UI asks Files to make a folder: filed as an approval, nothing done.
+	code, body := ui(t, d, "notes", "POST", "/_sol/v1/actions/call", origin(d, "notes"),
+		`{"action":"files.mkdir","args":{"path":"/Evil"}}`, nil)
+	var out struct{ Approval string }
+	if code != 200 || json.Unmarshal([]byte(body), &out) != nil || out.Approval == "" {
+		t.Fatalf("cross-app write: %d %s", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(d.Dir(), "SolDrive", "Evil")); !os.IsNotExist(err) {
+		t.Fatal("the cross-app action ran without approval")
+	}
+	// A read action of another app runs; Files itself runs its own write.
+	if code, body := ui(t, d, "notes", "POST", "/_sol/v1/actions/call", origin(d, "notes"),
+		`{"action":"files.list","args":{"path":"/"}}`, nil); code != 200 || strings.Contains(body, "approval") {
+		t.Fatalf("cross-app read: %d %s", code, body)
+	}
+	if code, body := call(t, d, "files.mkdir", `{"path":"/Mine"}`); code != 200 || strings.Contains(body, "approval") {
+		t.Fatalf("own write: %d %s", code, body)
+	}
+}
+
+// TestPeerDialPath (security review F9): a contact's dial names a plain path of the app, never
+// its reserved /_sol/ (where it serves the daemon's calls), and a malformed one is a clean
+// bad_request instead of a panic in the handler.
+func TestPeerDialPath(t *testing.T) {
+	bi := builtins.All()
+	alice := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, bi)
+	bob := startNode(t, sold.InitOptions{Name: "Bob", Device: "desktop"}, bi)
+	pairNodes(t, alice, bob)
+	waitSession(t, bob, alice)
+	dev, _ := identity.ParseID(alice.DeviceID())
+	for _, p := range []string{"/_sol/actions/files.delete", "/_sol", "/a b\r\nSol-Self: 1"} {
+		body, _ := json.Marshal(map[string]string{"app": "files", "path": p})
+		var resp *http.Response
+		eventually(t, "a dial answered", func() bool { // the first session may lose the tie-break
+			ss, ok := bob.Sessions.Session(dev)
+			if !ok {
+				return false
+			}
+			req, _ := http.NewRequest("POST", "http://peer/p/dial", strings.NewReader(string(body)))
+			var err error
+			resp, err = ss.HTTPClient().Do(req)
+			return err == nil
+		})
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "bad_request") {
+			t.Fatalf("dial %q: %d %s", p, resp.StatusCode, b)
+		}
+	}
+}
+
 func TestAppInstallRemove(t *testing.T) {
 	d := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, builtins.All())
 	src := t.TempDir()

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,10 +14,13 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,18 +77,33 @@ type BrowserSession struct {
 type storedSession struct {
 	BrowserSession
 	Hash string `json:"hash"` // hex SHA-256 of the cookie value
+	// SameUser marks a session started by same-user auto-login: it is good only on connections
+	// of the daemon's own OS user. Cookies are not scoped by port, so any page served on
+	// another localhost port (another user's server, say) receives it; bound like this, a
+	// stolen cookie is worthless to anyone else (security review F10).
+	SameUser bool `json:"same_user,omitempty"`
 }
 
 type browserAuth struct {
 	path string
 
-	mu    sync.Mutex
-	codes map[[32]byte]time.Time // code hash -> expiry
-	sess  map[[32]byte]*storedSession
+	mu       sync.Mutex
+	codes    map[[32]byte]time.Time // code hash -> expiry
+	appCodes map[[32]byte]appCode   // code hash -> the app origin it signs in on
+	sess     map[[32]byte]*storedSession
+}
+
+// appCode is a one-time code that signs a browser in on one app or peer origin for the root
+// session that minted it (see appGate).
+type appCode struct {
+	origin  string
+	session [32]byte // the minting session's token hash
+	expires time.Time
 }
 
 func openBrowserAuth(p string) (*browserAuth, error) {
-	a := &browserAuth{path: p, codes: map[[32]byte]time.Time{}, sess: map[[32]byte]*storedSession{}}
+	a := &browserAuth{path: p, codes: map[[32]byte]time.Time{}, appCodes: map[[32]byte]appCode{},
+		sess: map[[32]byte]*storedSession{}}
 	b, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return a, nil
@@ -152,24 +171,24 @@ func (a *browserAuth) redeem(code, client string) (string, *BrowserSession, bool
 	if !ok || now.After(exp) {
 		return "", nil, false
 	}
-	return a.startLocked(client, now)
+	return a.startLocked(client, now, false)
 }
 
-// start begins a session without a code (same-OS-user auto-login).
+// start begins a session without a code (same-OS-user auto-login), bound to that user.
 func (a *browserAuth) start(client string) (string, *BrowserSession, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.startLocked(client, time.Now())
+	return a.startLocked(client, time.Now(), true)
 }
 
-func (a *browserAuth) startLocked(client string, now time.Time) (string, *BrowserSession, bool) {
+func (a *browserAuth) startLocked(client string, now time.Time, sameUser bool) (string, *BrowserSession, bool) {
 	tok := randomHex(32)
 	th := hash32(tok)
 	if len(client) > 120 {
 		client = client[:120]
 	}
 	s := &storedSession{BrowserSession: BrowserSession{ID: randomHex(8), Client: client, Created: now.UTC(),
-		LastUsed: now.UTC(), Expires: now.Add(SessionTTL).UTC()}, Hash: hex.EncodeToString(th[:])}
+		LastUsed: now.UTC(), Expires: now.Add(SessionTTL).UTC()}, Hash: hex.EncodeToString(th[:]), SameUser: sameUser}
 	a.sess[th] = s
 	if err := a.saveLocked(); err != nil {
 		delete(a.sess, th)
@@ -180,14 +199,15 @@ func (a *browserAuth) startLocked(client string, now time.Time) (string, *Browse
 }
 
 // check returns the live session a cookie value names, renewing it (renewed reports that the
-// expiry moved, so the cookie should be sent again).
-func (a *browserAuth) check(tok string) (BrowserSession, bool, bool) {
+// expiry moved, so the cookie should be sent again). sameUser(), asked only for a session
+// bound to the daemon's OS user, must confirm the request's connection is that user's.
+func (a *browserAuth) check(tok string, sameUser func() bool) (BrowserSession, bool, bool) {
 	h := hash32(tok)
 	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s, ok := a.sess[h]
-	if !ok {
+	if !ok || s.SameUser && !sameUser() {
 		return BrowserSession{}, false, false
 	}
 	if now.After(s.Expires) {
@@ -244,6 +264,71 @@ func (a *browserAuth) revoke(id string) bool {
 	return false
 }
 
+// appToken is the sol_app cookie value of a root session on an app origin: an HMAC of the
+// origin keyed by the session's token hash. It is bound to one origin (another app's or a
+// contact's page can't reuse it), it dies with the session (logout and revocation sign out
+// every app origin too), and it needs no state of its own, so it survives restarts.
+func appToken(session [32]byte, origin string) string {
+	m := hmac.New(sha256.New, session[:])
+	m.Write([]byte("sol app origin v1|" + origin))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// appCodeFor mints a one-time code for origin on behalf of the live root session tok. A
+// session bound to the daemon's OS user mints none (that user's browser is let in on app
+// origins without a code).
+func (a *browserAuth) appCodeFor(tok, origin string) (string, bool) {
+	th := hash32(tok)
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if s, ok := a.sess[th]; !ok || now.After(s.Expires) || s.SameUser {
+		return "", false
+	}
+	for h, c := range a.appCodes {
+		if now.After(c.expires) {
+			delete(a.appCodes, h)
+		}
+	}
+	c := randomHex(32)
+	a.appCodes[hash32(c)] = appCode{origin: origin, session: th, expires: now.Add(LoginCodeTTL)}
+	return c, true
+}
+
+// redeemApp burns an app code and returns the cookie value for origin, if the code was minted
+// for exactly this origin, is unexpired, and its session is still live.
+func (a *browserAuth) redeemApp(code, origin string) (string, bool) {
+	h := hash32(code)
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ok := a.appCodes[h]
+	delete(a.appCodes, h)
+	if !ok || now.After(c.expires) || c.origin != origin {
+		return "", false
+	}
+	if s, ok := a.sess[c.session]; !ok || now.After(s.Expires) || s.SameUser {
+		return "", false
+	}
+	return appToken(c.session, origin), true
+}
+
+// appLive reports whether cookie is the app token of a live session for origin.
+func (a *browserAuth) appLive(cookie, origin string) bool {
+	if len(cookie) != 64 {
+		return false
+	}
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for h, s := range a.sess {
+		if now.Before(s.Expires) && !s.SameUser && hmac.Equal([]byte(appToken(h, origin)), []byte(cookie)) {
+			return true
+		}
+	}
+	return false
+}
+
 // browserKey marks an admin request that came from a browser session; its value is the
 // session ID.
 type browserKey struct{}
@@ -290,30 +375,7 @@ var loginFailed = template.Must(template.New("login").Parse(`<!doctype html>
 // cross-site navigation cannot trigger it. It looks the owner up on every call and caches
 // nothing. On success the session cookie is set on w and the session ID returned.
 func (d *Daemon) autoLogin(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if !sameUIOrigin(r) {
-		return "", false
-	}
-	remote, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return "", false
-	}
-	la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-	if la == nil {
-		return "", false
-	}
-	local, err := netip.ParseAddrPort(la.String())
-	if err != nil {
-		return "", false
-	}
-	same := d.opt.SameUser
-	if same == nil {
-		same = defaultSameUser
-	}
-	ok, err := same(remote, local)
-	if err != nil || !ok {
-		if err != nil && !errors.Is(err, ErrSameUserUnsupported) {
-			d.log.Debug("same-user check failed", "err", err)
-		}
+	if !sameUIOrigin(r) || !d.sameUser(r) {
 		return "", false
 	}
 	tok, s, ok := d.browser.start(r.UserAgent())
@@ -323,6 +385,119 @@ func (d *Daemon) autoLogin(w http.ResponseWriter, r *http.Request) (string, bool
 	setSessionCookie(w, tok, int(SessionTTL/time.Second))
 	d.activity("sol.login", map[string]string{"session": s.ID, "how": "same-user"}, nil)
 	return s.ID, true
+}
+
+// sameUser reports whether the TCP connection r arrived on belongs to the daemon's own OS user
+// (peercred.go). It looks the owner up on every call and caches nothing.
+func (d *Daemon) sameUser(r *http.Request) bool {
+	remote, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	la, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if la == nil {
+		return false
+	}
+	local, err := netip.ParseAddrPort(la.String())
+	if err != nil {
+		return false
+	}
+	same := d.opt.SameUser
+	if same == nil {
+		same = defaultSameUser
+	}
+	ok, err := same(remote, local)
+	if err != nil && !errors.Is(err, ErrSameUserUnsupported) {
+		d.log.Debug("same-user check failed", "err", err)
+	}
+	return err == nil && ok
+}
+
+// AppCookie signs a browser in on one app or peer origin (appGate).
+const AppCookie = "sol_app"
+
+// appHostRE matches the part of an app or peer origin's host before ".localhost".
+var appHostRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}(\.[a-z0-9][a-z0-9-]{0,62})?$`)
+
+// safeNext returns p if it is a path on the same origin ("/..." but not "//..." or "/\..."),
+// else "/".
+func safeNext(p string) string {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\\r\n") {
+		return "/"
+	}
+	return p
+}
+
+// appGate guards every app and peer origin (apphost.Config.Gate; design/ADMIN.md "Who may use
+// it"). Apps trust Sol-Self: 1 on whatever reaches them, and loopback is reachable by other OS
+// users and other Android apps, so nothing on an app origin is served to a browser that isn't
+// signed in there. A browser is signed in when the connection belongs to the daemon's own OS
+// user (looked up per request), or when it holds the sol_app cookie of that origin, which it
+// gets by a one-time code from the UI root's live session: an unsigned page load is sent to
+// /_sol/open on the root, which mints the code and sends the browser back to
+// /_sol/login?code= here. The CSRF rule (apphost.FetchAllowed) has already run.
+func (d *Daemon) appGate(w http.ResponseWriter, r *http.Request, origin string) bool {
+	if r.URL.Path == "/_sol/login" {
+		w.Header().Set("Cache-Control", "no-store")
+		v, ok := d.browser.redeemApp(r.URL.Query().Get("code"), origin)
+		if !ok {
+			d.log.Info("refused an app login code (unknown, used, expired or for another origin)")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_ = loginFailed.Execute(w, nil)
+			return false
+		}
+		http.SetCookie(w, &http.Cookie{Name: AppCookie, Value: v, Path: "/", MaxAge: int(SessionTTL / time.Second),
+			HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
+		return false
+	}
+	if c, err := r.Cookie(AppCookie); err == nil && d.browser.appLive(c.Value, origin) {
+		return true
+	}
+	if d.sameUser(r) {
+		return true
+	}
+	if m := r.Header.Get("Sec-Fetch-Mode"); (r.Method == http.MethodGet || r.Method == http.MethodHead) && (m == "" || m == "navigate") {
+		host := strings.TrimSuffix(strings.TrimPrefix(origin, "http://"), ":"+strconv.Itoa(d.UIPort()))
+		sub := strings.TrimSuffix(host, ".localhost")
+		q := url.Values{"to": {sub}, "next": {r.URL.RequestURI()}}
+		http.Redirect(w, r, "http://localhost:"+strconv.Itoa(d.UIPort())+"/_sol/open?"+q.Encode(), http.StatusSeeOther)
+		return false
+	}
+	sol.WriteError(w, sol.Errorf("unauthorized", "This browser isn't signed in to Sol here. Open the app from Sol."))
+	return false
+}
+
+// openApp serves GET /_sol/open?to=<sub>&next=<path> on the UI root: with a live session it
+// mints a one-time code for http://<sub>.localhost:<port> and sends the browser there (appGate
+// redeems it); without one, to the Sol app, which shows how to sign in. Only a top-level
+// navigation may use it, so no page can collect codes with fetch.
+func (d *Daemon) openApp(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
+		sol.WriteError(w, sol.Errorf("forbidden", "only a page load may open an app"))
+		return
+	}
+	sub := r.URL.Query().Get("to")
+	if !appHostRE.MatchString(sub) {
+		sol.WriteError(w, sol.Errorf("bad_request", "bad app"))
+		return
+	}
+	port := strconv.Itoa(d.UIPort())
+	origin := "http://" + sub + ".localhost:" + port
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	code, ok := d.browser.appCodeFor(c.Value, origin)
+	if !ok {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	q := url.Values{"code": {code}, "next": {safeNext(r.URL.Query().Get("next"))}}
+	http.Redirect(w, r, origin+"/_sol/login?"+q.Encode(), http.StatusSeeOther)
 }
 
 // hasSession reports whether the request carries a live session cookie (without renewing).
@@ -370,6 +545,7 @@ func (d *Daemon) rootHandler() http.Handler {
 			_ = fsutil.WriteFileAtomic(filepath.Join(d.dir, "selftest.json"), b, 0o600)
 		})
 	}
+	mx.HandleFunc("GET /_sol/open", d.openApp)
 	mx.HandleFunc("/admin/", d.browserAdmin)
 	files := http.FileServerFS(home.FS)
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -416,7 +592,7 @@ func (d *Daemon) browserAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	id := ""
 	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
-		if s, ok, renewed := d.browser.check(c.Value); ok {
+		if s, ok, renewed := d.browser.check(c.Value, func() bool { return d.sameUser(r) }); ok {
 			id = s.ID
 			if renewed {
 				setSessionCookie(w, c.Value, int(SessionTTL/time.Second))

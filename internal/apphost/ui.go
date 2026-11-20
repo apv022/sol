@@ -58,13 +58,22 @@ func (h *Host) UI(port int) http.Handler {
 			return
 		}
 		id, peer, _ := strings.Cut(sub, ".")
+		origin := "http://" + host + ":" + ps
+		SecurityHeaders(w.Header())
+		if !FetchAllowed(r, origin) {
+			h.log.Info("refused a cross-site request to an app origin", "host", host, "method", r.Method)
+			sol.WriteError(w, sol.Errorf("forbidden", "cross-site request"))
+			return
+		}
+		if h.cfg.Gate != nil && !h.cfg.Gate(w, r, origin) {
+			return
+		}
 		if peer != "" {
-			SecurityHeaders(w.Header())
 			if h.cfg.Peer == nil || strings.Contains(peer, ".") {
 				sol.WriteError(w, sol.Errorf("not_implemented", "opening a peer's app is not available here"))
 				return
 			}
-			h.cfg.Peer(w, r, id, peer, "http://"+host+":"+ps)
+			h.cfg.Peer(w, r, id, peer, origin)
 			return
 		}
 		h.mu.Lock()
@@ -74,8 +83,7 @@ func (h *Host) UI(port int) http.Handler {
 			http.Error(w, "no such app", http.StatusNotFound)
 			return
 		}
-		SecurityHeaders(w.Header())
-		h.serveApp(w, r, a, "http://"+id+".localhost:"+ps)
+		h.serveApp(w, r, a, origin)
 	})
 }
 
@@ -117,6 +125,27 @@ func (h *Host) serveApp(w http.ResponseWriter, r *http.Request, a *app, origin s
 	default:
 		h.proxy(w, r, a)
 	}
+}
+
+// FetchAllowed is the CSRF check of every app and peer origin, in front of whatever the app
+// serves: a request that changes something (any method but GET and HEAD) must come from the
+// origin itself (sameOrigin), and a GET or HEAD from another site (Sec-Fetch-Site same-site or
+// cross-site, which includes every other *.localhost origin) must be a top-level navigation,
+// so opening an app from a link works but no other page can drive it or embed its responses.
+// The apps behind it see Sol-Self: 1 and trust it; this is what makes that safe against a
+// page open in the same browser (another app, a contact's page, any website).
+func FetchAllowed(r *http.Request, origin string) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return sameOrigin(r, origin)
+	}
+	if o := r.Header.Get("Origin"); o != "" && o != origin {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+		return true
+	}
+	return r.Header.Get("Sec-Fetch-Mode") == "navigate"
 }
 
 // sameOrigin is the bridge's CSRF check.

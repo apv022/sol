@@ -17,13 +17,19 @@ import (
 
 func testDaemon(t *testing.T) *Daemon {
 	t.Helper()
+	return testDaemonAs(t, func(_, _ netip.AddrPort) (bool, error) { return false, nil }) // login-code tests need a signed-out browser
+}
+
+// testDaemonAs is testDaemon with same decided by same (the browser's OS user).
+func testDaemonAs(t *testing.T, same SameUserFunc) *Daemon {
+	t.Helper()
 	dir := t.TempDir()
 	cfg := Config{UI: "127.0.0.1:0", Files: filepath.Join(dir, "files"), Transports: []TransportConfig{{Name: "clearnet", Listen: "127.0.0.1:0"}}}
 	if err := Init(dir, InitOptions{Name: "A", Device: "d", Config: cfg}); err != nil {
 		t.Fatal(err)
 	}
 	d, err := Start(Options{Dir: dir, InProcessApps: true, APIOverTCP: true, Log: slog.New(slog.DiscardHandler),
-		SameUser: func(_, _ netip.AddrPort) (bool, error) { return false, nil }}) // login-code tests need a signed-out browser
+		SameUser: same})
 	if err != nil {
 		t.Fatal(err)
 	}

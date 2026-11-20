@@ -35,9 +35,9 @@
 //
 //   - Permissions are checked by the callee, on every pass: my own devices
 //     get every feed I store; a contact gets only my feeds I share with
-//     them, plus my feed named like one they write-shared with me (the
-//     co-author pull). Unsharing ends the feed in live streams at once
-//     (an unreadable message, no more entries).
+//     them (a co-author feed is one my app shared back; a contact's
+//     announced write share alone grants nothing). Unsharing ends the feed
+//     in live streams at once (an unreadable message, no more entries).
 //   - The caller accepts from a contact only entries of that contact's
 //     feeds announced readable in the same stream, and only after the store's
 //     full verification.
@@ -45,8 +45,8 @@
 //     and is only woken by the bus (which drops instead of blocking), so a
 //     slow peer only slows its own stream.
 //   - What a contact announces as readable is recorded as "incoming"
-//     shares (feeds.Shares.SetIncoming), which is how my daemon learns that
-//     a contact write-shared a feed and so may pull my same-named one.
+//     shares (feeds.Shares.SetIncoming): what they share with me, never
+//     what I share with them.
 package replicate
 
 import (

@@ -210,7 +210,9 @@ func (c *Client) invoke(req sol.ActionCall, approved bool) (sol.ActionResult, er
 		}
 		spec = s
 	}
-	if !approved && !req.DryRun && (spec.Approval == sol.ApprovalAlways || (spec.Approval == sol.ApprovalAgents && c.agent != "")) {
+	// Another app's action that changes something needs the person's approval (API.md §6).
+	crossApp := target == c.person && c.app != "" && app != c.app && spec.Effect != sol.EffectRead
+	if !approved && !req.DryRun && (crossApp || spec.Approval == sol.ApprovalAlways || (spec.Approval == sol.ApprovalAgents && c.agent != "")) {
 		r := c.postLocked(c.person, "approval", "Approve "+req.Action+"?", "", &sol.ActionCall{Action: req.Action, Args: req.Args, Person: req.Person})
 		n.mu.Unlock()
 		return sol.ActionResult{Approval: r.ID}, nil

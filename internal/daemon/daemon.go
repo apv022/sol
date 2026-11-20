@@ -408,7 +408,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if d.Host, err = apphost.New(apphost.Config{AppsDir: filepath.Join(o.Dir, "apps"),
 		DataDir: filepath.Join(o.Dir, "appdata"), RunDir: filepath.Join(d.runDir, "apps"), Files: files,
 		API: d.apiURL, Tokens: d.API, Builtins: o.Builtins, InProcess: o.InProcessApps, Exe: o.Exe,
-		Bridge: d.API.Handler(), Me: d.me, Anchor: d.anchor, Root: d.rootHandler(), Peer: d.peerHost,
+		Bridge: d.API.Handler(), Me: d.me, Anchor: d.anchor, Root: d.rootHandler(), Peer: d.peerHost, Gate: d.appGate,
 		OnChange: d.appChanged, Log: d.log}); err != nil {
 		return nil, err
 	}

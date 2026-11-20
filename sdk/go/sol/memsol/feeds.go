@@ -14,20 +14,19 @@ type feedState struct {
 	last    map[string]sol.Entry
 }
 
-// readable reports whether reader may read the feed at addr: it owns it, it is shared with the
-// reader, or the reader share-wrote a same-named feed to the owner (co-author feed). n.mu held.
+// readable reports whether reader may read the feed at addr: it owns it, or its owner shared it
+// with the reader. A write share never makes the recipient's same-named feed readable by itself:
+// the recipient's app shares its co-author feed back (API.md §5). n.mu held.
 func (n *Network) readable(reader, addr string) bool {
-	owner, app, name, err := sol.ParseAddress(addr)
+	owner, _, _, err := sol.ParseAddress(addr)
 	if err != nil {
 		return false
 	}
 	if owner == reader {
 		return true
 	}
-	if _, ok := n.shares[addr][reader]; ok {
-		return true
-	}
-	return n.shares[sol.Address(reader, app, name)][owner] == sol.ModeWrite
+	_, ok := n.shares[addr][reader]
+	return ok
 }
 
 // Append implements sol.API.

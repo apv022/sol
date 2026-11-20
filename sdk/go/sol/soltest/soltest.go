@@ -409,24 +409,35 @@ func BlobPermissions(t *testing.T, w *World) {
 	}
 }
 
-// WriteShareCoAuthors: a write share makes the other person's same-named feed a co-author feed.
+// WriteShareCoAuthors: after a write share, the other person's same-named feed becomes a
+// co-author feed once their app shares it back; the write share alone grants nothing.
 func WriteShareCoAuthors(t *testing.T, w *World) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	_, _ = w.A.Append(ctx, "tree", "alice-1")
-	aliceEv, _ := w.A.Events(cctx, sol.EventOptions{})
 	if err := w.A.Share(ctx, sol.ShareRequest{Feed: "tree", People: []string{w.BobID}, Mode: "write"}); err != nil {
 		t.Fatal(err)
 	}
 	bobTree := sol.Address(w.BobID, "docs", "tree")
+	if _, err := w.B.Append(ctx, "tree", "bob-private"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // replication is pushed; give a leak time to show
+	if es, err := w.A.Read(ctx, bobTree, 0, 0); err == nil && len(es) > 0 {
+		t.Fatalf("a write share alone exposed the recipient's same-named feed: %+v", es)
+	}
+	aliceEv, _ := w.A.Events(cctx, sol.EventOptions{})
+	if err := w.B.Share(ctx, sol.ShareRequest{Feed: "tree", People: []string{w.AliceID}}); err != nil {
+		t.Fatal(err)
+	}
 	if fe := wait(t, aliceEv); fe.Type != sol.EventFeed || fe.Feed.Feed != bobTree || !fe.Feed.Readable {
 		t.Fatalf("co-author feed event: %+v", fe)
 	}
 	if _, err := w.B.Append(ctx, "tree", "bob-1"); err != nil {
 		t.Fatal(err)
 	}
-	got := readN(t, w.A, bobTree, 1)
-	if len(got) != 1 || string(got[0].Body) != `"bob-1"` {
+	got := readN(t, w.A, bobTree, 2)
+	if len(got) != 2 || string(got[1].Body) != `"bob-1"` {
 		t.Fatalf("%+v", got)
 	}
 	fs, _ := w.A.Feeds(ctx, w.BobID)

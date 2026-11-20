@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -66,13 +67,24 @@ func (s *Server) dialApp(ctx context.Context, appID, path string, who caller) (n
 	if a.Addr == "" {
 		return nil, sol.Errorf("unavailable", "app "+appID+" is not running")
 	}
+	// The path comes from an app or a peer: it must be a plain path, never the reserved /_sol/
+	// (where the app serves the daemon's calls), and a bad one must not reach NewRequest's nil
+	// result (security review F9: a contact could panic the handler).
+	u, err := url.ParseRequestURI(path)
+	if err != nil || !strings.HasPrefix(u.Path, "/") || u.Host != "" || u.Path == "/_sol" || strings.HasPrefix(u.Path, "/_sol/") {
+		return nil, sol.Errorf("bad_request", "bad stream path")
+	}
 	network, addr := dialer(a.Addr)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, sol.Errorf("unavailable", "app "+appID+" is not answering")
 	}
-	req, _ := http.NewRequest(http.MethodGet, "http://app"+path, nil)
+	req, err := http.NewRequest(http.MethodGet, "http://app"+u.RequestURI(), nil)
+	if err != nil {
+		conn.Close()
+		return nil, sol.Errorf("bad_request", "bad stream path")
+	}
 	who.set(req.Header)
 	return upgrade(conn, req)
 }

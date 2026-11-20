@@ -93,6 +93,9 @@ func tcpOwnerPID(client, server netip.AddrPort) (uint32, error) {
 	return 0, errTableNotFound
 }
 
+// mibTCPStateEstab is MIB_TCP_STATE_ESTAB.
+const mibTCPStateEstab = 5
+
 // scanTCPTable walks MIB_TCPTABLE_OWNER_PID (rows of 6 DWORDs) or MIB_TCP6TABLE_OWNER_PID
 // (rows of 56 bytes); ports are network byte order in the low 16 bits of a DWORD.
 func scanTCPTable(b []byte, v6 bool, client, server netip.AddrPort) (uint32, bool) {
@@ -109,21 +112,24 @@ func scanTCPTable(b []byte, v6 bool, client, server netip.AddrPort) (uint32, boo
 		r := 4 + i*rowLen
 		var la, ra netip.Addr
 		var lp, rp uint16
-		var pid uint32
+		var pid, state uint32
 		if v6 {
+			state = binary.LittleEndian.Uint32(b[r+48:])
 			la = netip.AddrFrom16([16]byte(b[r : r+16]))
 			lp = port(r + 20)
 			ra = netip.AddrFrom16([16]byte(b[r+24 : r+40]))
 			rp = port(r + 44)
 			pid = binary.LittleEndian.Uint32(b[r+52:])
 		} else {
+			state = binary.LittleEndian.Uint32(b[r:])
 			la = netip.AddrFrom4([4]byte(b[r+4 : r+8]))
 			lp = port(r + 8)
 			ra = netip.AddrFrom4([4]byte(b[r+12 : r+16]))
 			rp = port(r + 16)
 			pid = binary.LittleEndian.Uint32(b[r+20:])
 		}
-		if sameAddrPort(netip.AddrPortFrom(la, lp), client) && sameAddrPort(netip.AddrPortFrom(ra, rp), server) {
+		// Only a live connection names its owner (security review F5).
+		if state == mibTCPStateEstab && sameAddrPort(netip.AddrPortFrom(la, lp), client) && sameAddrPort(netip.AddrPortFrom(ra, rp), server) {
 			return pid, true
 		}
 	}
