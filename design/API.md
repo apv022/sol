@@ -185,6 +185,12 @@ and change nothing.
   `sol do --help files` (generated from the schemas).
 - **Agents:** use the same CLI with their agent key (`SOL_AGENT_KEY` or `--as-agent`); the daemon
   enforces the agent certificate's scopes, expiry and approvals. There is no separate agent protocol.
+  Under the CLI, an agent calls `GET /agent/v1/actions?app=`, `POST /agent/v1/actions/call`,
+  `GET /agent/v1/inbox` (its own approvals) and `GET /agent/v1/whoami` on the app API socket,
+  authenticated by its certificate and a per-request signature instead of a token
+  (`internal/daemon/agents.go` has the exact headers). Calls run with `Sol-Agent`; a call to a
+  peer carries it too, and the peer applies its own approval policy. `sol do` exits 0 done,
+  1 failed, 2 bad arguments, 3 waiting for approval (the inbox item id is printed).
 - **UI:** the app's own UI calls its actions through `sol.js` like any other client.
 
 The daemon writes every action that changes something to a signed activity log (who, which key,
@@ -209,11 +215,13 @@ on its socket at `path`, with caller headers.
 {"kind": "notice", "title": "Album added", "body": "…", "to": "self"}
 {"kind": "approval", "title": "Delete 3 files?", "action": {"action": "files.delete", "args": {…}}}
 ```
-`GET /v1/inbox` lists this app's items (and their answers) newest first.
+`GET /v1/inbox` lists this app's items newest first: `id, app, kind, title, body, from, time,
+answer, action, agent` and, once an approved action ran, its `result` (output) or `error`.
 
 Notices appear in the Sol app (and as an OS notification when `to` is `self` and the person allows
 it). An approval is answered by the person on any of their devices; on approval the daemon runs the
-stored action as the requesting app. Events of type `inbox` report the answer.
+stored action as the requesting principal (the app, and the agent when an agent's call needed
+it), records the result on the item, and then an `inbox` event reports the answer.
 
 ## 9. The manifest: `app.json`
 
@@ -264,7 +272,9 @@ origin is reserved: it is the bridge `sol.js` uses to call this API with the app
 after the daemon checks the `Host` and `Origin` headers.
 
 `/_sol/theme.css` on every app origin is the active theme (design/UI.md "Themes"); a
-`theme` event on the events stream tells open UIs to swap it live. `sol.js` and `kit.css` handle
+`theme` event on every app's events stream (no subscription flag needed), with data
+`{"name": "graphite", "settings": {"scheme": "auto", "accent": "", "density": "comfortable", ...}}`,
+tells open UIs to swap it live. `sol.js` and `kit.css` handle
 this, so apps do nothing.
 
 A peer's app is opened locally the same way: `http://<app>.<petname>.localhost:<port>/` is

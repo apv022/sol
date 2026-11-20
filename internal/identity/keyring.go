@@ -185,14 +185,22 @@ func Create(dir, personName, deviceName string, now time.Time) (*Keyring, error)
 // (it is floored at the current time, see nextSeq), and a new device list
 // holding only this device. Contacts accept it because R signed it.
 func Restore(dir string, words []string, personName, deviceName string, now time.Time) (*Keyring, error) {
+	return RestoreAbove(dir, words, personName, deviceName, 0, 0, now)
+}
+
+// RestoreAbove is Restore with floors: the new person certificate's seq is above pcSeq and the
+// new device list's above dlSeq. A restoring device passes the seqs of the newest bundle a
+// surviving device or a contact still holds (session.Recover), so contacts accept the restored
+// identity even when this device's clock is behind (IDENTITY.md, Implementation notes).
+func RestoreAbove(dir string, words []string, personName, deviceName string, pcSeq, dlSeq uint64, now time.Time) (*Keyring, error) {
 	entropy, err := WordsToEntropy(words)
 	if err != nil {
 		return nil, err
 	}
-	return create(dir, entropy, false, personName, deviceName, now)
+	return create(dir, entropy, false, personName, deviceName, now, pcSeq, dlSeq)
 }
 
-func create(dir string, entropy []byte, keepEntropy bool, personName, deviceName string, now time.Time) (*Keyring, error) {
+func create(dir string, entropy []byte, keepEntropy bool, personName, deviceName string, now time.Time, floors ...uint64) (*Keyring, error) {
 	if err := checkText(deviceName, "device name", MaxNameLen); err != nil {
 		return nil, err
 	}
@@ -209,7 +217,11 @@ func create(dir string, entropy []byte, keepEntropy bool, personName, deviceName
 		return nil, err
 	}
 	self := Device{Key: d.Public().(ed25519.PublicKey), Name: deviceName, Flags: FlagAdmin, Added: unix(now)}
-	p, pc, dl, err := newPerson(r, personName, []Device{self}, 0, 0, now)
+	var prevPC, prevDL uint64
+	if len(floors) == 2 {
+		prevPC, prevDL = floors[0], floors[1]
+	}
+	p, pc, dl, err := newPerson(r, personName, []Device{self}, prevPC, prevDL, now)
 	if err != nil {
 		return nil, err
 	}

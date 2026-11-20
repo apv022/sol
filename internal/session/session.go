@@ -413,7 +413,15 @@ func (m *Manager) RemoveDevice(device ed25519.PublicKey) (identity.DeviceList, e
 // answer runs the callee side of one inbound connection.
 func (m *Manager) answer(conn net.Conn) {
 	var peer Peer
+	var recovered []byte
 	decide := func(r *wire.Request) ([]byte, error) {
+		if r.Op == wire.OpRecover {
+			var err error
+			if recovered, err = m.recoverable(r.Person); err != nil {
+				return nil, err
+			}
+			return m.myBundle()
+		}
 		var err error
 		peer, err = m.decide(r)
 		if err != nil {
@@ -428,6 +436,13 @@ func (m *Manager) answer(conn net.Conn) {
 		} else {
 			m.log.Info("rejected a connection", "reason", err.Error())
 		}
+		return
+	}
+	if req.Op == wire.OpRecover {
+		conn.SetWriteDeadline(time.Now().Add(wire.HandshakeTimeout))
+		_, _ = conn.Write(recovered)
+		conn.Close()
+		m.log.Info("answered a recovery request", "person", short(req.Person))
 		return
 	}
 	s := m.start(conn, false, peer, req.Device)
@@ -471,9 +486,13 @@ func (m *Manager) decide(r *wire.Request) (Peer, error) {
 		if !m.kr.IsAdmin() {
 			return Peer{}, identity.ErrNotAdmin
 		}
-		// The v2 Request has no field for the new device's name, so it
-		// gets a placeholder until it is renamed.
-		if _, err := m.kr.AddDevice(r.Device, "device "+short(r.Device), 0, time.Now()); err != nil {
+		// The joining device names itself (Request.name, covered by T);
+		// an old or nameless joiner gets a placeholder until renamed.
+		name := r.Name
+		if name == "" {
+			name = "device " + short(r.Device)
+		}
+		if _, err := m.kr.AddDevice(r.Device, name, 0, time.Now()); err != nil {
 			return Peer{}, err
 		}
 		m.NoteEndpoints(r.Endpoints)
@@ -773,6 +792,11 @@ func (m *Manager) transportFor(ep identity.Endpoint) transport.Transport {
 // first connection that opens. The callee must be rec.Device and speak for
 // wantPerson.
 func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, op string, secret []byte, wantPerson ed25519.PublicKey) (net.Conn, *wire.Result, error) {
+	return m.dialNamed(ctx, rec, op, secret, wantPerson, "")
+}
+
+// dialNamed is dial with the joining device's name (join only).
+func (m *Manager) dialNamed(ctx context.Context, rec identity.EndpointRecord, op string, secret []byte, wantPerson ed25519.PublicKey, name string) (net.Conn, *wire.Result, error) {
 	var bundle []byte
 	var err error
 	if op == wire.OpJoin {
@@ -798,7 +822,7 @@ func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, op stri
 			continue
 		}
 		stop := context.AfterFunc(ctx, func() { conn.Close() })
-		res, err := wire.Dial(conn, m.kr, wire.Call{Op: op, Want: rec.Device, Bundle: bundle, Secret: secret})
+		res, err := wire.Dial(conn, m.kr, wire.Call{Op: op, Want: rec.Device, Bundle: bundle, Secret: secret, Name: name})
 		stop()
 		if err != nil {
 			if errors.Is(err, wire.ErrWrongDevice) || errors.Is(err, wire.ErrTruncated) {
@@ -857,16 +881,16 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 }
 
 // Join redeems a sol://join link on a device that has no person yet: the
-// admin device adds it to the device list and sends the list back, which
-// this device adopts.
-func (m *Manager) Join(ctx context.Context, l pairing.Link) (*Session, error) {
+// admin device adds it to the device list under name and sends the list
+// back, which this device adopts.
+func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Session, error) {
 	if l.Kind != pairing.KindJoin {
 		return nil, errors.New("session: not a join link")
 	}
 	if m.kr.Person() != nil {
 		return nil, errors.New("session: this device already belongs to a person")
 	}
-	conn, res, err := m.dial(ctx, l.Endpoints, wire.OpJoin, l.Secret, l.Person)
+	conn, res, err := m.dialNamed(ctx, l.Endpoints, wire.OpJoin, l.Secret, l.Person, name)
 	if err != nil {
 		return nil, err
 	}

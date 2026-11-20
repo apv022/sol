@@ -3,6 +3,8 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,16 +154,156 @@ func (d *Daemon) adminHandler() http.Handler {
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		return d.API.Answer(r.Context(), b.ID, b.Approve)
+		if it, ok := d.API.InboxItem(b.ID); ok && it.Answer != "" {
+			return nil, sol.Errorf("conflict", "already "+it.Answer)
+		}
+		_, err := d.API.Answer(r.Context(), b.ID, b.Approve)
+		// Once answered, the item records what the action did (or how it failed).
+		if it, ok := d.API.InboxItem(b.ID); ok && it.Answer != "" {
+			return it, nil
+		}
+		return nil, err
+	})
+	j("GET /admin/v1/actions", func(r *http.Request) (any, error) {
+		return d.actionApps(r.URL.Query().Get("app"), nil), nil
+	})
+	mx.HandleFunc("POST /admin/v1/actions/call", func(w http.ResponseWriter, r *http.Request) {
+		var c sol.ActionCall
+		if err := body(r, &c); err != nil {
+			sol.WriteError(w, sol.Errorf("bad_request", "bad JSON"))
+			return
+		}
+		out, err := d.API.CallAs(r.Context(), "", c)
+		if err != nil {
+			sol.WriteError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	})
+	j("GET /admin/v1/agents", func(r *http.Request) (any, error) { return d.agents.all(), nil })
+	j("POST /admin/v1/agents", func(r *http.Request) (any, error) {
+		var b struct {
+			Name   string   `json:"name"`
+			Key    string   `json:"key"` // the agent's public key, as an ID
+			Scopes []string `json:"scopes"`
+			Days   int      `json:"days"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		pub, err := identity.ParseID(b.Key)
+		if err != nil {
+			return nil, sol.Errorf("bad_request", "bad agent key")
+		}
+		return d.IssueAgent(b.Name, pub, b.Scopes, time.Duration(b.Days)*24*time.Hour)
+	})
+	j("POST /admin/v1/agents/renew", func(r *http.Request) (any, error) {
+		var b struct {
+			Name string `json:"name"`
+			Days int    `json:"days"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.RenewAgent(b.Name, time.Duration(b.Days)*24*time.Hour)
+	})
+	j("POST /admin/v1/agents/revoke", func(r *http.Request) (any, error) {
+		var b struct {
+			Name string `json:"name"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		id, err := d.RevokeAgent(b.Name)
+		return map[string]string{"id": id}, err
+	})
+	j("GET /admin/v1/themes", func(r *http.Request) (any, error) { return d.Themes(), nil })
+	j("POST /admin/v1/theme", func(r *http.Request) (any, error) {
+		var b struct {
+			Name string `json:"name"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return nil, d.SetTheme(b.Name)
+	})
+	j("POST /admin/v1/theme/settings", func(r *http.Request) (any, error) {
+		var b map[string]string
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.UpdateThemeSettings(b)
+	})
+	j("GET /admin/v1/backup/words", func(r *http.Request) (any, error) {
+		w, err := d.BackupWords()
+		return map[string][]string{"words": w}, err
+	})
+	j("POST /admin/v1/backup/confirm", func(r *http.Request) (any, error) { return nil, d.ConfirmBackup() })
+	j("POST /admin/v1/network-changed", func(r *http.Request) (any, error) {
+		var b struct {
+			Reason string `json:"reason"`
+		}
+		_ = body(r, &b)
+		d.NetworkChanged(b.Reason)
+		return nil, nil
 	})
 	return mx
 }
 
-// Client is the CLI's connection to a running daemon's admin API.
+// NetworkChanged tells the daemon the network changed (an OS callback, `sol network-changed`):
+// every kept peer is redialed now instead of after its backoff.
+func (d *Daemon) NetworkChanged(reason string) {
+	if len(reason) > 64 {
+		reason = reason[:64]
+	}
+	d.log.Info("network changed; redialing", "reason", reason)
+	d.Sessions.NetworkChanged()
+}
+
+// Client is the CLI's connection to a running daemon: its admin API (Connect), or its agent
+// API as one agent key (ConnectAgent).
 type Client struct {
 	base  string
 	token string
 	hc    *http.Client
+
+	agent     *AgentKey // set for an agent client
+	agentPath string    // its key file, rewritten when the daemon renews the certificate
+}
+
+// Prefix is where this client's endpoints live: "/admin/v1" or "/agent/v1".
+func (c *Client) Prefix() string {
+	if c.agent != nil {
+		return "/agent/v1"
+	}
+	return "/admin/v1"
+}
+
+// IsAgent reports whether the client calls as an agent key.
+func (c *Client) IsAgent() bool { return c.agent != nil }
+
+// ConnectAgent reaches the daemon running on dir as the agent whose key file is keyPath. It
+// does not read the admin token. SOL_API, when set, overrides dir's api.url.
+func ConnectAgent(dir, keyPath string) (*Client, error) {
+	k, err := LoadAgentKey(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	api := os.Getenv("SOL_API")
+	if api == "" {
+		u, err := os.ReadFile(filepath.Join(dir, "api.url"))
+		if err != nil {
+			return nil, ErrNotRunning
+		}
+		api = string(u)
+	}
+	c, err := dialAPI(strings.TrimSpace(api))
+	if err != nil {
+		return nil, err
+	}
+	c.agent, c.agentPath = &k, keyPath
+	return c, nil
 }
 
 // ErrNotRunning means no daemon answers for the data directory.
@@ -177,8 +319,17 @@ func Connect(dir string) (*Client, error) {
 	if err != nil {
 		return nil, ErrNotRunning
 	}
-	api := strings.TrimSpace(string(u))
-	c := &Client{token: strings.TrimSpace(string(tok))}
+	c, err := dialAPI(strings.TrimSpace(string(u)))
+	if err != nil {
+		return nil, err
+	}
+	c.token = strings.TrimSpace(string(tok))
+	return c, nil
+}
+
+// dialAPI returns a client for an API address in SOL_API form.
+func dialAPI(api string) (*Client, error) {
+	c := &Client{}
 	network, addr := "tcp", ""
 	if p, ok := strings.CutPrefix(api, "unix://"); ok {
 		network, addr, c.base = "unix", p, "http://sol"
@@ -194,24 +345,46 @@ func Connect(dir string) (*Client, error) {
 	return c, nil
 }
 
+// renewed stores a certificate the daemon renewed in the agent's key file.
+func (c *Client) renewed(b64 string) {
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return
+	}
+	nc, err := identity.ParseAgentCert(raw)
+	if err != nil || !bytes.Equal(nc.Agent, c.agent.private().Public().(ed25519.PublicKey)) {
+		return
+	}
+	c.agent.Cert = raw
+	if c.agentPath != "" {
+		_ = c.agent.Save(c.agentPath)
+	}
+}
+
 // Do calls an admin endpoint with a JSON body (nil for GET) and decodes the reply into out.
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
-	var rd io.Reader
+	var body []byte
 	if in != nil {
-		b, _ := json.Marshal(in)
-		rd = bytes.NewReader(b)
+		body, _ = json.Marshal(in)
 	}
-	r, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
+	r, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	r.Header.Set("Authorization", "Bearer "+c.token)
 	r.Header.Set("Content-Type", "application/json")
+	if c.agent != nil {
+		c.agent.sign(r, body, time.Now())
+	} else {
+		r.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.hc.Do(r)
 	if err != nil {
 		return ErrNotRunning
 	}
 	defer resp.Body.Close()
+	if n := resp.Header.Get("Sol-Agent-Renewed"); n != "" && c.agent != nil {
+		c.renewed(n)
+	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode/100 != 2 {
 		var w struct {

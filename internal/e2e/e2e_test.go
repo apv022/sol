@@ -264,7 +264,7 @@ func TestTwoPeopleThreeDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a2.m.Join(ctx, link); err != nil {
+	if _, err := a2.m.Join(ctx, link, "phone"); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(ka2.Person(), ka1.Person()) {

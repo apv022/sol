@@ -1,0 +1,15 @@
+[
+ {"id": "files", "name": "Files", "description": "Your files on all your devices,\n shared with people you choose.",
+  "actions": [
+   {"name": "files.list", "description": "List a folder.", "input": {"type": "object", "properties": {"path": {"type": "string"}}}, "effect": "read"},
+   {"name": "files.delete", "description": "Delete files or folders from all devices.",
+    "input": {"type": "object", "required": ["paths"], "properties": {"paths": {"type": "array", "items": {"type": "string"}}}},
+    "effect": "destructive", "approval": "agents"},
+   {"name": "files.share", "description": "Share a folder with people.",
+    "input": {"type": "object", "required": ["path", "people"], "properties": {"path": {"type": "string"}, "people": {"type": "array", "items": {"type": "string"}}, "mode": {"type": "string", "enum": ["read", "write"]}}}, "effect": "write"},
+   {"name": "files.keep", "description": "Keep a folder on this device.",
+    "input": {"type": "object", "required": ["path", "keep"], "properties": {"path": {"type": "string"}, "keep": {"type": "boolean"}, "limit": {"type": "integer"}, "ratio": {"type": "number"}, "meta": {"type": "object"}}}, "effect": "write"}
+  ]},
+ {"id": "notes", "name": "Notes", "description": "Notes.", "actions": [
+   {"name": "notes.read", "effect": "read"}]}
+]

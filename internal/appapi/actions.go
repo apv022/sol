@@ -115,9 +115,43 @@ func (s *Server) Call(ctx context.Context, requester string, c sol.ActionCall) (
 		return nil, err
 	}
 	if me, _ := s.me(); c.Person != "" && c.Person != me {
-		return s.callRemote(ctx, c)
+		return s.callRemote(ctx, c, "")
 	}
 	return s.run(ctx, requester, c, s.localCaller(), false)
+}
+
+// CallAs runs an action for the CLI: as me, or with agent (an agent key's ID) as that agent,
+// whose calls are subject to the actions' "agents" approval policy on the device that runs
+// them. Approvals are filed under the action's own app. The agent's scopes are the caller's to
+// check.
+func (s *Server) CallAs(ctx context.Context, agent string, c sol.ActionCall) (json.RawMessage, error) {
+	app, _, err := splitAction(c.Action)
+	if err != nil {
+		return nil, err
+	}
+	if me, _ := s.me(); c.Person != "" && c.Person != me {
+		// The target device applies its own approval policy to the agent (Sol-Agent).
+		return s.callRemote(ctx, c, agent)
+	}
+	who := s.localCaller()
+	who.agent = agent
+	return s.run(ctx, app, c, who, false)
+}
+
+// needsApproval applies an action's approval policy to a caller (agent "" is a person).
+func needsApproval(spec sol.ActionSpec, agent string) bool {
+	return spec.Approval == sol.ApprovalAlways || spec.Approval == sol.ApprovalAgents && agent != ""
+}
+
+// fileApproval posts an approval item for a call and returns {"approval": id}.
+func (s *Server) fileApproval(requester string, c sol.ActionCall, agent string) (json.RawMessage, error) {
+	id, err := s.inbox.post(item{App: requester, Kind: "approval", Title: "Approve " + c.Action + "?",
+		Action: &sol.ActionCall{Action: c.Action, Args: c.Args, Person: c.Person}, Agent: agent})
+	if err != nil {
+		return nil, err
+	}
+	s.inboxEvent(requester, id)
+	return json.Marshal(map[string]string{"approval": id})
 }
 
 func splitAction(name string) (app, verb string, err error) {
@@ -143,14 +177,8 @@ func (s *Server) run(ctx context.Context, requester string, c sol.ActionCall, wh
 	if !ok {
 		return nil, sol.Errorf("not_found", "no such action "+c.Action)
 	}
-	if !approved && !c.DryRun && (spec.Approval == sol.ApprovalAlways || spec.Approval == sol.ApprovalAgents && who.agent != "") {
-		id, err := s.inbox.post(item{App: requester, Kind: "approval", Title: "Approve " + c.Action + "?",
-			Action: &sol.ActionCall{Action: c.Action, Args: c.Args}, Agent: who.agent})
-		if err != nil {
-			return nil, err
-		}
-		s.inboxEvent(requester, id)
-		return json.Marshal(map[string]string{"approval": id})
+	if !approved && !c.DryRun && needsApproval(spec, who.agent) {
+		return s.fileApproval(requester, sol.ActionCall{Action: c.Action, Args: c.Args}, who.agent)
 	}
 	if a.Addr == "" {
 		return nil, sol.Errorf("unavailable", "app "+appID+" is not running")
@@ -297,8 +325,9 @@ func (s *Server) sessionTo(person, device string) (*session.Session, error) {
 	return nil, sol.Errorf("unavailable", "person is offline")
 }
 
-// callRemote sends an action call to a contact's device: POST /p/actions/{name}.
-func (s *Server) callRemote(ctx context.Context, c sol.ActionCall) (json.RawMessage, error) {
+// callRemote sends an action call to a contact's device: POST /p/actions/{name}. agent, if
+// set, travels as Sol-Agent so the peer applies its "agents" approval policy too.
+func (s *Server) callRemote(ctx context.Context, c sol.ActionCall, agent string) (json.RawMessage, error) {
 	ss, err := s.sessionTo(c.Person, "")
 	if err != nil {
 		return nil, err
@@ -314,6 +343,9 @@ func (s *Server) callRemote(ctx context.Context, c sol.ActionCall) (json.RawMess
 	hr.Header.Set("Content-Type", "application/json")
 	if c.DryRun {
 		hr.Header.Set("Sol-Dry-Run", "1")
+	}
+	if agent != "" {
+		hr.Header.Set("Sol-Agent", agent)
 	}
 	resp, err := ss.HTTPClient().Do(hr)
 	if err != nil {
@@ -345,6 +377,15 @@ func (s *Server) peerAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := peerCaller(p)
+	// A peer may say the call comes from one of its person's agents. That only ever adds
+	// restrictions (the "agents" approval policy), so it is taken as given.
+	if ag := r.Header.Get("Sol-Agent"); ag != "" {
+		if _, err := identity.ParseID(ag); err != nil {
+			sol.WriteError(w, sol.Errorf("bad_request", "bad Sol-Agent"))
+			return
+		}
+		who.agent = ag
+	}
 	if !who.self {
 		a, ok := s.cfg.Apps.App(appID)
 		if !ok {

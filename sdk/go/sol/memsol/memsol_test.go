@@ -31,6 +31,7 @@ func factory(mode string) soltest.Factory {
 		w := &soltest.World{AliceID: alice.ID, BobID: bob.ID, CarolID: carol.ID, SDKHashes: true,
 			SetOnline: func(id string, on bool) { n.Person(id).SetOnline(on) },
 			Pinned:    func(id, h string) bool { return n.Person(id).Pinned(h) },
+			Answer:    func(id, item string, ok bool) error { return n.Person(id).Answer(item, ok) },
 			InboxKinds: func(id string) []string {
 				var out []string
 				for _, it := range n.Person(id).Inbox() {

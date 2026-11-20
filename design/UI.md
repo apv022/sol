@@ -150,8 +150,9 @@ tokens and kit components, so a theme restyles every app at once, including thir
 your theme follows you to every device, and you can share a theme with a friend by sharing the
 folder or sending the file.
 
-**How it reaches apps:** the daemon serves the active theme at `/_sol/theme.css` on every app
-origin; `kit.css` loads it last. Changing the theme (or editing the file) pushes an event and every
+**How it reaches apps:** the active theme's name is `SolDrive/.sol/theme`, the settings are
+`SolDrive/.sol/theme-settings.json` (`sol theme set`, `sol theme settings`). The daemon serves
+the active theme at `/_sol/theme.css` on every app origin; `kit.css` loads it last. Changing the theme (or editing the file) pushes an event and every
 open app swaps the stylesheet live, with no reload.
 
 **Agent first, like everything:** `sol do theme.list`, `theme.set`, `theme.preview`,

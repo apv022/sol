@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apv022/sol/sdk/go/sol"
 )
@@ -23,6 +25,10 @@ type InboxItem struct {
 	Title    string
 	Body     string
 	Answer   string // "", "approved" or "denied"
+	Agent    string // the agent whose call needed approval
+	Time     time.Time
+	Result   json.RawMessage // the approved action's output
+	Err      *sol.Error      // or its failure
 	action   *sol.ActionCall
 	requests *Client
 }
@@ -39,7 +45,8 @@ func (p *Person) Inbox() []InboxItem {
 }
 
 // Answer approves or denies an approval item. On approval the stored action runs as the
-// requesting app, and an "inbox" event reports the answer.
+// requesting app (and agent) and its result is recorded on the item; then an "inbox" event
+// reports the answer.
 func (p *Person) Answer(id string, approve bool) error {
 	n := p.n
 	n.mu.Lock()
@@ -57,14 +64,49 @@ func (p *Person) Answer(id string, approve bool) error {
 	if approve {
 		it.Answer = "approved"
 	}
+	n.mu.Unlock()
+	var err error
+	if approve && it.action != nil {
+		var res sol.ActionResult
+		res, err = it.requests.invoke(*it.action, true)
+		n.mu.Lock()
+		it.Result = res.Output
+		if err != nil {
+			var se *sol.Error
+			if !errors.As(err, &se) {
+				se = sol.Errorf("internal", err.Error())
+			}
+			it.Err = se
+		}
+		n.mu.Unlock()
+	}
+	n.mu.Lock()
 	n.append(logged{kind: sol.EventInbox, app: it.App, target: p.ID,
 		inbox: &sol.InboxEvent{ID: it.ID, Kind: it.Kind, Title: it.Title, Answer: it.Answer}})
 	n.mu.Unlock()
-	if approve && it.action != nil {
-		_, err := it.requests.invoke(*it.action, true)
-		return err
+	return err
+}
+
+// Inbox implements sol.API: this app's items of the client's person, newest first.
+func (c *Client) Inbox(context.Context) ([]sol.InboxItem, error) {
+	n := c.n
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := []sol.InboxItem{}
+	for i := len(c.person.inbox) - 1; i >= 0; i-- {
+		it := c.person.inbox[i]
+		if it.App != c.app {
+			continue
+		}
+		var act *sol.ActionCall
+		if it.action != nil {
+			a := *it.action
+			act = &a
+		}
+		out = append(out, sol.InboxItem{ID: it.ID, App: it.App, Kind: it.Kind, Title: it.Title, Body: it.Body,
+			Time: it.Time, Answer: it.Answer, Action: act, Agent: it.Agent, Result: it.Result, Error: it.Err})
 	}
-	return nil
+	return out, nil
 }
 
 // PostInbox implements sol.API.
@@ -94,7 +136,8 @@ func (c *Client) PostInbox(_ context.Context, post sol.InboxPost) (sol.InboxResu
 func (c *Client) postLocked(to *Person, kind, title, body string, act *sol.ActionCall) sol.InboxResult {
 	n := c.n
 	n.nextIn++
-	it := &InboxItem{ID: "in" + strconv.Itoa(n.nextIn), App: c.app, Kind: kind, Title: title, Body: body, action: act, requests: c}
+	it := &InboxItem{ID: "in" + strconv.Itoa(n.nextIn), App: c.app, Kind: kind, Title: title, Body: body,
+		Agent: c.agent, Time: n.Now().UTC(), action: act, requests: c}
 	to.inbox = append(to.inbox, it)
 	n.append(logged{kind: sol.EventInbox, app: c.app, target: to.ID,
 		inbox: &sol.InboxEvent{ID: it.ID, Kind: kind, Title: title}})

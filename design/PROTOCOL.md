@@ -50,6 +50,8 @@ caller                                         callee
 | `device` | caller's device public key `D_a` (base64) |
 | `nonce` | caller's 32-byte nonce `nonce_a` (base64) |
 | `secret` | one-time secret, `pair` and `join` only |
+| `name` | `join` only: the joining device's display name (optional) |
+| `person`, `rsig` | `recover` only: `R_pub`, and R's signature of `T` |
 | `sig` | caller's signature (below) |
 
 The identity bundle frame follows (IDENTITY.md §The identity bundle), binary encoded.
@@ -60,6 +62,7 @@ Transcript, with `lp` as in IDENTITY.md:
 ```
 T = lp("sol handshake v2") | versions(10 bytes, as in v1) | lp(D_a) | lp(D_b)
     | lp(nonce_a) | lp(nonce_b) | lp(op) | lp(secret) | lp(sha256(bundle_a))
+    [ | lp(name) for join, lp(R_pub) for recover ]
 ```
 The caller signs `T` with `D_a`. The callee, if it accepts, signs `T | lp(sha256(bundle_b))` with
 `D_b`. Both nonces and both device keys are covered, so each signature is valid for exactly one
@@ -87,11 +90,15 @@ bundle) and that `sig_b` verifies; otherwise it closes.
 - **Bundle frames** use a 4-byte length (max 1 MiB), not the 16 KiB frame limit, so a large device
   list fits. *(C3b: implement; today's code still uses the small frame.)*
 - **Join.** A joining device has no bundle yet: it sends its signed endpoint record in the bundle
-  frame, and the Request carries `name` (the device's display name) for `join`. *(C3b: add `name`.)*
+  frame, and the Request carries `name` (the device's display name) for `join`, covered by `T`.
+  *(Built in C7.)*
 - **Recover.** A device restoring from the words has no bundle, so it can't fetch the newest one
-  through a normal handshake. New op `recover`: the caller additionally signs `T` with the
-  recovery key `R`; an own device or a contact that verifies it answers with the newest bundle
-  it holds, then closes. *(C3b.)*
+  through a normal handshake. Op `recover`: the caller (a throwaway device key) presents its
+  endpoint record like `join`, and the Request carries `person` = `R_pub` and `rsig`, R's
+  signature of `T`. A callee that is that person's device or holds them as a contact accepts as
+  usual, then writes `u32 len | person cert | u32 len | device list` (the newest it holds) and
+  closes; anyone else closes silently. `sol restore --from <link>` uses it to start its seqs
+  above that state. *(Built in C7.)*
 - **Pushing changes.** Whenever a device list or endpoint record changes, the device pushes it to
   every open session (`POST /p/bundle`), so contacts learn of a removed device immediately, not at
   their next handshake. *(C3b.)*

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -499,4 +500,37 @@ func unix(now time.Time) uint64 {
 		return uint64(t)
 	}
 	return 0
+}
+
+// Allows reports whether the certificate's scopes permit running action (an "<app>.<verb>"
+// name) on person's apps: AllowsAction, and the person limits. "person:<id>" scopes, when
+// present, limit the people whose apps the agent may call (its own person included only if
+// listed); without any, the agent may call any person its device can reach. Allows does not
+// check validity or expiry.
+func (c AgentCert) Allows(action, person string) bool {
+	if !c.AllowsAction(action) {
+		return false
+	}
+	limited := false
+	for _, s := range c.Scopes {
+		if p, ok := strings.CutPrefix(s, "person:"); ok {
+			if p == person {
+				return true
+			}
+			limited = true
+		}
+	}
+	return !limited
+}
+
+// AllowsAction reports whether an action pattern among the scopes matches action: "*"
+// (anything), "<app>.*" (every action of an app) or the exact action name.
+func (c AgentCert) AllowsAction(action string) bool {
+	app, _, _ := strings.Cut(action, ".")
+	for _, s := range c.Scopes {
+		if s == "*" || s == action || s == app+".*" {
+			return true
+		}
+	}
+	return false
 }

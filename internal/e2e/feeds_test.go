@@ -32,7 +32,7 @@ func aliceAndBob(t *testing.T) (a1, a2, b *daemon) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a2.m.Join(ctx, jl); err != nil {
+	if _, err := a2.m.Join(ctx, jl, ""); err != nil {
 		t.Fatal(err)
 	}
 	pl, err := a1.m.Invite(pairing.KindPair)

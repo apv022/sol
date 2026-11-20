@@ -77,7 +77,7 @@ func run(caller Local, c Call, callee Local, decide Decide, wrapA, wrapB func(ne
 func TestGoldenTranscript(t *testing.T) {
 	rep := func(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
 	nv := negotiated{2, Versions{2, 2}, Versions{2, 2}}
-	got := transcript(nv, rep(1), rep(2), rep(3), rep(4), "pair", rep(5), []byte("bundle"))
+	got := transcript(nv, rep(1), rep(2), rep(3), rep(4), "pair", rep(5), []byte("bundle"), []byte("ignored for pair"))
 	want := "00000010" + "736f6c2068616e647368616b65207632" + // lp("sol handshake v2")
 		"00020002000200020002" + // versions
 		"00000020" + strings.Repeat("01", 32) + // lp(D_a)
@@ -91,7 +91,7 @@ func TestGoldenTranscript(t *testing.T) {
 		t.Fatalf("transcript\n got %x\nwant %s", got, want)
 	}
 	// A session has an empty secret: lp of nothing is four zero bytes.
-	s := transcript(nv, rep(1), rep(2), rep(3), rep(4), "session", nil, []byte("bundle"))
+	s := transcript(nv, rep(1), rep(2), rep(3), rep(4), "session", nil, []byte("bundle"), nil)
 	if !bytes.Contains(s, append([]byte("\x00\x00\x00\x07session"), 0, 0, 0, 0)) {
 		t.Fatalf("session transcript lacks an empty secret field: %x", s)
 	}

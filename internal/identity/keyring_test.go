@@ -328,3 +328,16 @@ func TestKeyringAgentsAndEndpoints(t *testing.T) {
 		t.Fatal("Signer does not sign with the device key")
 	}
 }
+
+func TestAgentAllows(t *testing.T) {
+	c := AgentCert{Scopes: []string{"files.*", "notes.read"}}
+	for action, want := range map[string]bool{"files.delete": true, "notes.read": true, "notes.write": false, "filesx.list": false, "music.play": false} {
+		if c.Allows(action, "p1") != want {
+			t.Errorf("%s: want %v", action, want)
+		}
+	}
+	c = AgentCert{Scopes: []string{"*", "person:p1"}}
+	if !c.Allows("x.y", "p1") || c.Allows("x.y", "p2") || !c.AllowsAction("x.y") {
+		t.Error("person limits")
+	}
+}

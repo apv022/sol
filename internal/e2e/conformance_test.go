@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -117,11 +116,13 @@ func realWorld(t *testing.T) *soltest.World {
 		A: attachDocs(t, laptop), A2: attachDocs(t, phone), B: attachDocs(t, bob), C: attachDocs(t, carol),
 		AliceID: laptop.PersonID(), BobID: bob.PersonID(), CarolID: carol.PersonID(),
 		Pinned: func(p, h string) bool { return byPerson[p].Pins.Pinned(strings.TrimPrefix(h, "sha256:")) },
+		Answer: func(p, id string, ok bool) error {
+			_, err := byPerson[p].API.Answer(context.Background(), id, ok)
+			return err
+		},
 		InboxKinds: func(p string) []string {
 			var out []string
-			for _, raw := range byPerson[p].API.InboxItems() {
-				var it struct{ Kind string }
-				_ = json.Unmarshal(raw, &it)
+			for _, it := range byPerson[p].API.InboxItems() {
 				out = append(out, it.Kind)
 			}
 			return out

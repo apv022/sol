@@ -1,0 +1,6 @@
+usage: sol do notes.read [--json] [--dry-run] [--person ID]
+
+Arguments: none (or any JSON object with --args)
+
+Effect:   read (changes nothing)
+Approval: never

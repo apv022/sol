@@ -25,6 +25,11 @@ type Call struct {
 	Bundle []byte
 	// Secret is the one-time secret for OpPair and OpJoin.
 	Secret []byte
+	// Name is the joining device's display name (OpJoin only).
+	Name string
+	// Recovery is the recovery key R (OpRecover only). It signs T next to the device key and
+	// never leaves this process.
+	Recovery ed25519.PrivateKey
 
 	// tamper, when set (tests only), may rewrite the request and bundle
 	// after signing.
@@ -55,7 +60,8 @@ func dial(conn net.Conn, local Local, c Call, v Versions) (*Result, error) {
 	if len(c.Want) != keySize {
 		return nil, errors.New("wire: no device to reach")
 	}
-	if !validOp(c.Op) || hasSecret(c.Op) != (len(c.Secret) > 0) {
+	if !validOp(c.Op) || hasSecret(c.Op) != (len(c.Secret) > 0) || (c.Op == OpRecover) != (c.Recovery != nil) ||
+		(c.Name != "" && c.Op != OpJoin) || len(c.Name) > identity.MaxNameLen {
 		return nil, fmt.Errorf("wire: bad call op %q", c.Op)
 	}
 	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
@@ -91,15 +97,26 @@ func dial(conn net.Conn, local Local, c Call, v Versions) (*Result, error) {
 		return nil, err
 	}
 	nv := negotiated{version, v, calleeV}
-	t := transcript(nv, da, db, na, nb, c.Op, c.Secret, c.Bundle)
+	var extra []byte
+	switch c.Op {
+	case OpJoin:
+		extra = []byte(c.Name)
+	case OpRecover:
+		extra = c.Recovery.Public().(ed25519.PublicKey)
+	}
+	t := transcript(nv, da, db, na, nb, c.Op, c.Secret, c.Bundle, extra)
 	sig, err := sign(local.Signer(), t)
 	if err != nil {
 		return nil, err
 	}
 	req := request{V: int(version), Op: c.Op, Device: b64.EncodeToString(da),
-		Nonce: b64.EncodeToString(na), Sig: b64.EncodeToString(sig)}
+		Nonce: b64.EncodeToString(na), Name: c.Name, Sig: b64.EncodeToString(sig)}
 	if len(c.Secret) > 0 {
 		req.Secret = b64.EncodeToString(c.Secret)
+	}
+	if c.Op == OpRecover {
+		req.Person = b64.EncodeToString(extra)
+		req.RSig = b64.EncodeToString(ed25519.Sign(c.Recovery, t))
 	}
 	bundle := c.Bundle
 	if c.tamper != nil {

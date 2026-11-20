@@ -1,0 +1,10 @@
+Files (files)
+  Your files on all your devices, shared with people you choose.
+
+Actions:
+  files.delete  destructive, approval: agents  Delete files or folders from all devices.
+  files.keep    write                          Keep a folder on this device.
+  files.list    read                           List a folder.
+  files.share   write                          Share a folder with people.
+
+More: sol do files.<action> --help

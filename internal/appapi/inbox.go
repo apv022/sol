@@ -25,18 +25,7 @@ import (
 const maxInbox = 1000
 
 // item is one inbox item (API.md §8), as stored and as GET /v1/inbox shows it.
-type item struct {
-	ID     string          `json:"id"`
-	App    string          `json:"app"`
-	Kind   string          `json:"kind"`
-	Title  string          `json:"title"`
-	Body   string          `json:"body,omitempty"`
-	From   string          `json:"from,omitempty"` // a contact's person ID; "" for my own apps
-	Time   time.Time       `json:"time"`
-	Answer string          `json:"answer,omitempty"`
-	Action *sol.ActionCall `json:"action,omitempty"`
-	Agent  string          `json:"agent,omitempty"` // the agent whose call needed approval
-}
+type item = sol.InboxItem
 
 // inbox is the persisted list of items, oldest first.
 type inbox struct {
@@ -134,6 +123,27 @@ func (in *inbox) answer(id string, approve bool) (item, error) {
 		return *it, in.saveLocked()
 	}
 	return item{}, sol.Errorf("not_found", "no open approval "+id)
+}
+
+// setResult records what running an approved item's action returned.
+func (in *inbox) setResult(id string, out json.RawMessage, err error) error {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for i := range in.items {
+		if in.items[i].ID != id {
+			continue
+		}
+		in.items[i].Result = out
+		if err != nil {
+			var se *sol.Error
+			if !errors.As(err, &se) {
+				se = sol.Errorf("internal", "action failed")
+			}
+			in.items[i].Error = se
+		}
+		return in.saveLocked()
+	}
+	return nil
 }
 
 func (s *Server) inboxEvent(app, id string) {
@@ -246,27 +256,34 @@ func (s *Server) peerInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 // InboxItems returns every inbox item, newest first (for the CLI and the Sol app).
-func (s *Server) InboxItems() []json.RawMessage {
-	var out []json.RawMessage
-	for _, it := range s.inbox.list("") {
-		b, _ := json.Marshal(it)
-		out = append(out, b)
-	}
-	return out
-}
+func (s *Server) InboxItems() []sol.InboxItem { return s.inbox.list("") }
 
-// Answer approves or denies an approval. On approval the stored action runs as the requesting
-// app, on this device, with me as the caller; an "inbox" event reports the answer either way.
+// InboxItem returns one inbox item.
+func (s *Server) InboxItem(id string) (sol.InboxItem, bool) { return s.inbox.get(id) }
+
+// Answer approves or denies an approval. On approval the stored action runs as the principal
+// that asked: the requesting app, on this device, with me as the caller and, when an agent's
+// call needed the approval, that agent in Sol-Agent. The result is recorded on the item, and
+// then an "inbox" event reports the answer to the app.
 func (s *Server) Answer(ctx context.Context, id string, approve bool) (json.RawMessage, error) {
 	it, err := s.inbox.answer(id, approve)
 	if err != nil {
 		return nil, err
 	}
-	s.inboxEvent(it.App, it.ID)
+	defer s.inboxEvent(it.App, it.ID)
 	if !approve || it.Action == nil {
 		return nil, nil
 	}
 	who := s.localCaller()
 	who.agent = it.Agent
-	return s.run(ctx, it.App, *it.Action, who, true)
+	var out json.RawMessage
+	if me, _ := s.me(); it.Action.Person != "" && it.Action.Person != me {
+		out, err = s.callRemote(ctx, *it.Action, who.agent)
+	} else {
+		out, err = s.run(ctx, it.App, *it.Action, who, true)
+	}
+	if rerr := s.inbox.setResult(it.ID, out, err); rerr != nil {
+		s.log.Warn("inbox: recording a result", "err", rerr)
+	}
+	return out, err
 }

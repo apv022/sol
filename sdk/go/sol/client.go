@@ -289,6 +289,12 @@ func (c *Client) PostInbox(ctx context.Context, post InboxPost) (r InboxResult, 
 	return
 }
 
+// Inbox implements API.
+func (c *Client) Inbox(ctx context.Context) (items []InboxItem, err error) {
+	err = c.do(ctx, "GET", "/v1/inbox", nil, &items)
+	return
+}
+
 // Activity implements API.
 func (c *Client) Activity(ctx context.Context, limit int) (a []ActivityEntry, err error) {
 	p := "/v1/activity"
@@ -472,6 +478,9 @@ func decodeEvent(id, typ, data string) (Event, bool) {
 	case EventInbox:
 		ev.Inbox = new(InboxEvent)
 		err = json.Unmarshal([]byte(data), ev.Inbox)
+	case EventTheme:
+		ev.Theme = new(ThemeEvent)
+		err = json.Unmarshal([]byte(data), ev.Theme)
 	default:
 		return ev, false // unknown types are ignored for forward compatibility
 	}
@@ -490,6 +499,8 @@ func EncodeEvent(w io.Writer, ev Event) error {
 		v = ev.Person
 	case EventInbox:
 		v = ev.Inbox
+	case EventTheme:
+		v = ev.Theme
 	default:
 		return fmt.Errorf("sol: cannot encode event type %q", ev.Type)
 	}

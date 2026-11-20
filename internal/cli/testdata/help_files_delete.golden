@@ -1,0 +1,9 @@
+usage: sol do files.delete --paths <string>... [--json] [--dry-run] [--person ID]
+
+Delete files or folders from all devices.
+
+Arguments:
+  --paths  list of string  required; repeat the flag or give a comma list
+
+Effect:   destructive (removes data; --dry-run shows what it would do)
+Approval: agents (an agent's call waits for your approval in sol inbox)

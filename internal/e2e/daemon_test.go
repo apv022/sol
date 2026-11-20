@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -105,13 +104,8 @@ func TestScopesAndApproval(t *testing.T) {
 	if _, err := d.API.Answer(ctx, res.Approval, true); !errors.Is(err, sol.ErrNotFound) {
 		t.Fatalf("double answer: %v", err)
 	}
-	var items []struct{ Kind, Answer string }
-	for _, raw := range d.API.InboxItems() {
-		var it struct{ Kind, Answer string }
-		_ = json.Unmarshal(raw, &it)
-		items = append(items, it)
-	}
-	if len(items) != 1 || items[0].Answer != "approved" {
+	items := d.API.InboxItems()
+	if len(items) != 1 || items[0].Answer != "approved" || string(items[0].Result) != `{"ok":true}` {
 		t.Fatalf("%+v", items)
 	}
 }

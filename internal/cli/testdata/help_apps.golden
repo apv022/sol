@@ -1,0 +1,10 @@
+usage: sol do <app>.<action> [--name value ...] [--args JSON|-] [--json] [--dry-run] [--person ID]
+
+Runs an action of an installed app, as you (or, with SOL_AGENT_KEY or --as-agent, as an agent).
+Exit codes: 0 done, 1 failed, 2 bad arguments, 3 waiting for your approval (sol inbox).
+
+Apps:
+  files  4 actions  Your files on all your devices, shared with people you choose.
+  notes  1 actions  Notes.
+
+More: sol do --help <app>, sol do <app>.<action> --help

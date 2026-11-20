@@ -88,6 +88,9 @@ const (
 	EventFeed   = "feed"
 	EventPerson = "person"
 	EventInbox  = "inbox"
+	// EventTheme reports that the active theme or the appearance settings changed
+	// (design/UI.md "Themes"); its data is Event.Theme.
+	EventTheme = "theme"
 	// EventError is synthesized by the client when the stream fails for good; Event.Err is set
 	// and the channel closes right after.
 	EventError = "error"
@@ -108,7 +111,15 @@ type InboxEvent struct {
 	Answer string `json:"answer,omitempty"`
 }
 
-// Event is one server-sent event; exactly one of Entry, Feed, Person, Inbox is set, by Type.
+// ThemeEvent is the data of a "theme" event (ui/kit/TOKENS.md): the active theme's name and
+// the appearance settings, which UIs apply before swapping /_sol/theme.css.
+type ThemeEvent struct {
+	Name     string            `json:"name"`
+	Settings map[string]string `json:"settings"`
+}
+
+// Event is one server-sent event; exactly one of Entry, Feed, Person, Inbox, Theme is set, by
+// Type.
 type Event struct {
 	ID     string
 	Type   string
@@ -116,6 +127,7 @@ type Event struct {
 	Feed   *FeedChange
 	Person *Contact
 	Inbox  *InboxEvent
+	Theme  *ThemeEvent
 	Err    string
 }
 
@@ -189,6 +201,26 @@ type InboxPost struct {
 	Body   string      `json:"body,omitempty"`
 	To     string      `json:"to,omitempty"`
 	Action *ActionCall `json:"action,omitempty"`
+}
+
+// InboxItem is one row of GET /v1/inbox: a notice or an approval of this app, with its answer
+// and, for an approved action, what running it returned.
+type InboxItem struct {
+	ID    string    `json:"id"`
+	App   string    `json:"app"`
+	Kind  string    `json:"kind"` // "notice" or "approval"
+	Title string    `json:"title"`
+	Body  string    `json:"body,omitempty"`
+	From  string    `json:"from,omitempty"` // a contact's person ID; empty for my own apps
+	Time  time.Time `json:"time"`
+	// Answer is "approved", "denied" or empty while open.
+	Answer string      `json:"answer,omitempty"`
+	Action *ActionCall `json:"action,omitempty"`
+	// Agent is the agent key whose call needed the approval (empty for an app's own request).
+	Agent string `json:"agent,omitempty"`
+	// Result is the approved action's output; Error its failure.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *Error          `json:"error,omitempty"`
 }
 
 // InboxResult is the reply of POST /v1/inbox.

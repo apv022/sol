@@ -60,6 +60,11 @@ const (
 	OpSession = "session" // an authenticated session between known devices
 	OpPair    = "pair"    // redeem a pair token: the two people become contacts
 	OpJoin    = "join"    // redeem a join token: the caller joins the callee's person
+	// OpRecover asks for the newest identity state the callee holds of the caller's person.
+	// The caller, restoring from the recovery words, has no bundle: it presents its endpoint
+	// record (like join) and proves the person with a second signature of T by the recovery
+	// key R. The callee answers and closes; no session follows.
+	OpRecover = "recover"
 )
 
 // Sizes on the wire.
@@ -162,6 +167,9 @@ type request struct {
 	Device string `json:"device"`
 	Nonce  string `json:"nonce"`
 	Secret string `json:"secret,omitempty"`
+	Name   string `json:"name,omitempty"`   // join: the joining device's display name
+	Person string `json:"person,omitempty"` // recover: R_pub
+	RSig   string `json:"rsig,omitempty"`   // recover: R's signature of T
 	Sig    string `json:"sig"`
 }
 
@@ -189,8 +197,9 @@ func lp(b, x []byte) []byte {
 	return append(b, x...)
 }
 
-// transcript builds T (PROTOCOL.md §Signatures).
-func transcript(nv negotiated, da, db, na, nb []byte, op string, secret, bundleA []byte) []byte {
+// transcript builds T (PROTOCOL.md §Signatures). extra is the op's own field, covered only
+// for the ops that have one: the device name for join, R_pub for recover.
+func transcript(nv negotiated, da, db, na, nb []byte, op string, secret, bundleA, extra []byte) []byte {
 	h := sha256.Sum256(bundleA)
 	t := lp(nil, []byte(sigContext))
 	t = append(t, nv.bytes()...)
@@ -200,7 +209,11 @@ func transcript(nv negotiated, da, db, na, nb []byte, op string, secret, bundleA
 	t = lp(t, nb)
 	t = lp(t, []byte(op))
 	t = lp(t, secret)
-	return lp(t, h[:])
+	t = lp(t, h[:])
+	if op == OpJoin || op == OpRecover {
+		t = lp(t, extra)
+	}
+	return t
 }
 
 // calleeMessage is what the callee signs: T | lp(sha256(bundle_b)).
@@ -270,16 +283,22 @@ func randomNonce() ([]byte, error) {
 	return n, err
 }
 
-func validOp(op string) bool { return op == OpSession || op == OpPair || op == OpJoin }
+func validOp(op string) bool {
+	return op == OpSession || op == OpPair || op == OpJoin || op == OpRecover
+}
+
+// bundleless reports whether the caller of op has no identity bundle yet and presents only its
+// signed endpoint record.
+func bundleless(op string) bool { return op == OpJoin || op == OpRecover }
 
 // hasSecret reports whether op carries a one-time secret.
 func hasSecret(op string) bool { return op == OpPair || op == OpJoin }
 
 // checkCallerBundle verifies what the caller presented: a full identity
 // bundle naming its device, or for join (the device has no person yet) only
-// its own signed endpoint record.
+// its own signed endpoint record (recover too).
 func checkCallerBundle(op string, raw []byte, device ed25519.PublicKey) (identity.Bundle, identity.EndpointRecord, error) {
-	if op == OpJoin {
+	if bundleless(op) {
 		rec, err := identity.ParseEndpointRecord(raw)
 		if err != nil {
 			return identity.Bundle{}, rec, err

@@ -64,8 +64,9 @@ Status: `todo` · `doing` · `done`.
 | C4 | Feeds: store, signing, append/read, replication to own devices and sharers, catch-up, events stream | API.md §3, §5 | done |
 | C5 | Blobs over sessions: chunked fetch, Range, multi-source, pin, permission rule | API.md §4 | done |
 | C6 | App host: manifest, install, supervise, app tokens, app socket routing, per-app origins, `/_sol/` bridge | API.md §1, §9, §10 | done |
-| C7 | `sol do <app>.<action>` (args from flags/JSON, `--json`, `--dry-run`, generated `--help` from schemas), agent keys (`sol agent new/list/revoke`, certs per IDENTITY.md, `--as-agent`/`SOL_AGENT_KEY`), Inbox approvals end to end, `theme` events pushed (live swap), `sol backup words/confirm` + `sol restore`, join device names, an SDK method for GET /v1/inbox | API.md §6–8, IDENTITY.md | doing |
+| C7 | `sol do <app>.<action>` (args from flags/JSON, `--json`, `--dry-run`, generated `--help` from schemas), agent keys (`sol agent new/list/revoke`, certs per IDENTITY.md, `--as-agent`/`SOL_AGENT_KEY`), Inbox approvals end to end, `theme` events pushed (live swap), `sol backup words/confirm` + `sol restore`, join device names, an SDK method for GET /v1/inbox | API.md §6–8, IDENTITY.md | done |
 | C6b | C6 follow-ups: peer app UIs (`<app>.<petname>.localhost`), my devices learn contacts' endpoints, Tor client auth, offline scenarios in the conformance suite, drop CSP `style-src 'unsafe-inline'` (apps use classes/CSSOM, not inline style attributes) | API.md §10, PROTOCOL.md | todo |
+| C7b | C7 follow-ups: theme file watching on macOS/Windows (scan fallback), themes sync between devices (Files ignores `.sol/`: sync `.sol/themes` or move themes to an internal feed), `theme.*` actions, re-add contacts after restore, agent list across my devices, `sol do` human output picks sensible default columns per action (manifest hint) | todo |
 | C8 | Admin API for the Sol app: people, pairing, devices, port sharing (services), settings | design/ADMIN.md | todo |
 
 ### Apps lane

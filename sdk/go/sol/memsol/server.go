@@ -101,6 +101,9 @@ func NewServer(n *Network) *Server {
 		}
 		return c.PostInbox(q.Context(), b)
 	})
+	r("GET /v1/inbox", func(c *Client, w http.ResponseWriter, q *http.Request) (any, error) {
+		return c.Inbox(q.Context())
+	})
 	r("GET /v1/activity", func(c *Client, w http.ResponseWriter, q *http.Request) (any, error) {
 		limit, _ := strconv.Atoi(q.URL.Query().Get("limit"))
 		return c.Activity(q.Context(), limit)

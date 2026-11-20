@@ -94,6 +94,8 @@ type World struct {
 	Pinned func(person, hash string) bool
 	// InboxKinds lists the kinds of a person's inbox items (nil: skipped).
 	InboxKinds func(person string) []string
+	// Answer approves or denies an approval item as the person would (nil: skipped).
+	Answer func(person, id string, approve bool) error
 }
 
 // Factory builds a fresh World.
@@ -112,6 +114,7 @@ func Run(t *testing.T, f Factory) {
 		{"WriteShareCoAuthors", WriteShareCoAuthors},
 		{"Actions", ActionsScenario},
 		{"InboxNotice", InboxNotice},
+		{"InboxApproval", InboxApproval},
 		{"Dial", DialScenario},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.f(t, f(t)) })
@@ -515,6 +518,51 @@ func InboxNotice(t *testing.T, w *World) {
 		if got := w.InboxKinds(w.BobID); len(got) != 1 || got[0] != "notice" {
 			t.Fatalf("%+v", got)
 		}
+	}
+}
+
+// InboxApproval: an app files an approval; Inbox lists it open; once the person approves, the
+// stored action runs as the app and the item carries the answer and the result, with an inbox
+// event for the app.
+func InboxApproval(t *testing.T, w *World) {
+	items, err := w.A.Inbox(ctx)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("fresh inbox: %+v %v", items, err)
+	}
+	r, err := w.A.PostInbox(ctx, sol.InboxPost{Kind: "approval", Title: "Rename?",
+		Action: &sol.ActionCall{Action: "docs.rename", Args: json.RawMessage(`{"title":"y"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = w.A.Inbox(ctx)
+	if err != nil || len(items) != 1 || items[0].ID != r.ID || items[0].Kind != "approval" || items[0].Answer != "" ||
+		items[0].Action == nil || items[0].Action.Action != "docs.rename" || items[0].App != "docs" {
+		t.Fatalf("open approval: %+v %v", items, err)
+	}
+	if other, _ := w.B.Inbox(ctx); len(other) != 0 {
+		t.Fatalf("another person sees my inbox: %+v", other)
+	}
+	if w.Answer == nil {
+		return
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ev, err := w.A.Events(cctx, sol.EventOptions{Inbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Answer(w.AliceID, r.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if e := wait(t, ev); e.Inbox == nil || e.Inbox.ID != r.ID || e.Inbox.Answer != "approved" {
+		t.Fatalf("%+v", e)
+	}
+	items, _ = w.A.Inbox(ctx)
+	if len(items) != 1 || items[0].Answer != "approved" || string(items[0].Result) != `{"dry":false}` || items[0].Error != nil {
+		t.Fatalf("answered: %+v", items)
+	}
+	if err := w.Answer(w.AliceID, r.ID, false); !errors.Is(err, sol.ErrNotFound) {
+		t.Fatalf("answering twice: %v", err)
 	}
 }
 

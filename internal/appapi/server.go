@@ -79,6 +79,9 @@ type Config struct {
 	DataDir string
 	// Admin serves /admin/ to callers holding the admin token (the CLI); nil refuses.
 	Admin http.Handler
+	// Agent serves /agent/ (agent keys, internal/daemon), which authenticates its own callers by
+	// their certificate and signature; nil refuses.
+	Agent http.Handler
 	Log   *slog.Logger
 }
 
@@ -237,6 +240,13 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		s.cfg.Admin.ServeHTTP(w, r)
+	})
+	mx.HandleFunc("/agent/", func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Agent == nil {
+			sol.WriteError(w, sol.Errorf("unauthorized", "agents are not accepted here"))
+			return
+		}
+		s.cfg.Agent.ServeHTTP(w, r)
 	})
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		sol.WriteError(w, sol.Errorf("not_found", "no such path"))

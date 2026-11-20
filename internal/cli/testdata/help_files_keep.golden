@@ -1,0 +1,13 @@
+usage: sol do files.keep --keep --path <string> [--limit <integer>] [--meta <object>] [--ratio <number>] [--json] [--dry-run] [--person ID]
+
+Keep a folder on this device.
+
+Arguments:
+  --keep   boolean  required
+  --path   string   required
+  --limit  integer
+  --meta   object   as JSON
+  --ratio  number
+
+Effect:   write (changes data; --dry-run shows what it would do)
+Approval: never

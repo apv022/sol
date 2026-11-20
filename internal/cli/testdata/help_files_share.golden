@@ -1,0 +1,11 @@
+usage: sol do files.share --path <string> --people <string>... [--mode read|write] [--json] [--dry-run] [--person ID]
+
+Share a folder with people.
+
+Arguments:
+  --path    string          required
+  --people  list of string  required; repeat the flag or give a comma list
+  --mode    string          one of: read, write
+
+Effect:   write (changes data; --dry-run shows what it would do)
+Approval: never

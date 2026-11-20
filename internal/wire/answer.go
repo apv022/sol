@@ -22,9 +22,13 @@ type Request struct {
 	// Bundle is the caller's identity bundle, checked with
 	// identity.VerifyBundle against Device. Zero for OpJoin.
 	Bundle identity.Bundle
-	// Endpoints is the caller's signed endpoint record (for OpJoin the only
-	// thing it presents).
+	// Endpoints is the caller's signed endpoint record (for OpJoin and
+	// OpRecover the only thing it presents).
 	Endpoints identity.EndpointRecord
+	// Name is the joining device's display name (OpJoin; may be empty).
+	Name string
+	// Person is the person the caller proved with the recovery key (OpRecover).
+	Person ed25519.PublicKey
 }
 
 // Decide is the callee's policy. It returns the wire form of the bundle to
@@ -90,7 +94,7 @@ func answer(conn net.Conn, local Local, decide Decide, v Versions) (*Request, er
 	if err != nil {
 		return nil, err
 	}
-	req, sig, na, err := parseRequest(frame, version)
+	req, sig, rsig, na, err := parseRequest(frame, version)
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +102,18 @@ func answer(conn net.Conn, local Local, decide Decide, v Versions) (*Request, er
 		return nil, fmt.Errorf("%w: a device cannot call itself", ErrMalformed)
 	}
 	nv := negotiated{version, callerV, v}
-	t := transcript(nv, req.Device, db, na, nb, req.Op, req.Secret, rawA)
+	var extra []byte
+	switch req.Op {
+	case OpJoin:
+		extra = []byte(req.Name)
+	case OpRecover:
+		extra = req.Person
+	}
+	t := transcript(nv, req.Device, db, na, nb, req.Op, req.Secret, rawA, extra)
 	if !ed25519.Verify(req.Device, t, sig) {
+		return nil, ErrBadSignature
+	}
+	if req.Op == OpRecover && !ed25519.Verify(req.Person, t, rsig) {
 		return nil, ErrBadSignature
 	}
 	if req.Bundle, req.Endpoints, err = checkCallerBundle(req.Op, rawA, req.Device); err != nil {
@@ -127,22 +141,22 @@ func answer(conn net.Conn, local Local, decide Decide, v Versions) (*Request, er
 
 // parseRequest decodes and checks the Request JSON: canonical form, the
 // negotiated version, a known op, field sizes. It returns the request, the
-// caller's signature and nonce.
-func parseRequest(frame []byte, version uint16) (*Request, []byte, []byte, error) {
+// caller's signature, the recovery signature (recover only) and the nonce.
+func parseRequest(frame []byte, version uint16) (*Request, []byte, []byte, []byte, error) {
 	var rq request
 	dec := json.NewDecoder(bytes.NewReader(frame))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&rq); err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, nil, nil, nil, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if canon, err := json.Marshal(rq); err != nil || !bytes.Equal(canon, frame) {
-		return nil, nil, nil, fmt.Errorf("%w: request is not canonical JSON", ErrMalformed)
+		return nil, nil, nil, nil, fmt.Errorf("%w: request is not canonical JSON", ErrMalformed)
 	}
 	if rq.V != int(version) {
-		return nil, nil, nil, fmt.Errorf("%w: request version %d, negotiated %d", ErrMalformed, rq.V, version)
+		return nil, nil, nil, nil, fmt.Errorf("%w: request version %d, negotiated %d", ErrMalformed, rq.V, version)
 	}
 	if !validOp(rq.Op) {
-		return nil, nil, nil, fmt.Errorf("%w: unknown op %q", ErrMalformed, rq.Op)
+		return nil, nil, nil, nil, fmt.Errorf("%w: unknown op %q", ErrMalformed, rq.Op)
 	}
 	device, err1 := b64.DecodeString(rq.Device)
 	nonce, err2 := b64.DecodeString(rq.Nonce)
@@ -150,14 +164,27 @@ func parseRequest(frame []byte, version uint16) (*Request, []byte, []byte, error
 	secret, err4 := b64.DecodeString(rq.Secret)
 	if err := errors.Join(err1, err2, err3, err4); err != nil ||
 		len(device) != keySize || len(nonce) != NonceSize || len(sig) != ed25519.SignatureSize {
-		return nil, nil, nil, fmt.Errorf("%w: bad field encoding", ErrMalformed)
+		return nil, nil, nil, nil, fmt.Errorf("%w: bad field encoding", ErrMalformed)
 	}
 	if hasSecret(rq.Op) != (len(secret) == SecretSize) || (!hasSecret(rq.Op) && len(secret) != 0) {
-		return nil, nil, nil, fmt.Errorf("%w: secret does not fit op %q", ErrMalformed, rq.Op)
+		return nil, nil, nil, nil, fmt.Errorf("%w: secret does not fit op %q", ErrMalformed, rq.Op)
 	}
-	r := &Request{Version: version, Op: rq.Op, Device: ed25519.PublicKey(device)}
+	person, err5 := b64.DecodeString(rq.Person)
+	rsig, err6 := b64.DecodeString(rq.RSig)
+	if err := errors.Join(err5, err6); err != nil ||
+		(rq.Op == OpRecover) != (len(person) == keySize && len(rsig) == ed25519.SignatureSize) ||
+		(rq.Op != OpRecover && (len(person) != 0 || len(rsig) != 0)) {
+		return nil, nil, nil, nil, fmt.Errorf("%w: recovery fields do not fit op %q", ErrMalformed, rq.Op)
+	}
+	if rq.Name != "" && (rq.Op != OpJoin || len(rq.Name) > identity.MaxNameLen) {
+		return nil, nil, nil, nil, fmt.Errorf("%w: name does not fit op %q", ErrMalformed, rq.Op)
+	}
+	r := &Request{Version: version, Op: rq.Op, Device: ed25519.PublicKey(device), Name: rq.Name}
 	if len(secret) > 0 {
 		r.Secret = secret
 	}
-	return r, sig, nonce, nil
+	if len(person) > 0 {
+		r.Person = ed25519.PublicKey(person)
+	}
+	return r, sig, rsig, nonce, nil
 }

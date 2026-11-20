@@ -12,6 +12,8 @@
 //	<dir>/peers.json       the newest identity bundle of every device I held a session with,
 //	                       so sessions come back after a restart (0600)
 //	<dir>/inbox.json       the app inbox (internal/appapi, 0600)
+//	<dir>/agents.json      the agent keys this device issued (agents.go, 0600)
+//	<dir>/agents/          agent key files sol agent new writes by default (0700, files 0600)
 //	<dir>/admin.token      the CLI's secret for the admin API, new on every start (0600)
 //	<dir>/api.url          where the app API listens, in SOL_API form
 //	<dir>/ui.url           the launcher page
@@ -31,6 +33,7 @@ package daemon
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -79,11 +82,16 @@ type Config struct {
 	UI string `json:"ui"`
 	// Files is the synced folder (SOL_FILES).
 	Files string `json:"files"`
+	// DeviceName is the name a device made with --join gives itself when it joins (the join
+	// request carries it, PROTOCOL.md "Settled in C3"). Unused once the device belongs to a
+	// person: the device list holds its name.
+	DeviceName string `json:"device_name,omitempty"`
 }
 
 // InitOptions are the choices of a first run.
 type InitOptions struct {
-	// Name and Device name the new person and this device. Ignored with Join.
+	// Name and Device name the new person and this device. With Join, Name is ignored and
+	// Device is the name the device asks for when it joins.
 	Name, Device string
 	// Join creates only a device key, for a device that will join an existing person
 	// (sol pair <join link>).
@@ -119,36 +127,11 @@ func Init(dir string, o InitOptions) error {
 	if _, err := identity.Open(keysDir(dir)); err == nil {
 		return ErrExists
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if o.Join && o.Config.DeviceName == "" {
+		o.Config.DeviceName = o.Device
+	}
+	if err := prepareDir(dir, &o.Config, o.Builtins); err != nil {
 		return err
-	}
-	if o.Config.UI == "" {
-		o.Config.UI = "127.0.0.1:7777"
-	}
-	if o.Config.Files == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			o.Config.Files = filepath.Join(h, "SolDrive")
-		}
-	}
-	if len(o.Config.Transports) == 0 {
-		o.Config.Transports = []TransportConfig{{Name: "direct", Listen: "0.0.0.0:" + strconv.Itoa(freePort())}}
-	}
-	b, _ := json.MarshalIndent(o.Config, "", "  ")
-	if err := fsutil.WriteFileAtomic(filepath.Join(dir, "config.json"), b, 0o600); err != nil {
-		return err
-	}
-	for name, bi := range o.Builtins {
-		m, err := sol.ParseManifest(bi.Manifest)
-		if err != nil {
-			return fmt.Errorf("daemon: builtin %s: %w", name, err)
-		}
-		ad := filepath.Join(dir, "apps", m.ID)
-		if err := os.MkdirAll(ad, 0o700); err != nil {
-			return err
-		}
-		if err := fsutil.WriteFileAtomic(filepath.Join(ad, "app.json"), bi.Manifest, 0o600); err != nil {
-			return err
-		}
 	}
 	now := time.Now()
 	var err error
@@ -161,6 +144,43 @@ func Init(dir string, o InitOptions) error {
 		_, err = identity.Create(keysDir(dir), o.Name, o.Device, now)
 	}
 	return err
+}
+
+// prepareDir creates a data directory's config.json (filling in defaults) and installs the
+// builtin apps' manifests.
+func prepareDir(dir string, cfg *Config, builtins map[string]apphost.Builtin) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if cfg.UI == "" {
+		cfg.UI = "127.0.0.1:7777"
+	}
+	if cfg.Files == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			cfg.Files = filepath.Join(h, "SolDrive")
+		}
+	}
+	if len(cfg.Transports) == 0 {
+		cfg.Transports = []TransportConfig{{Name: "direct", Listen: "0.0.0.0:" + strconv.Itoa(freePort())}}
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := fsutil.WriteFileAtomic(filepath.Join(dir, "config.json"), b, 0o600); err != nil {
+		return err
+	}
+	for name, bi := range builtins {
+		m, err := sol.ParseManifest(bi.Manifest)
+		if err != nil {
+			return fmt.Errorf("daemon: builtin %s: %w", name, err)
+		}
+		ad := filepath.Join(dir, "apps", m.ID)
+		if err := os.MkdirAll(ad, 0o700); err != nil {
+			return err
+		}
+		if err := fsutil.WriteFileAtomic(filepath.Join(ad, "app.json"), bi.Manifest, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // freePort returns a TCP port free right now, so a default config gets a stable port.
@@ -234,6 +254,8 @@ type Daemon struct {
 	runDir     string
 	tmpRun     bool
 	peers      *peerBook
+	agents     *agents
+	wg         sync.WaitGroup // background goroutines (the theme watcher)
 
 	mu     sync.Mutex
 	online map[string]int // person ID -> live sessions
@@ -286,6 +308,9 @@ func Start(o Options) (_ *Daemon, err error) {
 		return nil, err
 	}
 	d.peers.seed(kr, d.Cache)
+	if d.agents, err = openAgents(filepath.Join(o.Dir, "agents.json")); err != nil {
+		return nil, err
+	}
 	if d.Store, err = feeds.Open(feeds.Config{Dir: filepath.Join(o.Dir, "feeds"), Self: kr,
 		Lists: feeds.IdentityLists(kr, d.Cache), Log: d.log}); err != nil {
 		return nil, err
@@ -320,7 +345,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	apps := &appsRef{}
 	if d.API, err = appapi.New(appapi.Config{Node: appapi.Node{Keyring: kr, Cache: d.Cache, Store: d.Store,
 		Contacts: d.Contacts, Shares: d.Shares, Pins: d.Pins, Blobs: d.Blobs, Blobnet: d.Blobnet, Sessions: d.Sessions},
-		Apps: apps, DataDir: o.Dir, Admin: d.adminHandler(), Log: d.log}); err != nil {
+		Apps: apps, DataDir: o.Dir, Admin: d.adminHandler(), Agent: d.agentHandler(), Log: d.log}); err != nil {
 		return nil, err
 	}
 	peerMux.Handle("/p/", d.API.PeerHandler())
@@ -350,6 +375,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if kr.Person() != nil {
 		d.Host.Start(d.ctx)
 	}
+	d.watchThemes()
 	return d, nil
 }
 
@@ -374,8 +400,14 @@ func (d *Daemon) anchor() bool {
 
 // buildTransports constructs the configured transports.
 func (d *Daemon) buildTransports() []transport.Transport {
+	return newTransports(d.dir, d.cfg.Transports, d.Keyring.Signer(), d.log)
+}
+
+// newTransports constructs transports from their configuration; signer is the device key the
+// direct transport's TLS certificate is made from.
+func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, log *slog.Logger) []transport.Transport {
 	var out []transport.Transport
-	for _, tc := range d.cfg.Transports {
+	for _, tc := range tcs {
 		adv := ""
 		if len(tc.Advertise) > 0 {
 			adv = tc.Advertise[0]
@@ -384,18 +416,18 @@ func (d *Daemon) buildTransports() []transport.Transport {
 		case "clearnet":
 			out = append(out, transport.NewClearnet(tc.Listen, adv))
 		case "direct":
-			out = append(out, transport.NewDirect(tc.Listen, d.Keyring.Signer(), tc.Advertise...))
+			out = append(out, transport.NewDirect(tc.Listen, signer, tc.Advertise...))
 		case "wg":
-			out = append(out, transport.NewWG(tc.Listen, filepath.Join(d.dir, "wg.key"), tc.Advertise, tc.STUN))
+			out = append(out, transport.NewWG(tc.Listen, filepath.Join(dir, "wg.key"), tc.Advertise, tc.STUN))
 		case "tor":
-			p, err := solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(d.dir, "bin")})
+			p, err := solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin")})
 			if err != nil {
 				out = append(out, transport.NewUnavailable("tor", err))
 				continue
 			}
-			out = append(out, transport.NewTor(filepath.Join(d.dir, "tor"), p))
+			out = append(out, transport.NewTor(filepath.Join(dir, "tor"), p))
 		default:
-			d.log.Warn("unknown transport in config.json", "name", tc.Name)
+			log.Warn("unknown transport in config.json", "name", tc.Name)
 		}
 	}
 	return out
@@ -565,7 +597,7 @@ func (d *Daemon) Pair(ctx context.Context, link string) (kind string, person str
 		if d.Keyring.Person() != nil {
 			return "", "", errors.New("daemon: this device already belongs to a person")
 		}
-		if _, err := d.Sessions.Join(ctx, l); err != nil {
+		if _, err := d.Sessions.Join(ctx, l, d.cfg.DeviceName); err != nil {
 			return "", "", err
 		}
 		d.Host.Start(d.ctx)
@@ -584,6 +616,7 @@ func (d *Daemon) Pair(ctx context.Context, link string) (kind string, person str
 // Close stops everything, in reverse order, and waits for it.
 func (d *Daemon) Close() error {
 	d.cancel()
+	d.wg.Wait()
 	if d.uiSrv != nil {
 		_ = d.uiSrv.Close()
 	}

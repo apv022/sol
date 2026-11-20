@@ -57,6 +57,8 @@ type API interface {
 	Dial(ctx context.Context, req DialRequest) (net.Conn, error)
 	// PostInbox posts a notice or an approval request.
 	PostInbox(ctx context.Context, post InboxPost) (InboxResult, error)
+	// Inbox lists this app's inbox items, newest first, with their answers and results.
+	Inbox(ctx context.Context) ([]InboxItem, error)
 	// Activity returns the most recent activity log rows (limit 0 means the default).
 	Activity(ctx context.Context, limit int) ([]ActivityEntry, error)
 }

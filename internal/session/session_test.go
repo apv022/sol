@@ -242,9 +242,12 @@ func TestJoinAndRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := phone.m.Join(context.Background(), l)
+	s, err := phone.m.Join(context.Background(), l, "phone")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if b := mustBundle(t, alice.kr); len(b.Devices.Devices) != 2 || b.Devices.Devices[1].Name != "phone" {
+		t.Fatalf("joined device's name: %+v", b.Devices.Devices)
 	}
 	if !bytes.Equal(k2.Person(), alice.kr.Person()) {
 		t.Fatal("joined device did not adopt the person")
@@ -254,7 +257,7 @@ func TestJoinAndRemove(t *testing.T) {
 	}
 	// The join link is burned.
 	other, _ := identity.NewDevice(t.TempDir(), time.Now())
-	if _, err := newNode(t, other).m.Join(context.Background(), l); !errors.Is(err, wire.ErrRejected) {
+	if _, err := newNode(t, other).m.Join(context.Background(), l, ""); !errors.Is(err, wire.ErrRejected) {
 		t.Fatalf("second join: %v", err)
 	}
 
@@ -286,5 +289,39 @@ func TestNewestBundle(t *testing.T) {
 	want := mustBundle(t, alice.kr)
 	if b.Devices.Seq != want.Devices.Seq {
 		t.Fatalf("got list seq %d, want %d", b.Devices.Seq, want.Devices.Seq)
+	}
+}
+
+// TestRecover: a contact (and only for a person it knows) answers a recovery request with the
+// newest identity state it holds; a stranger's request is refused.
+func TestRecover(t *testing.T) {
+	alice, bob, carol := person(t, "alice"), person(t, "bob"), person(t, "carol")
+	pairNodes(t, alice, bob)
+	words, ok := alice.kr.PendingWords()
+	if !ok {
+		t.Fatal("no words")
+	}
+	entropy, err := identity.WordsToEntropy(words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := identity.RecoveryKey(entropy)
+	cl := transport.NewClearnet("127.0.0.1:0", "")
+	ctx := context.Background()
+	cl.Start(ctx)
+	defer cl.Stop()
+	ts := []transport.Transport{cl}
+	pc, dl, err := Recover(ctx, ts, bob.kr.Endpoints(), r)
+	want := mustBundle(t, alice.kr)
+	if err != nil || pc.Seq != want.Person.Seq || dl.Seq != want.Devices.Seq {
+		t.Fatalf("from a contact: %v (%d %d)", err, pc.Seq, dl.Seq)
+	}
+	// Alice's own device answers too.
+	if pc, _, err = Recover(ctx, ts, alice.kr.Endpoints(), r); err != nil || pc.Seq != want.Person.Seq {
+		t.Fatalf("from my own device: %v", err)
+	}
+	// Carol never paired with Alice: nothing, and nothing sent.
+	if _, _, err := Recover(ctx, ts, carol.kr.Endpoints(), r); !errors.Is(err, ErrNothingKnown) {
+		t.Fatalf("stranger: %v", err)
 	}
 }
