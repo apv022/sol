@@ -75,8 +75,8 @@ Status: `todo` · `doing` · `done`.
 | A1c | UI kit v2 to design/UI.md: tokens, Inter fallback font vendored, Apple-style components (shell, grouped lists, sheets, menus, segmented, toggles, squircle icons, widgets, dock), demo page; theming per UI.md "Themes" (token contract doc, 4 built-in themes, theme file loading + live swap in kit/sol.js, settings tokens: accent derivation, density, radius, glass, font); then restyle Files to it | done |
 | A2 | Files: the synced folder (design/apps/FILES.md): watch + scan, tree feed, blobs, conflict copies, keep-on-device vs online-only folders, share a subfolder, peers' shared folders, UI + actions | done |
 | A3 | Notes: Markdown editor over `.md` files in the synced folder (`Notes/`): live preview, `[[wiki links]]` + backlinks, tags, fast full-text search, checklists, images from the folder; phone-first; actions + UI | done |
-| A2b | Files: three-way merge for text files (line-based diff3 against the entry's `base`, stdlib Myers diff); conflict copy only for overlapping edits | todo |
-| A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | todo |
+| A2b | Files: three-way merge for text files (line-based diff3 against the entry's `base`, stdlib Myers diff); conflict copy only for overlapping edits | doing |
+| A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | parked |
 | A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
 | A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | todo |
