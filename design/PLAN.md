@@ -64,7 +64,8 @@ Status: `todo` · `doing` · `done`.
 | C4 | Feeds: store, signing, append/read, replication to own devices and sharers, catch-up, events stream | API.md §3, §5 | done |
 | C5 | Blobs over sessions: chunked fetch, Range, multi-source, pin, permission rule | API.md §4 | done |
 | C6 | App host: manifest, install, supervise, app tokens, app socket routing, per-app origins, `/_sol/` bridge | API.md §1, §9, §10 | done |
-| C7 | Actions registry, `sol do` with generated `--help`, activity log, Inbox + approvals, dial | API.md §6–8 | todo |
+| C7 | `sol do <app>.<action>` (args from flags/JSON, `--json`, `--dry-run`, generated `--help` from schemas), agent keys (`sol agent new/list/revoke`, certs per IDENTITY.md, `--as-agent`/`SOL_AGENT_KEY`), Inbox approvals end to end, `theme` events pushed (live swap), `sol backup words/confirm` + `sol restore`, join device names, an SDK method for GET /v1/inbox | API.md §6–8, IDENTITY.md | doing |
+| C6b | C6 follow-ups: peer app UIs (`<app>.<petname>.localhost`), my devices learn contacts' endpoints, Tor client auth, offline scenarios in the conformance suite, drop CSP `style-src 'unsafe-inline'` (apps use classes/CSSOM, not inline style attributes) | API.md §10, PROTOCOL.md | todo |
 | C8 | Admin API for the Sol app: people, pairing, devices, port sharing (services), settings | design/ADMIN.md | todo |
 
 ### Apps lane
@@ -79,7 +80,7 @@ Status: `todo` · `doing` · `done`.
 | A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | parked |
 | A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
-| A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | todo |
+| A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | doing |
 | A8 | Tasks: tasks and lists as feed records (LWW map per task), due dates, today/upcoming, reminders via Inbox, shared lists; export/import Markdown checklists | todo |
 | A9 | Calendar: events as feed records, month/week/agenda, invites to contacts; export/import `.ics` | todo |
 | A10 | Movies: video library, posters, resume, streaming to peers (transcoding decision first) | todo |
