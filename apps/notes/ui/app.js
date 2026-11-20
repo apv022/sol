@@ -12,6 +12,11 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* optional */ } },
 };
 
+// The list is local data: keep the last copy so the next start paints it at once.
+const CACHE = 'notes-cache';
+function readCache() { try { return JSON.parse(localStorage.getItem(CACHE) || 'null'); } catch { return null; } }
+function writeCache() { try { localStorage.setItem(CACHE, JSON.stringify({ notes: state.all.slice(0, 300), folders: state.folders, tags: state.tags })); } catch { /* optional */ } }
+
 const state = {
   rev: undefined, all: [], folders: [], tags: [],
   folder: null, tag: null, pinned: false, // filters
@@ -29,10 +34,17 @@ const stemOf = (p) => baseOf(p).replace(/\.md$/i, '');
 const joinp = (d, n) => (d ? d + '/' + n : n);
 const fail = (e) => toast(e?.message || String(e), { kind: 'error' });
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
+/** iOS Notes style: "9:23 PM" today, "Yesterday", a weekday within the week, then "Nov 3" / "Nov 3, 2025". */
 function fmtTime(ms) {
-  const d = new Date(ms), t = new Date();
-  return d.toDateString() === t.toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
+  const d = new Date(ms), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diff = Math.round((day(now) - day(d)) / 864e5);
+  if (diff <= 0) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (diff === 1) return 'Yesterday';
+  if (diff < 7) return d.toLocaleDateString([], { weekday: 'long' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 }
+const phoneQ = matchMedia('(max-width: 760px)');
 /** Resolves a relative url against the note's folder; null if it would leave Notes/. */
 function resolveRel(url, base) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('/') || url.startsWith('#')) return null;
@@ -63,14 +75,14 @@ function lookup(target) {
 
 async function refresh(force) {
   let r;
-  try { r = await call('notes.list', { since: force ? undefined : state.rev, limit: 50000 }); } catch (e) { if (force) fail(e); return false; }
+  try { r = await call('notes.list', { since: force ? undefined : state.rev, limit: 50000, snippets: true }); } catch (e) { if (force) fail(e); return false; }
   if (r.unchanged) return false;
   state.rev = r.rev; state.all = r.notes; state.folders = r.folders;
   state.titles = new Map();
   for (const n of [...r.notes].reverse()) { state.titles.set(n.title.toLowerCase(), n.path); }
   for (const n of [...r.notes].reverse()) { state.titles.set(stemOf(n.path).toLowerCase(), n.path); }
   try { state.tags = (await call('notes.tags', {})).tags; } catch { /* keep old */ }
-  drawFilters(); drawList();
+  drawFilters(); drawList(); writeCache();
   if (state.cur) await checkExternal();
   return true;
 }
@@ -94,21 +106,29 @@ function drawFilters() {
     ${state.tags.slice(0, 40).map((t) => chip('#' + t.tag, state.tag === t.tag, `data-f="tag" data-v="${esc(t.tag)}"`))}`);
 }
 
+/** The server's snippet is the first prose line as written; drop list, quote and heading markers and emphasis for a calm preview. */
+const plainSnip = (t) => (t || '').replace(/^\s*(?:[>#]+\s*|[-*+]\s+(?:\[[ xX]\]\s*)?|\d+[.)]\s+)+/, '').replace(/(\*\*|__|`)/g, '');
+const sunIcon = (name) => html`<sol-icon name="${name}"></sol-icon>`;
+function noteRow(n, snippetHTML) {
+  return html`<div data-item class="note" data-path="${n.path}" ${raw(cur(n.path))}>
+    <div class="line"><span class="row-title">${n.title}</span>${n.pinned ? html`<span class="pin" title="Pinned">${sunIcon('pin')}</span>` : ''}</div>
+    <div class="line sub"><span class="when">${fmtTime(n.mtime)}</span><span class="snip">${snippetHTML}</span></div>
+    <div class="line folder">${sunIcon('folder')}<span>${n.folder || 'Notes'}</span></div></div>`;
+}
 function drawList() {
   if (state.results) {
-    render($list, state.results.length ? html`${state.results.map((r) => html`<div data-item data-path="${r.path}" ${raw(cur(r.path))}>
-      <span class="row-title">${r.pinned ? '* ' : ''}${r.title}</span><span class="snip">${raw(renderInline(r.snippet || '', {}))}</span><small class="row-meta">${r.folder || 'Notes'}</small></div>`)}`
+    render($list, state.results.length ? html`${state.results.map((r) => noteRow(r, raw(renderInline(r.snippet || '', {}))))}`
       : html`<div slot="empty" class="empty"><h3>No matches</h3><p>Try fewer words or a prefix.</p></div>`);
     return;
   }
   const l = visible();
   const rows = l.slice(0, state.shown);
-  render($list, l.length ? html`${rows.map((n) => html`<div data-item data-path="${n.path}" ${raw(cur(n.path))}>
-    <span class="row-title">${n.pinned ? html`<span class="badge sun">Pinned</span> ` : ''}${n.title}</span>
-    <small class="row-meta">${fmtTime(n.mtime)}${n.folder ? ' · ' + n.folder : ''}${n.tags.length ? ' · ' + n.tags.map((t) => '#' + t).join(' ') : ''}</small></div>`)}
+  render($list, l.length ? html`${rows.map((n) => noteRow(n, plainSnip(n.snippet)))}
     ${l.length > rows.length ? html`<button class="more-row" type="button" data-more>Show more (${l.length - rows.length})</button>` : ''}`
     : html`<div slot="empty" class="empty"><sol-icon name="file"></sol-icon><h3>No notes here</h3><p>Tap + to write one.</p></div>`);
+  $('count').textContent = plural(l.length, 'Note');
 }
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
 const cur = (p) => (state.cur && state.cur.path === p ? 'aria-current="true"' : '');
 
 let searchSeq = 0;
@@ -143,7 +163,7 @@ $list.addEventListener('sol-select', (e) => { const p = e.detail?.dataset?.path;
 // ---------- opening, saving ----------
 
 function route() {
-  const m = /^#\/n\/(.+)$/.exec(location.hash);
+  const m = /^#(?:\/n\/|note=)(.+)$/.exec(location.hash);
   if (!m) return null;
   try { return decodeURIComponent(m[1]); } catch { return null; }
 }
@@ -191,7 +211,7 @@ function afterEdit() {
   const c = state.cur;
   const title = /^#[ \t]+(.+)$/m.exec($ta.value)?.[1] || stemOf(c.path);
   $('ed-title').textContent = title;
-  $('pin').textContent = c.pinned ? 'Unpin' : 'Pin';
+  $('pin').setAttribute('aria-pressed', String(!!c.pinned)); $('pin').setAttribute('aria-label', c.pinned ? 'Unpin' : 'Pin');
   setStatus(c.dirty ? 'Edited' : 'Saved');
 }
 function autogrow() { $ta.style.height = 'auto'; $ta.style.height = $ta.scrollHeight + 'px'; }
@@ -538,14 +558,15 @@ function confirmBox(title, body, okLabel) {
   });
 }
 
-$('new').addEventListener('click', async () => {
+for (const b of document.querySelectorAll('[data-new]')) b.addEventListener('click', newNote);
+async function newNote() {
   try {
     await flush();
     const r = await call('notes.create', { folder: state.folder ?? '', title: 'Untitled', text: '# \n\n' });
     await refresh(true);
     location.hash = '#/n/' + enc(r.path);
   } catch (e) { fail(e); }
-});
+}
 $('pin').addEventListener('click', async () => {
   const c = state.cur;
   if (!c) return;
@@ -594,4 +615,12 @@ $('theme').addEventListener('click', () => {
 setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
 window.addEventListener('focus', () => refresh(false));
 setPane(state.pane);
-refresh(true).then(() => { const p = route(); if (p) open(p); });
+const cached = readCache();
+if (cached) { state.all = cached.notes; state.folders = cached.folders; state.tags = cached.tags; drawFilters(); drawList(); }
+refresh(true).then(() => {
+  const p = route();
+  if (p) open(p);
+  else if (!phoneQ.matches && state.all.length) { history.replaceState(null, '', '#/n/' + enc(state.all[0].path)); open(state.all[0].path); } // desktop: the editor is never empty
+});
+// Rotating or resizing to desktop with nothing open: show the latest note.
+phoneQ.addEventListener('change', () => { if (!phoneQ.matches && !state.cur && state.all.length) location.hash = '#/n/' + enc(state.all[0].path); });

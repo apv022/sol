@@ -444,6 +444,8 @@ try {
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
   if (saved && typeof saved === 'object') applySettings(saved);
 } catch { /* a bad saved value is ignored */ }
+// ?theme=light|dark forces a scheme for this page view only (screenshots, bug reports); nothing is remembered.
+try { const q = new URLSearchParams(location.search).get('theme'); if (q === 'light' || q === 'dark') document.documentElement.setAttribute('data-theme', q); } catch { /* not in a page */ }
 try { if (location.hostname.endsWith('.localhost')) document.documentElement.setAttribute('data-app', location.hostname.split('.')[0]); } catch { /* not in a page */ }
 if (!document.querySelector('meta[name="sol-theme"][content="off"]')) loadTheme();
 

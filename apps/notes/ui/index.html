@@ -14,21 +14,22 @@
     <header class="side-head">
       <h1>Notes</h1>
       <button id="theme" class="ghost" type="button" aria-label="Toggle theme"><sol-icon name="moon"></sol-icon></button>
-      <button id="new" class="primary" type="button" aria-label="New note"><sol-icon name="plus"></sol-icon></button>
+      <button id="new" class="plain icon-btn" type="button" aria-label="New note" data-new><sol-icon name="edit"></sol-icon></button>
     </header>
     <input id="q" type="search" placeholder="Search notes and #tags" aria-label="Search notes" autocomplete="off">
     <nav id="filters" class="chips" aria-label="Folders and tags"></nav>
     <sol-list id="list"></sol-list>
+    <footer id="listfoot" class="glass"><span id="count" class="muted"></span><button class="plain icon-btn" type="button" aria-label="New note" data-new><sol-icon name="edit"></sol-icon></button></footer>
   </aside>
   <main id="editorpane" aria-label="Note">
     <div id="empty" class="empty"><sol-icon name="file"></sol-icon><h3>No note open</h3><p>Pick a note, or tap + to write a new one.</p></div>
     <div id="ed" hidden>
       <header class="toolbar glass ed-head">
-        <button id="back" class="ghost" type="button" aria-label="Back to notes"><sol-icon name="back"></sol-icon></button>
+        <button id="back" class="plain" type="button" aria-label="Back to notes"><sol-icon name="back"></sol-icon><span>Notes</span></button>
         <div class="grow ed-title"><strong id="ed-title"></strong><small id="status" class="muted"></small></div>
         <div class="segmented" id="seg" role="group" aria-label="View"><button type="button" data-pane="edit">Edit</button><button type="button" data-pane="preview">Preview</button></div>
-        <button id="pin" class="ghost" type="button"></button>
-        <button id="more" class="ghost" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button>
+        <button id="pin" class="ghost icon-btn" type="button" aria-label="Pin" aria-pressed="false"><sol-icon name="pin"></sol-icon></button>
+        <button id="more" class="ghost icon-btn" type="button" aria-label="More"><sol-icon name="more"></sol-icon></button>
       </header>
       <div id="banner" class="banner" role="alert" hidden></div>
       <div id="toolbar" class="tools glass" role="toolbar" aria-label="Formatting">

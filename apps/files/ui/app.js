@@ -2,7 +2,7 @@
 // feeds or blobs directly, except to hand an uploaded file to the daemon (putBlob) and then ask
 // the app to write it (files.write). Every API value reaches the DOM through html`` (escaped).
 import { call, events, putBlob, people, html, raw, render } from '/sol.js';
-import { toast, setTheme } from '/kit/kit.js';
+import { toast, setTheme, showMenu, contextMenu } from '/kit/kit.js';
 
 const $main = document.getElementById('main');
 const $shell = document.getElementById('shell');
@@ -15,7 +15,7 @@ const store = {
 
 const state = {
   route: { kind: 'dir', path: '' },
-  view: store.get('files-view', 'list'),
+  view: new URLSearchParams(location.search).get('view') || store.get('files-view', 'list'),
   entries: [],
   here: null, // stat of the current folder
   sel: new Set(),
@@ -23,8 +23,11 @@ const state = {
   status: null,
   conflicts: [],
   error: '',
-  loading: true,
+  ready: false, // the folder's listing has arrived (or came from the local cache)
+  selecting: false, // explicit select mode, like iOS "Select"
+  counts: new Map(), // folder path -> number of items (filled lazily from files.list)
 };
+const phoneQ = matchMedia('(max-width: 760px)');
 
 // ---------- helpers ----------
 
@@ -41,13 +44,17 @@ function fmtSize(n) {
   while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
   return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + ' ' + u[i];
 }
+const clock = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+/** Relative, human dates: "Today 9:21", "Yesterday 9:21", "Mon 9:21", then "Nov 3" or "Nov 3, 2025". */
 function fmtTime(ms) {
   if (!ms) return '';
-  const d = new Date(ms);
-  const today = new Date();
-  return d.toDateString() === today.toDateString()
-    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+  const d = new Date(ms), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diff = Math.round((day(now) - day(d)) / 864e5);
+  if (diff === 0) return 'Today ' + clock(d);
+  if (diff === 1) return 'Yesterday ' + clock(d);
+  if (diff > 1 && diff < 7) return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + clock(d);
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
 }
 const ext = (n) => (n.includes('.') ? n.slice(n.lastIndexOf('.') + 1).toLowerCase() : '');
 const KINDS = {
@@ -77,9 +84,23 @@ function parseHash() {
 const go = (p) => { location.hash = '#/' + p.split('/').map(encodeURIComponent).join('/'); };
 
 let loadSeq = 0;
+// The last listing per folder is kept locally so the folder paints at once on the next visit;
+// the live answer replaces it a moment later (this is local data, so no skeletons).
+const cacheKey = (p) => 'files-cache:' + p;
+function readCache(p) { try { return JSON.parse(localStorage.getItem(cacheKey(p)) || 'null'); } catch { return null; } }
+function writeCache(p, entries, here) { try { localStorage.setItem(cacheKey(p), JSON.stringify({ entries: entries.slice(0, 300), here })); } catch { /* optional */ } }
+
 async function load() {
   const seq = ++loadSeq;
   const r = state.route = parseHash();
+  if (r.kind === 'dir' && state.here?.path !== r.path) {
+    const c = readCache(r.path);
+    state.entries = c ? c.entries : [];
+    state.here = c ? c.here : null;
+    state.error = '';
+    state.ready = !!c;
+    draw();
+  }
   try {
     const [status, c] = await Promise.all([call('files.status', {}), call('files.conflicts', {})]);
     if (seq !== loadSeq) return;
@@ -91,6 +112,7 @@ async function load() {
       state.entries = list.entries;
       state.here = here;
       state.error = '';
+      writeCache(r.path, list.entries, here);
     } else if (r.kind === 'search') {
       state.query = r.q;
       state.entries = (await call('files.search', { query: r.q })).results;
@@ -104,8 +126,19 @@ async function load() {
     state.error = e.code === 'not_found' ? 'That folder is not here (any more).' : e.message;
     state.entries = [];
   }
-  state.loading = false;
+  state.ready = true;
   draw();
+  countFolders(seq);
+}
+
+// Folder item counts for the subtitle, asked lazily (one local list call per visible folder).
+async function countFolders(seq) {
+  const todo = state.entries.filter((e) => e.type === 'dir' && !e.virtual).slice(0, 40);
+  if (!todo.length) return;
+  await Promise.all(todo.map(async (e) => {
+    try { state.counts.set(e.path, (await call('files.list', { path: e.path })).entries.length); } catch { /* no count */ }
+  }));
+  if (seq === loadSeq) draw();
 }
 
 let timer = null;
@@ -113,32 +146,49 @@ const soon = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
 
 // ---------- drawing ----------
 
+const hashOf = (p) => '#/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+
+// Ancestors only: the current folder is the title. On a phone this is a single "back" link.
 function crumbs(path) {
   const parts = path ? path.split('/') : [];
+  if (!parts.length) return '';
   let acc = '';
-  const items = parts.map((p, i) => {
-    acc = join(acc, p);
-    const here = i === parts.length - 1;
-    return html`<sol-icon name="chevron"></sol-icon>${here
-      ? html`<span aria-current="page">${p}</span>`
-      : html`<a href="#/${acc.split('/').map(encodeURIComponent).join('/')}">${p}</a>`}`;
-  });
-  return html`<nav class="crumbs" aria-label="Folder path"><a href="#/">My files</a>${items}</nav>`;
+  const anc = [{ name: 'My files', path: '' }];
+  for (const p of parts.slice(0, -1)) { acc = join(acc, p); anc.push({ name: p, path: acc }); }
+  const last = anc[anc.length - 1];
+  return html`<nav class="crumbs" aria-label="Folder path">
+    <a class="backlink" href="${hashOf(last.path)}"><sol-icon name="back"></sol-icon>${last.name}</a>
+    <span class="trail">${anc.map((a) => html`<a href="${hashOf(a.path)}">${a.name}</a><sol-icon name="chevron"></sol-icon>`)}</span></nav>`;
 }
 
 function badges(e) {
   return html`${e.conflict ? html`<span class="badge warn">${e.copy ? 'Conflict copy' : 'Conflict'}</span>` : ''}${e.shared ? html`<span class="badge sun">Shared</span>` : ''}${e.read_only && !e.virtual ? html`<span class="badge">Read only</span>` : ''}${e.type === 'file' && !e.local ? html`<span class="badge" title="Not stored on this device; opened on demand">Online only</span>` : ''}`;
 }
 
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+function sizeCell(e) {
+  if (e.type === 'dir') return state.counts.has(e.path) ? plural(state.counts.get(e.path), 'item') : '';
+  return fmtSize(e.size);
+}
+function subLine(e) {
+  const when = e.type === 'file' ? fmtTime(e.mtime) : '';
+  return [when, sizeCell(e)].filter(Boolean).join(' · ');
+}
+const pickBox = (e, sel) => (state.selecting
+  ? html`<input type="checkbox" class="pick" data-act="pick" data-path="${e.path}" aria-label="Select ${e.name}" ${raw(sel ? 'checked' : '')} ${raw(e.virtual ? 'disabled' : '')}>` : '');
+const glyph = (e, k) => (k === 'image' && !e.virtual
+  ? html`<img class="thumb" loading="lazy" alt="" src="${rawURL(e.path)}">`
+  : html`<sol-icon class="ico ${e.type}" name="${ICON[k]}"></sol-icon>`);
+
 function listRow(e) {
   const sel = state.sel.has(e.path);
   const k = kindOf(e);
-  return html`<div data-item class="${sel ? 'sel' : ''}" data-path="${e.path}" data-type="${e.type}">
-    <input type="checkbox" class="pick" data-act="pick" data-path="${e.path}" aria-label="Select ${e.name}" ${raw(sel ? 'checked' : '')} ${raw(e.virtual ? 'disabled' : '')}>
-    <sol-icon class="ico ${e.type}" name="${ICON[k]}"></sol-icon>
-    <div class="name"><span class="title">${e.name}</span>${badges(e)}</div>
-    <span class="cell-size">${e.type === 'file' ? fmtSize(e.size) : ''}</span>
+  return html`<div data-item class="frow ${sel ? 'sel' : ''}" ${raw(e.type === 'dir' && !state.selecting ? 'data-chevron' : '')} data-path="${e.path}" data-type="${e.type}">
+    ${pickBox(e, sel)}
+    <span class="glyph">${glyph(e, k)}</span>
+    <div class="grow name"><div class="line"><span class="title">${e.name}</span>${badges(e)}</div><span class="row-sub">${subLine(e)}</span></div>
     <span class="cell-mtime">${e.type === 'file' ? fmtTime(e.mtime) : ''}</span>
+    <span class="cell-size">${sizeCell(e)}</span>
   </div>`;
 }
 
@@ -146,55 +196,91 @@ function tile(e) {
   const sel = state.sel.has(e.path);
   const k = kindOf(e);
   return html`<div class="tile ${sel ? 'sel' : ''}" data-item data-path="${e.path}" data-type="${e.type}" tabindex="0">
-    <input type="checkbox" class="pick" data-act="pick" data-path="${e.path}" aria-label="Select ${e.name}" ${raw(sel ? 'checked' : '')} ${raw(e.virtual ? 'disabled' : '')}>
-    ${k === 'image' ? html`<img class="thumb" loading="lazy" alt="" src="${rawURL(e.path)}">` : html`<sol-icon class="ico ${e.type}" name="${ICON[k]}"></sol-icon>`}
+    ${pickBox(e, sel)}
+    <span class="art">${glyph(e, k)}</span>
     <span class="title">${e.name}</span>
-    <small>${badges(e)}</small>
+    <small>${e.type === 'dir' ? sizeCell(e) : subLine(e)}</small>
   </div>`;
 }
 
-function toolbar() {
-  const n = state.sel.size;
-  const one = n === 1 ? state.entries.find((e) => e.path === [...state.sel][0]) : null;
-  const here = state.here;
-  const canWrite = state.route.kind === 'dir' && !isVirtual(state.route.path) && !(here && here.read_only);
-  const btn = (act, icon, label, cls = '') => html`<button type="button" class="${cls}" data-act="${act}" title="${label}"><sol-icon name="${icon}"></sol-icon><span class="lbl">${label}</span></button>`;
-  if (n > 0) {
-    return html`<div class="toolbar" role="toolbar" aria-label="Selection">
-      <span class="sel-info">${n} selected</span><span class="grow"></span>
-      ${one && one.type === 'file' ? btn('download', 'download', 'Download') : ''}
-      ${one && !one.read_only ? btn('rename', 'edit', 'Rename') : ''}
-      ${one && one.type === 'dir' && !one.virtual && !one.path.startsWith('Shared/') ? btn('share', 'share', 'Share') : ''}
-      ${!state.entries.filter((e) => state.sel.has(e.path)).some((e) => e.read_only) ? btn('move', 'folder', 'Move') : ''}
-      ${btn('copy', 'copy', 'Copy')}
-      ${!state.entries.filter((e) => state.sel.has(e.path)).some((e) => e.read_only) ? btn('delete', 'trash', 'Delete', 'danger') : ''}
-      ${btn('clear', 'close', 'Clear')}
-    </div>`;
-  }
-  return html`<div class="toolbar" role="toolbar" aria-label="Folder">
-    ${canWrite ? html`<button class="primary" type="button" data-act="upload"><sol-icon name="upload"></sol-icon><span class="lbl">Upload</span></button>
-      ${btn('mkdir', 'plus', 'New folder')}` : ''}
-    <input type="file" id="picker" multiple hidden>
-    <span class="grow"></span>
-    ${here && state.route.path ? btn('keep', here.kept ? 'check' : 'download', here.kept ? 'On this device' : 'Online only') : ''}
-    ${btn('view', state.view === 'list' ? 'menu' : 'folder', state.view === 'list' ? 'Grid' : 'List')}
-  </div>`;
+const writable = (es) => !es.some((e) => e.read_only);
+/** What can be done with these entries: the one list behind the selection bar and context menus. */
+function entryActions(es) {
+  const one = es.length === 1 ? es[0] : null;
+  const w = writable(es);
+  return [
+    one && one.type === 'file' && { act: 'download', icon: 'download', label: 'Download' },
+    one && !one.read_only && !one.virtual && { act: 'rename', icon: 'edit', label: 'Rename' },
+    one && one.type === 'dir' && !one.virtual && !one.path.startsWith('Shared/') && { act: 'share', icon: 'share', label: 'Share' },
+    w && { act: 'move', icon: 'folder', label: 'Move' },
+    { act: 'copy', icon: 'copy', label: 'Copy' },
+    w && { act: 'delete', icon: 'trash', label: 'Delete', danger: true },
+  ].filter(Boolean);
 }
+
+function selBar() {
+  const es = selected();
+  if (!state.selecting || !es.length) return '';
+  return html`<div class="selbar glass" role="toolbar" aria-label="Selection">${entryActions(es).map((a) => html`<button type="button" class="${a.danger ? 'danger' : 'ghost'}" data-act="${a.act}"><sol-icon name="${a.icon}"></sol-icon><span>${a.label}</span></button>`)}</div>`;
+}
+
+const canWriteHere = () => state.route.kind === 'dir' && !isVirtual(state.route.path) && !(state.here && state.here.read_only);
+
+function searchBox() {
+  return html`<input class="search" type="search" id="search" placeholder="Search" aria-label="Search names" value="${state.query}">`;
+}
+
+// The window's glass toolbar: view switch, search, + menu and ... menu (Select, keep offline, theme).
+function drawBar() {
+  const phone = phoneQ.matches;
+  const r = state.route;
+  if (state.selecting) {
+    render($shell.actions, html`<button type="button" class="plain" data-bar="done">Done</button>`);
+    return;
+  }
+  const menuBtn = (id, icon, label) => html`<button type="button" class="ghost icon-btn" data-bar="${id}" aria-label="${label}" aria-haspopup="menu"><sol-icon name="${icon}"></sol-icon></button>`;
+  render($shell.actions, html`
+    ${phone ? '' : html`<span class="bar-pill">${syncPill()}</span>
+      <div class="segmented" role="group" aria-label="View"><button type="button" class="icon-btn" data-bar="list" aria-label="List" aria-pressed="${state.view === 'list'}"><sol-icon name="list"></sol-icon></button><button type="button" class="icon-btn" data-bar="grid" aria-label="Grid" aria-pressed="${state.view === 'grid'}"><sol-icon name="grid"></sol-icon></button></div>
+      ${r.kind === 'conflicts' || r.kind === 'sync' ? '' : searchBox()}`}
+    ${canWriteHere() ? menuBtn('add', 'plus', 'Add') : ''}
+    ${r.kind === 'dir' || r.kind === 'search' ? menuBtn('more', 'more', 'More') : ''}`);
+}
+
+const barMenus = {
+  add: (el) => showMenu([
+    { label: 'Upload files', icon: 'upload', onSelect: () => actions.upload() },
+    { label: 'New folder', icon: 'folder-plus', onSelect: () => actions.mkdir() },
+  ], { anchor: el, placement: 'bottom-end' }),
+  more(el) {
+    const here = state.here;
+    showMenu([
+      { label: 'Select', icon: 'check', disabled: !state.entries.length, onSelect: () => { state.selecting = true; draw(); } },
+      { label: state.view === 'list' ? 'View as grid' : 'View as list', icon: state.view === 'list' ? 'grid' : 'list', onSelect: () => actions.view() },
+      here && state.route.path && { label: here.kept ? 'Online only' : 'Keep on this device', icon: here.kept ? 'check' : 'download', onSelect: () => actions.keep() },
+      { separator: true },
+      { label: 'Theme', icon: 'moon', onSelect: toggleTheme },
+    ].filter(Boolean), { anchor: el, placement: 'bottom-end' });
+  },
+};
 
 function dirView() {
   const r = state.route;
+  const sel = state.selecting ? state.sel.size : 0;
+  const title = state.selecting ? (sel ? sel + ' selected' : 'Select items') : r.path ? r.path.split('/').pop() : 'My files';
   const empty = r.path === 'Shared'
     ? html`<div slot="empty" class="empty"><sol-icon name="people"></sol-icon><h3>Nothing shared with you yet</h3><p>Folders people share with you show up here, online only until you keep them on this device.</p></div>`
-    : html`<div slot="empty" class="empty"><sol-icon name="folder"></sol-icon><h3>This folder is empty</h3><p>${isVirtual(r.path) ? 'Open one of the folders inside.' : 'Drop files here or use Upload.'}</p></div>`;
+    : html`<div slot="empty" class="empty"><sol-icon name="folder"></sol-icon><h3>This folder is empty</h3><p>${isVirtual(r.path) ? 'Open one of the folders inside.' : 'Drop files here or tap + to add some.'}</p></div>`;
   const rows = state.entries.map(state.view === 'list' ? listRow : tile);
-  return html`${crumbs(r.path)}
-    <div class="head"><h1 class="large-title">${r.path ? r.path.split('/').pop() : 'My files'}</h1>${syncPill()}
-      <input class="search" type="search" id="search" placeholder="Search names" aria-label="Search names" value="${state.query}"></div>
-    ${toolbar()}
+  const none = state.ready ? empty : '';
+  return html`${state.selecting ? '' : crumbs(r.path)}
+    <div class="head"><h1 class="large-title">${title}</h1>${phoneQ.matches ? syncPill() : ''}</div>
+    ${phoneQ.matches ? html`<div class="searchrow">${searchBox()}</div>` : ''}
     ${state.error ? html`<div class="card empty"><sol-icon name="alert"></sol-icon><h3>${state.error}</h3></div>` :
       state.view === 'list'
-        ? html`<sol-list class="files" aria-label="Files">${rows}${empty}</sol-list>`
-        : html`<div class="grid" role="list">${rows}</div>${state.entries.length ? '' : empty}`}`;
+        ? html`<sol-list class="files" aria-label="Files">${rows}${none}</sol-list>`
+        : html`<div class="grid" role="list">${rows}</div>${state.entries.length ? '' : none}`}
+    ${selBar()}`;
 }
 
 function syncPill() {
@@ -206,15 +292,14 @@ function syncPill() {
 
 function searchView() {
   const rows = state.entries.map(listRow);
-  return html`<div class="head"><h1 class="large-title">Search</h1>${syncPill()}
-    <input class="search" type="search" id="search" value="${state.query}" aria-label="Search names"></div>
-    ${toolbar()}
+  return html`<div class="head"><h1 class="large-title">Search</h1>${phoneQ.matches ? syncPill() : ''}</div>
+    ${phoneQ.matches ? html`<div class="searchrow">${searchBox()}</div>` : ''}
     <sol-list class="files">${rows}<div slot="empty" class="empty"><sol-icon name="search"></sol-icon><h3>No match</h3><p>Nothing has a name like that.</p></div></sol-list>`;
 }
 
 function conflictsView() {
   const cs = state.conflicts;
-  return html`<div class="head"><h1 class="large-title">Conflicts</h1>${syncPill()}</div>
+  return html`<div class="head"><h1 class="large-title">Conflicts</h1>${phoneQ.matches ? syncPill() : ''}</div>
     <p class="muted">When two of your devices (or you and someone you share with) edit the same file at the same time, both versions are kept. Choose what to keep.</p>
     ${cs.length === 0 ? html`<div class="card empty"><sol-icon name="check"></sol-icon><h3>No conflicts</h3><p>Every file has one version everywhere.</p></div>` :
       cs.map((c) => html`<div class="card conflict"><div><h3>${c.path}</h3></div>
@@ -231,7 +316,7 @@ function conflictsView() {
 function syncView() {
   const s = state.status;
   if (!s) return html`<div class="skeleton" style="height:10rem"></div>`;
-  return html`<div class="head"><h1 class="large-title">Sync</h1>${syncPill()}</div>
+  return html`<div class="head"><h1 class="large-title">Sync</h1>${phoneQ.matches ? syncPill() : ''}</div>
     <h2>Devices</h2>
     <sol-list>${s.devices.map((d) => html`<div class="dev" data-item><sol-icon name="${d.anchor ? 'device' : 'phone'}"></sol-icon>
       <div class="grow"><div class="title">${d.name}${d.self ? ' (this device)' : ''}</div>
@@ -252,6 +337,8 @@ function draw() {
   $shell.setCurrent(r.kind === 'conflicts' ? 'conflicts' : r.kind === 'sync' ? 'sync' : r.kind === 'dir' && (r.path === 'Shared' || r.path.startsWith('Shared/')) ? 'shared' : 'files');
   const active = document.activeElement;
   const hadSearch = active && active.id === 'search';
+  if (!state.entries.length && state.selecting) state.selecting = false;
+  drawBar();
   render($main, r.kind === 'conflicts' ? conflictsView() : r.kind === 'sync' ? syncView() : r.kind === 'search' ? searchView() : dirView());
   if (hadSearch) { const s = document.getElementById('search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
 }
@@ -400,7 +487,8 @@ const actions = {
     if (type === 'dir') { state.sel.clear(); go(p); } else preview(p);
   },
   pick(p, el) { if (el.checked) state.sel.add(p); else state.sel.delete(p); draw(); },
-  clear() { state.sel.clear(); draw(); },
+  toggle(p) { if (state.sel.has(p)) state.sel.delete(p); else state.sel.add(p); draw(); },
+  clear() { state.sel.clear(); state.selecting = false; draw(); },
   upload() { document.getElementById('picker').click(); },
   view() { state.view = state.view === 'list' ? 'grid' : 'list'; store.set('files-view', state.view); draw(); },
   async mkdir() {
@@ -444,30 +532,59 @@ const actions = {
   preview(p) { preview(p); },
 };
 
+const rowOf = (ev) => ev.target.closest('[data-item][data-path]');
 $main.addEventListener('click', (ev) => {
   const t = ev.target.closest('[data-act]');
   if (t && actions[t.dataset.act]) {
     if (t.dataset.act === 'pick') { actions.pick(t.dataset.path, t); return; }
     ev.preventDefault();
-    actions[t.dataset.act](t.dataset.path, t);
+    const p = t.dataset.path;
+    const r = actions[t.dataset.act](p, t);
+    // Actions on the selection leave select mode once they have read it.
+    if (t.closest('.selbar')) { state.selecting = false; Promise.resolve(r).finally(() => { state.sel.clear(); draw(); }); }
     return;
   }
   if (ev.target.closest('a, button, input, select, label')) return;
-  const row = ev.target.closest('[data-item][data-path]');
-  if (row) actions.open(row.dataset.path, row);
+  const row = rowOf(ev);
+  if (!row) return;
+  const e = state.entries.find((x) => x.path === row.dataset.path);
+  if (state.selecting || ev.ctrlKey || ev.metaKey) {
+    if (e && !e.virtual) { state.selecting = true; actions.toggle(row.dataset.path); }
+    return;
+  }
+  actions.open(row.dataset.path, row);
 });
-$main.addEventListener('change', (ev) => {
-  if (ev.target.id === 'picker') { upload([...ev.target.files]); ev.target.value = ''; }
+document.getElementById('shell').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-bar]');
+  if (!b) return;
+  const id = b.dataset.bar;
+  if (id === 'done') actions.clear();
+  else if (id === 'list' || id === 'grid') { if (state.view !== id) actions.view(); }
+  else barMenus[id]?.(b);
 });
+// Right-click (desktop) or long-press (touch) on a row: the same actions as the selection bar.
+contextMenu($main, (ev) => {
+  const row = rowOf(ev);
+  const e = row && state.entries.find((x) => x.path === row.dataset.path);
+  if (!e || e.virtual) return [];
+  const items = [{ label: e.type === 'dir' ? 'Open' : 'Preview', icon: 'eye', onSelect: () => actions.open(e.path, row) }];
+  const run = (act) => () => { state.sel = new Set([e.path]); const r = actions[act](e.path, row); state.sel.clear(); Promise.resolve(r).finally(draw); };
+  for (const a of entryActions([e])) items.push({ label: a.label, icon: a.icon, danger: a.danger, onSelect: run(a.act) });
+  items.push({ separator: true }, { label: 'Select', icon: 'check', onSelect: () => { state.selecting = true; state.sel = new Set([e.path]); draw(); } });
+  return items;
+});
+document.getElementById('picker').addEventListener('change', (ev) => { upload([...ev.target.files]); ev.target.value = ''; });
+$shell.addEventListener('input', (ev) => { if (ev.target.id === 'search') searchInput(ev.target); });
 let searchTimer = null;
-$main.addEventListener('input', (ev) => {
-  if (ev.target.id !== 'search') return;
-  const q = ev.target.value.trim();
-  state.query = ev.target.value;
+$main.addEventListener('input', (ev) => { if (ev.target.id === 'search') searchInput(ev.target); });
+function searchInput(input) {
+  const q = input.value.trim();
+  state.query = input.value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { location.hash = q ? '#!search=' + encodeURIComponent(q) : '#/'; }, 250);
-});
+}
 document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && state.selecting && !document.querySelector('sol-dialog[open], .menu')) actions.clear();
   if (ev.key === 'Delete' && state.sel.size && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector('sol-dialog')) actions.delete();
 });
 
@@ -485,11 +602,15 @@ document.addEventListener('drop', async (e) => {
   try { upload(await collect(e.dataTransfer)); } catch (err) { fail(err); }
 });
 
-document.getElementById('theme').addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme');
-  setTheme(cur === 'dark' ? 'light' : 'dark');
-});
+function toggleTheme() {
+  const root = document.documentElement;
+  const dark = root.getAttribute('data-theme') === 'dark' || (!root.hasAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
+  setTheme(dark ? 'light' : 'dark');
+}
+document.getElementById('theme').addEventListener('click', toggleTheme);
+phoneQ.addEventListener('change', draw);
 
-window.addEventListener('hashchange', () => { state.sel.clear(); load(); });
+window.addEventListener('hashchange', () => { state.sel.clear(); state.selecting = false; load(); });
 events({ people: true }, soon, () => { state.status = state.status && { ...state.status, state: 'offline' }; draw(); });
-load();
+// Hold the page's load event for the first answer (capped), so the first paint is the real list.
+await Promise.race([load(), new Promise((r) => setTimeout(r, 3000))]);

@@ -3,11 +3,19 @@
 #side { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); box-shadow: inset calc(-1 * var(--hairline)) 0 0 var(--separator); overflow: hidden; min-height: 0; }
 .side-head { display: flex; align-items: center; gap: var(--space-2); }
 .side-head h1 { flex: 1; margin: 0; }
-#list { flex: 1; overflow-y: auto; min-height: 0; }
-#list > [data-item] { display: block; padding-block: var(--space-2); }
-.row-meta, .snip { display: block; color: var(--label-2); font-size: var(--fs-subhead); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-meta .tag { margin-right: var(--space-2); }
-#list > [data-item][aria-current="true"] .row-meta, #list > [data-item][aria-current="true"] .snip { color: inherit; opacity: .72; }
+#list { flex: 0 1 auto; overflow-y: auto; min-height: 0; }
+#list > [data-item] { display: grid; gap: 1px; align-content: center; padding: var(--space-2) var(--row-pad); --sep-inset: var(--row-pad); }
+#list .line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+#list .row-title { flex: 1; min-width: 0; }
+#list .pin { display: inline-flex; color: var(--tint-text); }
+#list .pin sol-icon { --size: 13px; }
+#list .sub { color: var(--label-2); font-size: var(--fs-subhead); line-height: var(--lh-subhead); }
+#list .when { flex: none; color: var(--label); opacity: .75; }
+#list .snip { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--label-2); font-size: inherit; }
+#list .folder { color: var(--label-2); font-size: var(--fs-footnote); line-height: var(--lh-footnote); }
+#list .folder sol-icon { --size: 12px; }
+#list > [data-item][aria-current="true"] :is(.when, .snip, .folder, .pin) { color: inherit; opacity: .8; }
+#listfoot { display: none; }
 .chips { flex: none; padding-bottom: var(--space-1); }
 .more-row { width: 100%; margin-top: var(--space-2); }
 
@@ -16,8 +24,11 @@
 #empty { margin: auto; }
 .ed-head { flex-wrap: nowrap; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); box-shadow: 0 var(--hairline) 0 var(--separator); }
 .ed-title { display: grid; min-width: 0; }
+.ed-title small { font-size: var(--fs-footnote); }
 .ed-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#back { display: none; }
+#back { display: none; padding: 0 var(--space-2) 0 0; font-size: var(--fs-body); }
+#back sol-icon { --size: 22px; }
+#pin[aria-pressed="true"] { color: var(--tint-text); }
 .tools { display: flex; gap: var(--space-1); padding: var(--space-1) var(--space-3); box-shadow: 0 var(--hairline) 0 var(--separator); overflow-x: auto; }
 .tools button { background: none; flex: none; }
 #banner { border-radius: 0; }
@@ -62,6 +73,18 @@
   .notes { grid-template-columns: 1fr; }
   #side, #editorpane { grid-area: 1 / 1; }
   .notes[data-view="list"] #editorpane, .notes[data-view="edit"] #side { display: none; }
+  #side { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; padding: env(safe-area-inset-top) var(--space-4) calc(var(--tab-h) + env(safe-area-inset-bottom) + var(--space-3)); gap: var(--space-2); }
+  .side-head { min-height: var(--bar-h); align-items: flex-end; padding-top: var(--space-5); }
+  .side-head h1 { font-size: var(--fs-large-title); line-height: var(--lh-large-title); letter-spacing: var(--tr-large-title); }
+  .side-head [data-new] { display: none; }
+  #list > [data-item] { --sep-inset: var(--row-pad); }
+  #listfoot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: center; min-height: calc(var(--tab-h) + env(safe-area-inset-bottom)); padding: 0 var(--space-4) env(safe-area-inset-bottom); box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator); }
+  #listfoot .muted { font-size: var(--fs-footnote); }
+  #listfoot [data-new] { position: absolute; right: var(--space-3); top: calc((var(--tab-h) - var(--control-h)) / 2); color: var(--tint-text); }
+  #listfoot sol-icon { --size: 24px; }
   #back { display: inline-flex; }
-  .side-head h1 { font-size: var(--fs-large-title); line-height: var(--lh-large-title); }
+  .ed-head { padding-top: calc(var(--space-2) + env(safe-area-inset-top)); }
+  .ed-title { visibility: hidden; }
+  .hl-wrap { padding: var(--space-4); }
 }
+.backlinks button strong { display: block; }
