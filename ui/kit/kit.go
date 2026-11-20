@@ -8,5 +8,5 @@ import "embed"
 
 // FS holds tokens.css, kit.css, kit.js, icons.js, demo.html, TOKENS.md, fonts/ and themes/.
 //
-//go:embed tokens.css kit.css kit.js icons.js demo.html TOKENS.md fonts themes
+//go:embed tokens.css kit.css kit.js icons.js qr.js testing.js demo.html TOKENS.md fonts themes vendor
 var FS embed.FS
