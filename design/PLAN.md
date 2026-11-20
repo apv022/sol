@@ -80,7 +80,7 @@ Status: `todo` · `doing` · `done`.
 | A4 | Music: index audio files (tags from MP3/FLAC/Ogg/M4A, cover art) in your folder and peers' shared music folders, player UI with queue, streaming with seek | parked |
 | A5 | Sol app (`apps/home`): people, devices, apps grid, Inbox, pairing with QR, settings | todo |
 | A6 | Agent: providers, tool loop, Sol actions as tools, coding tools, sub-agents, loops/schedules, approvals, CLI/TUI + chat UI | todo |
-| A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | doing |
+| A7 | Android shell: build `sol` for arm64/x86_64, WebView on the Sol app, notifications, share target; test on the emulator | done |
 | A8 | Tasks: tasks and lists as feed records (LWW map per task), due dates, today/upcoming, reminders via Inbox, shared lists; export/import Markdown checklists | todo |
 | A9 | Calendar: events as feed records, month/week/agenda, invites to contacts; export/import `.ics` | todo |
 | A10 | Movies: video library, posters, resume, streaming to peers (transcoding decision first) | todo |

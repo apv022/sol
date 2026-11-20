@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Sol</string>
+    <string name="notif_channel">Sol node</string>
+</resources>
