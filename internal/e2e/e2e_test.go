@@ -9,11 +9,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/pairing"
+	"github.com/apv022/sol/internal/replicate"
 	"github.com/apv022/sol/internal/session"
 	"github.com/apv022/sol/internal/transport"
 )
@@ -21,19 +24,30 @@ import (
 func TestMain(m *testing.M) {
 	session.RedialMin = 20 * time.Millisecond
 	session.RedialMax = 200 * time.Millisecond
+	replicate.RetryMin = 20 * time.Millisecond
+	replicate.RetryMax = 200 * time.Millisecond
 	m.Run()
 }
 
-// daemon is one device: keyring, contacts, tokens, a clearnet transport
-// publishing the session manager's listener.
+// daemon is one device: keyring, feed store with the contacts and shares
+// views, a replicator, and a session manager publishing over clearnet.
 type daemon struct {
-	t        *testing.T
-	kr       *identity.Keyring
-	contacts session.Contacts
-	tokens   *pairing.Tokens
+	t      *testing.T
+	kr     *identity.Keyring
+	dir    string // feed store, kept across restarts
+	tokens *pairing.Tokens
+	cache  *identity.Cache
+
+	store    *feeds.Store
+	contacts *feeds.Contacts
+	shares   *feeds.Shares
+	rep      *replicate.Replicator
 	cl       *transport.Clearnet
 	m        *session.Manager
 	addr     string // public clearnet address, stable across restarts
+
+	// evil, when set, serves /p/sync instead of the replicator.
+	evil atomic.Pointer[http.HandlerFunc]
 }
 
 func whoami(w http.ResponseWriter, r *http.Request) {
@@ -41,8 +55,8 @@ func whoami(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s %s", p.Relation, identity.ID(p.Device))
 }
 
-func newDaemon(t *testing.T, kr *identity.Keyring, contacts session.Contacts) *daemon {
-	d := &daemon{t: t, kr: kr, contacts: contacts, tokens: pairing.NewTokens()}
+func newDaemon(t *testing.T, kr *identity.Keyring) *daemon {
+	d := &daemon{t: t, kr: kr, dir: t.TempDir(), tokens: pairing.NewTokens()}
 	d.start("127.0.0.1:0")
 	if _, err := kr.SetEndpoints([]identity.Endpoint{{Transport: "clearnet", Address: d.addr}}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -51,7 +65,27 @@ func newDaemon(t *testing.T, kr *identity.Keyring, contacts session.Contacts) *d
 	return d
 }
 
+// start opens the store (if closed) and brings the network up.
 func (d *daemon) start(listen string) {
+	t := d.t
+	var err error
+	if d.store == nil {
+		d.cache = identity.NewCache() // in memory: a restart forgets it
+		d.store, err = feeds.Open(feeds.Config{Dir: d.dir, Self: d.kr, Lists: feeds.IdentityLists(d.kr, d.cache),
+			Log: slog.New(slog.DiscardHandler)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.contacts = feeds.NewContacts(d.store)
+		if d.shares, err = feeds.NewShares(d.store, d.contacts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.startNet(listen)
+}
+
+// startNet brings up the replicator, transport and session manager.
+func (d *daemon) startNet(listen string) {
 	t := d.t
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -62,22 +96,49 @@ func (d *daemon) start(listen string) {
 	if d.addr, err = d.cl.Publish(context.Background(), transport.Publication{ID: "node", Target: ln.Addr().String()}); err != nil {
 		t.Fatal(err)
 	}
-	d.m, err = session.New(session.Config{Keyring: d.kr, Contacts: d.contacts, Tokens: d.tokens,
-		Transports: []transport.Transport{d.cl}, Handler: http.HandlerFunc(whoami),
+	var m *session.Manager
+	rep, err := replicate.New(replicate.Config{Store: d.store, Shares: d.shares, Log: slog.New(slog.DiscardHandler),
+		Refresh: func(ctx context.Context, p ed25519.PublicKey) error { return m.Refresh(ctx, p) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mx := http.NewServeMux()
+	mx.HandleFunc("/whoami", whoami)
+	mx.HandleFunc(replicate.Path, func(w http.ResponseWriter, r *http.Request) {
+		if h := d.evil.Load(); h != nil {
+			(*h)(w, r)
+			return
+		}
+		rep.ServeHTTP(w, r)
+	})
+	m, err = session.New(session.Config{Keyring: d.kr, Cache: d.cache, Contacts: d.contacts, Tokens: d.tokens,
+		Transports: []transport.Transport{d.cl}, Handler: mx, OnSession: rep.Attach,
 		Log: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.m, d.rep = m, rep
 	go d.m.Serve(ln)
 }
 
-func (d *daemon) stop() {
+// stopNet takes the device offline; its store stays open.
+func (d *daemon) stopNet() {
 	d.m.Close()
+	d.rep.Close()
 	d.cl.Stop()
 }
 
-// restart kills the daemon's listener and sessions and brings it back on
-// the same address, with the same keyring and contacts but a fresh
+func (d *daemon) stop() {
+	if d.store == nil {
+		return
+	}
+	d.stopNet()
+	d.store.Close()
+	d.store = nil
+}
+
+// restart kills the daemon (network and store) and brings it back on the
+// same address, with the same keyring and data directory but a fresh
 // in-memory state.
 func (d *daemon) restart() {
 	d.stop()
@@ -147,11 +208,8 @@ func TestTwoPeopleThreeDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Alice's devices share one contacts store: it stands in for the
-	// contacts replication between own devices (a later ticket).
-	aliceContacts := session.NewMemContacts()
-	a1, a2 := newDaemon(t, ka1, aliceContacts), newDaemon(t, ka2, aliceContacts)
-	b := newDaemon(t, kb, session.NewMemContacts())
+	a1, a2 := newDaemon(t, ka1), newDaemon(t, ka2)
+	b := newDaemon(t, kb)
 
 	// 1. Alice's second device joins.
 	jl, err := a1.m.Invite(pairing.KindJoin)
@@ -196,7 +254,9 @@ func TestTwoPeopleThreeDevices(t *testing.T) {
 		t.Fatalf("alice sees bob as %q", got)
 	}
 
-	// Alice's other device reaches Bob too: Bob knows it from Alice's list.
+	// Alice's other device learns of Bob through her replicated contacts
+	// feed, and reaches him: Bob knows it from Alice's list.
+	eventually(t, "Bob in the phone's contacts", func() bool { return a2.contacts.IsContact(kb.Person()) })
 	a2.m.NoteEndpoints(kb.Endpoints())
 	s2b, err := a2.m.Connect(ctx, kb.Person(), b.dev())
 	if err != nil {

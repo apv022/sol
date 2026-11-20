@@ -84,7 +84,11 @@ type Config struct {
 	// Paths orders a device's endpoints for dialing. nil means the order of
 	// the record. The seam for C3b's ranking and probation.
 	Paths func(identity.EndpointRecord) []identity.Endpoint
-	Log   *slog.Logger
+	// OnSession, if set, is called (in its own goroutine) for every session
+	// that comes up and wins the tie-break, e.g. to start feed replication
+	// over it. It should return once the session is Done.
+	OnSession func(*Session)
+	Log       *slog.Logger
 }
 
 // Manager runs the sessions of one device. Safe for concurrent use.
@@ -519,6 +523,9 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 		m.unregister(s)
 	}()
 	m.log.Info("session up", "peer", short(peer.Device), "relation", peer.Relation, "caller", short(caller))
+	if m.cfg.OnSession != nil {
+		go m.cfg.OnSession(s)
+	}
 	return s
 }
 

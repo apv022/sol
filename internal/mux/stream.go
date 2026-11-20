@@ -31,7 +31,12 @@ type Stream struct {
 	closed     bool   // Close called: drop incoming data
 	reset      bool
 
-	sig  chan struct{} // wakes readers and writers on any change
+	// rsig and wsig wake a blocked reader and a blocked writer on any
+	// change. They are separate so a reader can never swallow the wake-up a
+	// writer waits for (net/http keeps a background Read on a connection
+	// while its handler writes).
+	rsig chan struct{}
+	wsig chan struct{}
 	rdl  deadline
 	wdl  deadline
 	once sync.Once // removal
@@ -39,7 +44,7 @@ type Stream struct {
 
 func newStream(s *Session, id uint32) *Stream {
 	return &Stream{s: s, id: id, recvWindow: InitialWindow, sendWindow: InitialWindow,
-		sig: make(chan struct{}, 1), rdl: makeDeadline(), wdl: makeDeadline()}
+		rsig: make(chan struct{}, 1), wsig: make(chan struct{}, 1), rdl: makeDeadline(), wdl: makeDeadline()}
 }
 
 // ID returns the stream ID.
@@ -50,7 +55,11 @@ func (st *Stream) Session() *Session { return st.s }
 
 func (st *Stream) notify() {
 	select {
-	case st.sig <- struct{}{}:
+	case st.rsig <- struct{}{}:
+	default:
+	}
+	select {
+	case st.wsig <- struct{}{}:
 	default:
 	}
 }
@@ -97,7 +106,7 @@ func (st *Stream) Read(p []byte) (int, error) {
 			return 0, nil
 		}
 		select {
-		case <-st.sig:
+		case <-st.rsig:
 		case <-st.rdl.wait():
 			return 0, errTimeout
 		case <-st.s.done:
@@ -126,7 +135,7 @@ func (st *Stream) Write(p []byte) (int, error) {
 			}
 			st.mu.Unlock()
 			select {
-			case <-st.sig:
+			case <-st.wsig:
 			case <-st.wdl.wait():
 				return total, errTimeout
 			case <-st.s.done:

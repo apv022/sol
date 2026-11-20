@@ -82,7 +82,7 @@ by apps. Apps see the result.
 
 ## 3. Feeds: synced, signed logs
 
-A feed is an append-only list of entries. The daemon signs each entry with the device's app key,
+A feed is an append-only list of entries. The daemon signs each entry with the device key (stamped with the app ID),
 stores it, pushes it to my other devices and to everyone the feed is shared with, and catches
 offline devices up later. Apps build their state by reading feeds (and CRDTs on top of them, in the
 SDK). **The daemon never interprets an entry's body.**

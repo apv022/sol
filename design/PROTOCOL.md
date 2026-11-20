@@ -152,6 +152,15 @@ from the owner (a fork, e.g. two devices appending offline) are both kept: feeds
 a person's device feeds ordered by `(unix_ms, device)`. This keeps every chain linear and
 fork-free without coordination.
 
+### `/p/sync` format (settled in C4)
+
+Request JSON: `{"feeds": {"<address>": {"<device>": <have seq>}}, "all": <bool>}` (`all` is used
+between my own devices: every feed). Response: newline-delimited JSON messages: `feed` (readable
+with mode, or no longer readable), `entry` (a signed entry; time in unix ms), then one `live`
+once the backlog is sent, then live `entry`/`feed` messages as they happen. Shares and contacts
+are themselves internal feeds (`sol/shares`, `sol/contacts`) replicated between my devices.
+Known gap: the list of what contacts share *with me* is not yet replicated between my devices.
+
 ## Blobs on the wire
 
 `GET /p/blobs/{hash}` with `Range`. Large blobs are fetched in 4 MiB ranges, in parallel from every

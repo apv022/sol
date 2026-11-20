@@ -434,3 +434,44 @@ func FuzzSession(f *testing.F) {
 		}
 	})
 }
+
+// TestWriteWhileBlockedRead is a regression test: a writer waiting for
+// window must wake on a grant even while another goroutine is blocked in
+// Read on the same stream (as net/http's server does while a handler
+// streams a large response). A shared wake-up channel let the reader
+// swallow the grant and deadlocked the writer after one window.
+func TestWriteWhileBlockedRead(t *testing.T) {
+	c, s := pair(t)
+	accepted := make(chan *Stream, 1)
+	go func() {
+		st, err := s.Accept()
+		if err == nil {
+			accepted <- st
+		}
+	}()
+	cst, _ := c.Open(context.Background())
+	cst.Write([]byte{1})
+	sst := <-accepted
+	var one [1]byte
+	sst.Read(one[:])
+	go sst.Read(one[:]) // blocks: the client sends nothing more
+	data := make([]byte, 4*InitialWindow)
+	done := make(chan error, 1)
+	go func() {
+		_, err := sst.Write(data)
+		done <- err
+	}()
+	cst.SetReadDeadline(time.Now().Add(10 * time.Second))
+	got, err := io.ReadAll(io.LimitReader(cst, int64(len(data))))
+	if err != nil || len(got) != len(data) {
+		t.Fatalf("read %d bytes: %v", len(got), err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("writer stuck")
+	}
+}
