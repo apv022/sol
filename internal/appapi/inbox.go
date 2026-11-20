@@ -287,3 +287,22 @@ func (s *Server) Answer(ctx context.Context, id string, approve bool) (json.RawM
 	}
 	return out, err
 }
+
+// Dismiss removes a notice, or an approval already answered, from the inbox. An open approval
+// must be approved or denied instead.
+func (s *Server) Dismiss(id string) error {
+	in := s.inbox
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for i, it := range in.items {
+		if it.ID != id {
+			continue
+		}
+		if it.Kind == "approval" && it.Answer == "" {
+			return sol.Errorf("conflict", "approve or deny it instead")
+		}
+		in.items = slices.Delete(in.items, i, i+1)
+		return in.saveLocked()
+	}
+	return sol.Errorf("not_found", "no inbox item "+id)
+}

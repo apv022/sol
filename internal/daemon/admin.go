@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,77 +15,220 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/apv022/sol/internal/appapi"
 	"github.com/apv022/sol/internal/apphost"
+	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
+	"github.com/apv022/sol/internal/pairing"
+	"github.com/apv022/sol/internal/transport"
 	"github.com/apv022/sol/sdk/go/sol"
 )
 
+// The admin API (design/ADMIN.md): /admin/v1/... served to the CLI over the API socket with
+// admin.token, and to the Sol app in the browser at the UI root with a session cookie
+// (browser.go). One handler serves both; every change is written to the activity log as
+// sol.* and pushed on GET /admin/v1/events.
+
 // Status is the reply of GET /admin/v1/status (sol status).
 type Status struct {
-	Person    string        `json:"person"`
-	Name      string        `json:"name"`
-	Device    string        `json:"device"`
-	DevName   string        `json:"device_name"`
-	Endpoints []string      `json:"endpoints"`
-	Sessions  []SessionInfo `json:"sessions"`
-	API       string        `json:"api"`
-	UI        string        `json:"ui"`
-	Files     string        `json:"files"`
+	Me           StatusMe         `json:"me"`
+	Endpoints    []EndpointInfo   `json:"endpoints"`
+	Transports   []TransportInfo  `json:"transports"`
+	PeerSessions []SessionInfo    `json:"peer_sessions"`
+	Sessions     []BrowserSession `json:"sessions"`
+	Storage      *Storage         `json:"storage,omitempty"`
+	API          string           `json:"api"`
+	UI           string           `json:"ui"`
+	Files        string           `json:"files"`
 }
 
-// SessionInfo is one live session.
+// StatusMe is who this device is.
+type StatusMe struct {
+	Person IDName `json:"person"`
+	Device IDName `json:"device"`
+}
+
+// IDName is an ID with its display name.
+type IDName struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// EndpointInfo is one published address; Kind is its transport.
+type EndpointInfo struct {
+	Addr string `json:"addr"`
+	Kind string `json:"kind"`
+}
+
+// TransportInfo is one transport and its state ("up" when ready, else the transport's state:
+// starting, stopped, failed).
+type TransportInfo struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SessionInfo is one live session with a device (and, as an event, one that came up or ended).
 type SessionInfo struct {
-	Person   string `json:"person"`
-	Device   string `json:"device"`
-	Relation string `json:"relation"`
+	ID       string    `json:"id"` // the peer device's ID
+	Person   string    `json:"person"`
+	Device   string    `json:"device"`
+	Peer     string    `json:"peer"` // display name: the person's name, and the device's if known
+	Relation string    `json:"relation"`
+	Since    time.Time `json:"since,omitzero"`
+	Up       *bool     `json:"up,omitempty"` // events only
+}
+
+// Storage is the used and total bytes of the synced folder's disk.
+type Storage struct {
+	Used  uint64 `json:"used"`
+	Total uint64 `json:"total"`
 }
 
 // AppInfo is one row of GET /admin/v1/apps (sol apps).
 type AppInfo struct {
 	apphost.Status
-	URL string `json:"url,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	Icon        string   `json:"icon,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes"`
 }
 
 // Status describes this device.
 func (d *Daemon) Status() Status {
-	st := Status{Device: d.DeviceID(), Person: d.PersonID(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files,
-		Endpoints: []string{}, Sessions: []SessionInfo{}}
+	return d.status("")
+}
+
+func (d *Daemon) status(browser string) Status {
+	st := Status{API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
+		Transports: []TransportInfo{}, PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
+	st.Me.Person.ID, st.Me.Device.ID = d.me()
 	if b, err := d.Keyring.Bundle(); err == nil {
-		st.Name = b.Person.Name
+		st.Me.Person.Name = b.Person.Name
 		if dv, ok := b.Devices.Find(d.Keyring.DevicePublic()); ok {
-			st.DevName = dv.Name
+			st.Me.Device.Name = dv.Name
 		}
 	}
 	for _, e := range d.Keyring.Endpoints().Endpoints {
-		st.Endpoints = append(st.Endpoints, e.Transport+" "+e.Address)
+		st.Endpoints = append(st.Endpoints, EndpointInfo{Addr: e.Address, Kind: e.Transport})
+	}
+	for _, t := range d.transports {
+		ts := t.Status()
+		state := string(ts.State)
+		if ts.State == transport.StateReady {
+			state = "up"
+		}
+		st.Transports = append(st.Transports, TransportInfo{Name: t.Name(), State: state, Detail: ts.Detail})
 	}
 	for _, s := range d.Sessions.Sessions() {
-		p := s.Peer()
-		st.Sessions = append(st.Sessions, SessionInfo{Person: identity.ID(p.Person), Device: identity.ID(p.Device), Relation: string(p.Relation)})
+		st.PeerSessions = append(st.PeerSessions, d.sessionInfo(s.Peer().Person, s.Peer().Device, string(s.Peer().Relation)))
+	}
+	if d.cfg.Files != "" {
+		if used, total, ok := diskUsage(d.cfg.Files); ok {
+			st.Storage = &Storage{Used: used, Total: total}
+		}
 	}
 	return st
+}
+
+// sessionInfo describes a session with a device.
+func (d *Daemon) sessionInfo(person, device []byte, relation string) SessionInfo {
+	si := SessionInfo{ID: identity.ID(device), Person: identity.ID(person), Device: identity.ID(device), Relation: relation}
+	name, _ := d.Contacts.Name(person)
+	var dl identity.DeviceList
+	if relation == "self" {
+		if b, err := d.Keyring.Bundle(); err == nil {
+			name, dl = b.Person.Name, b.Devices
+		}
+	} else if _, l, ok := d.Cache.Latest(person); ok {
+		dl = l
+	}
+	si.Peer = name
+	if dv, ok := dl.Find(device); ok && dv.Name != "" {
+		si.Peer = strings.TrimSpace(name + " · " + dv.Name)
+	}
+	d.mu.Lock()
+	si.Since = d.since[si.Device]
+	d.mu.Unlock()
+	return si
 }
 
 // Apps lists the installed apps with their UI URLs.
 func (d *Daemon) Apps() []AppInfo {
 	out := []AppInfo{}
 	for _, s := range d.Host.Status() {
-		a := AppInfo{Status: s}
-		if s.UI {
-			a.URL = apphost.AppURL(s.ID, d.uiPort)
-		}
-		out = append(out, a)
+		out = append(out, d.appInfo(s))
 	}
 	return out
 }
 
-// adminHandler serves the admin API the CLI uses (under /admin/v1/, admin token only).
+func (d *Daemon) appInfo(s apphost.Status) AppInfo {
+	a := AppInfo{Status: s, Scopes: []string{}}
+	if s.UI {
+		a.URL = apphost.AppURL(s.ID, d.uiPort)
+	}
+	if m, ok := d.Host.Manifest(s.ID); ok {
+		a.Icon, a.Description = m.Icon, m.Description
+		if m.Scopes != nil {
+			a.Scopes = m.Scopes
+		}
+	}
+	return a
+}
+
+// appChanged reports an app change on the admin stream (apphost.Config.OnChange).
+func (d *Daemon) appChanged(id string) {
+	if d.Host == nil {
+		return
+	}
+	for _, s := range d.Host.Status() {
+		if s.ID == id {
+			d.emit(EvApp, d.appInfo(s))
+			return
+		}
+	}
+	d.emit(EvApp, removed("id", id))
+}
+
+// activity appends a sol.* row to the activity log: what changed, a digest of the arguments
+// (never the arguments, which may hold secrets), and the result.
+func (d *Daemon) activity(action string, args any, err error) {
+	b, _ := json.Marshal(args)
+	sum := sha256.Sum256(b)
+	result := "ok"
+	if err != nil {
+		result = "error: " + err.Error()
+	}
+	me, dev := d.me()
+	row := sol.ActivityEntry{Time: time.Now().UTC(), Person: me, Device: dev, App: "sol", Action: action,
+		ArgsDigest: "sha256:" + hex.EncodeToString(sum[:]), Result: result}
+	out, _ := json.Marshal(row)
+	if me == "" {
+		return // no person yet: no feed to write to
+	}
+	if _, err := d.Store.Append(feeds.InternalApp, appapi.ActivityFeed, out); err != nil {
+		d.log.Warn("activity log", "err", err)
+	}
+}
+
+// BackupState is the reply of GET /admin/v1/backup.
+type BackupState struct {
+	// Words are the 24 words while the paper backup is unconfirmed on this device.
+	Words []string `json:"words"`
+	// Confirmed is true on an admin device that holds no unconfirmed words.
+	Confirmed bool `json:"confirmed"`
+}
+
+// adminHandler serves the admin API under /admin/v1/. Callers are authenticated before it
+// (appapi for the token, browserAdmin for the cookie).
 func (d *Daemon) adminHandler() http.Handler {
 	mx := http.NewServeMux()
-	j := func(pattern string, f func(r *http.Request) (any, error)) {
+	// j registers a JSON endpoint; a non-empty action logs every call as sol.<action>.
+	j := func(pattern, action string, f func(r *http.Request) (any, error)) {
 		mx.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			out, err := f(r)
 			if err != nil {
@@ -91,6 +236,17 @@ func (d *Daemon) adminHandler() http.Handler {
 				if !errors.As(err, &se) {
 					err = sol.Errorf("bad_request", err.Error())
 				}
+			}
+			if action != "" {
+				args := map[string]string{}
+				for _, k := range []string{"id", "name"} {
+					if v := r.PathValue(k); v != "" {
+						args[k] = v
+					}
+				}
+				d.activity("sol."+action, args, err)
+			}
+			if err != nil {
 				sol.WriteError(w, err)
 				return
 			}
@@ -101,10 +257,76 @@ func (d *Daemon) adminHandler() http.Handler {
 		})
 	}
 	body := func(r *http.Request, v any) error {
-		return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v)
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(v); err != nil && !errors.Is(err, io.EOF) {
+			return sol.Errorf("bad_request", "bad JSON")
+		}
+		return nil
 	}
-	j("GET /admin/v1/status", func(r *http.Request) (any, error) { return d.Status(), nil })
-	j("POST /admin/v1/invite", func(r *http.Request) (any, error) {
+	tokenOnly := func(r *http.Request) error {
+		if browserSession(r.Context()) != "" {
+			return sol.Errorf("forbidden", "only the CLI may do this")
+		}
+		return nil
+	}
+
+	j("GET /admin/v1/status", "", func(r *http.Request) (any, error) { return d.status(browserSession(r.Context())), nil })
+
+	// Browser login.
+	j("POST /admin/v1/login-code", "login-code", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err
+		}
+		c := d.browser.code()
+		return map[string]any{"code": c, "url": d.UIURL() + "login?code=" + c,
+			"expires": time.Now().Add(LoginCodeTTL).UTC()}, nil
+	})
+	mx.HandleFunc("POST /admin/v1/logout", func(w http.ResponseWriter, r *http.Request) {
+		id := browserSession(r.Context())
+		if id == "" {
+			sol.WriteError(w, sol.Errorf("bad_request", "not a browser session"))
+			return
+		}
+		d.browser.revoke(id)
+		d.activity("sol.logout", map[string]string{"session": id}, nil)
+		setSessionCookie(w, "", -1)
+		d.emitStatus()
+		sol.WriteJSON(w, http.StatusOK, struct{}{})
+	})
+	j("GET /admin/v1/sessions", "", func(r *http.Request) (any, error) { return d.browser.list(browserSession(r.Context())), nil })
+	j("DELETE /admin/v1/sessions/{id}", "sessions.revoke", func(r *http.Request) (any, error) {
+		if !d.browser.revoke(r.PathValue("id")) {
+			return nil, sol.Errorf("not_found", "no such session")
+		}
+		d.emitStatus()
+		return nil, nil
+	})
+
+	// People and devices.
+	j("GET /admin/v1/people", "", func(r *http.Request) (any, error) { return d.People(), nil })
+	j("PATCH /admin/v1/people/{id}", "people.rename", func(r *http.Request) (any, error) {
+		var b struct {
+			Petname string `json:"petname"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.SetPetname(r.PathValue("id"), b.Petname)
+	})
+	j("DELETE /admin/v1/people/{id}", "people.unpair", func(r *http.Request) (any, error) {
+		return nil, d.Unpair(r.Context(), r.PathValue("id"))
+	})
+	j("GET /admin/v1/devices", "", func(r *http.Request) (any, error) { return d.Devices(), nil })
+	j("PATCH /admin/v1/devices/{id}", "devices.update", func(r *http.Request) (any, error) {
+		var p DevicePatch
+		if err := body(r, &p); err != nil {
+			return nil, err
+		}
+		return d.UpdateDevice(r.PathValue("id"), p)
+	})
+	j("DELETE /admin/v1/devices/{id}", "devices.remove", func(r *http.Request) (any, error) {
+		return nil, d.RemoveDevice(r.PathValue("id"))
+	})
+	j("POST /admin/v1/invite", "invite", func(r *http.Request) (any, error) {
 		var b struct {
 			Join bool `json:"join"`
 		}
@@ -112,9 +334,9 @@ func (d *Daemon) adminHandler() http.Handler {
 			return nil, err
 		}
 		l, err := d.Invite(b.Join)
-		return map[string]string{"link": l}, err
+		return map[string]any{"link": l, "expires": time.Now().Add(pairing.TTL).UTC()}, err
 	})
-	j("POST /admin/v1/pair", func(r *http.Request) (any, error) {
+	j("POST /admin/v1/pair", "pair", func(r *http.Request) (any, error) {
 		var b struct {
 			Link string `json:"link"`
 		}
@@ -126,8 +348,13 @@ func (d *Daemon) adminHandler() http.Handler {
 		kind, person, err := d.Pair(ctx, b.Link)
 		return map[string]string{"kind": kind, "person": person}, err
 	})
-	j("GET /admin/v1/apps", func(r *http.Request) (any, error) { return d.Apps(), nil })
-	j("POST /admin/v1/apps/install", func(r *http.Request) (any, error) {
+
+	// Apps.
+	j("GET /admin/v1/apps", "", func(r *http.Request) (any, error) { return d.Apps(), nil })
+	j("POST /admin/v1/apps/install", "apps.install", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err // a directory on this computer: the CLI's job, not a web page's
+		}
 		var b struct {
 			Dir string `json:"dir"`
 		}
@@ -136,41 +363,92 @@ func (d *Daemon) adminHandler() http.Handler {
 		}
 		return d.Host.Install(b.Dir)
 	})
-	j("POST /admin/v1/apps/remove", func(r *http.Request) (any, error) {
+	j("POST /admin/v1/apps/{id}/remove", "apps.remove", func(r *http.Request) (any, error) {
+		return nil, d.Host.Remove(r.PathValue("id"))
+	})
+	j("POST /admin/v1/apps/{id}/restart", "apps.restart", func(r *http.Request) (any, error) {
+		return nil, d.Host.Restart(r.PathValue("id"))
+	})
+
+	// Port sharing.
+	j("GET /admin/v1/services", "", func(r *http.Request) (any, error) { return d.ports.Services(), nil })
+	j("POST /admin/v1/services", "services.add", func(r *http.Request) (any, error) {
+		var s Service
+		if err := body(r, &s); err != nil {
+			return nil, err
+		}
+		return d.ports.AddService(s)
+	})
+	j("PATCH /admin/v1/services/{name}", "services.update", func(r *http.Request) (any, error) {
+		var p ServicePatch
+		if err := body(r, &p); err != nil {
+			return nil, err
+		}
+		return d.ports.UpdateService(r.PathValue("name"), p)
+	})
+	j("DELETE /admin/v1/services/{name}", "services.remove", func(r *http.Request) (any, error) {
+		return nil, d.ports.RemoveService(r.PathValue("name"))
+	})
+	j("GET /admin/v1/tunnels", "", func(r *http.Request) (any, error) { return d.ports.Tunnels(), nil })
+	j("POST /admin/v1/tunnels", "tunnels.open", func(r *http.Request) (any, error) {
 		var b struct {
-			ID string `json:"id"`
+			Person  string `json:"person"`
+			Service string `json:"service"`
+			Port    int    `json:"port"`
 		}
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		return nil, d.Host.Remove(b.ID)
-	})
-	j("GET /admin/v1/inbox", func(r *http.Request) (any, error) { return d.API.InboxItems(), nil })
-	j("POST /admin/v1/inbox/answer", func(r *http.Request) (any, error) {
-		var b struct {
-			ID      string `json:"id"`
-			Approve bool   `json:"approve"`
+		t, err := d.ports.OpenTunnel(d.resolvePerson(b.Person), b.Service, b.Port)
+		if err == nil {
+			d.emit(EvTunnel, t)
 		}
-		if err := body(r, &b); err != nil {
+		return t, err
+	})
+	j("DELETE /admin/v1/tunnels/{id}", "tunnels.close", func(r *http.Request) (any, error) {
+		id := r.PathValue("id")
+		if err := d.ports.CloseTunnel(id); err != nil {
 			return nil, err
 		}
-		if it, ok := d.API.InboxItem(b.ID); ok && it.Answer != "" {
-			return nil, sol.Errorf("conflict", "already "+it.Answer)
-		}
-		_, err := d.API.Answer(r.Context(), b.ID, b.Approve)
-		// Once answered, the item records what the action did (or how it failed).
-		if it, ok := d.API.InboxItem(b.ID); ok && it.Answer != "" {
-			return it, nil
-		}
-		return nil, err
+		d.emit(EvTunnel, removed("id", id))
+		return nil, nil
 	})
-	j("GET /admin/v1/actions", func(r *http.Request) (any, error) {
+
+	// Inbox.
+	j("GET /admin/v1/inbox", "", func(r *http.Request) (any, error) { return d.API.InboxItems(), nil })
+	answer := func(approve bool) func(r *http.Request) (any, error) {
+		return func(r *http.Request) (any, error) {
+			id := r.PathValue("id")
+			if it, ok := d.API.InboxItem(id); ok && it.Answer != "" {
+				return nil, sol.Errorf("conflict", "already "+it.Answer)
+			}
+			_, err := d.API.Answer(r.Context(), id, approve)
+			// Once answered, the item records what the action did (or how it failed).
+			if it, ok := d.API.InboxItem(id); ok && it.Answer != "" {
+				return it, nil
+			}
+			return nil, err
+		}
+	}
+	j("POST /admin/v1/inbox/{id}/approve", "inbox.approve", answer(true))
+	j("POST /admin/v1/inbox/{id}/deny", "inbox.deny", answer(false))
+	j("POST /admin/v1/inbox/{id}/dismiss", "inbox.dismiss", func(r *http.Request) (any, error) {
+		id := r.PathValue("id")
+		if err := d.API.Dismiss(id); err != nil {
+			return nil, err
+		}
+		d.emit(EvInbox, removed("id", id))
+		return nil, nil
+	})
+
+	// Actions (sol do).
+	j("GET /admin/v1/actions", "", func(r *http.Request) (any, error) {
 		return d.actionApps(r.URL.Query().Get("app"), nil), nil
 	})
 	mx.HandleFunc("POST /admin/v1/actions/call", func(w http.ResponseWriter, r *http.Request) {
 		var c sol.ActionCall
 		if err := body(r, &c); err != nil {
-			sol.WriteError(w, sol.Errorf("bad_request", "bad JSON"))
+			sol.WriteError(w, err)
 			return
 		}
 		out, err := d.API.CallAs(r.Context(), "", c)
@@ -181,8 +459,13 @@ func (d *Daemon) adminHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
 	})
-	j("GET /admin/v1/agents", func(r *http.Request) (any, error) { return d.agents.all(), nil })
-	j("POST /admin/v1/agents", func(r *http.Request) (any, error) {
+
+	// Agents.
+	j("GET /admin/v1/agents", "", func(r *http.Request) (any, error) { return d.agents.all(), nil })
+	j("POST /admin/v1/agents", "agents.issue", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err // the key file is written where the agent runs: the CLI's job
+		}
 		var b struct {
 			Name   string   `json:"name"`
 			Key    string   `json:"key"` // the agent's public key, as an ID
@@ -198,28 +481,26 @@ func (d *Daemon) adminHandler() http.Handler {
 		}
 		return d.IssueAgent(b.Name, pub, b.Scopes, time.Duration(b.Days)*24*time.Hour)
 	})
-	j("POST /admin/v1/agents/renew", func(r *http.Request) (any, error) {
+	j("POST /admin/v1/agents/{name}/renew", "agents.renew", func(r *http.Request) (any, error) {
 		var b struct {
-			Name string `json:"name"`
-			Days int    `json:"days"`
+			Days int `json:"days"`
 		}
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		return d.RenewAgent(b.Name, time.Duration(b.Days)*24*time.Hour)
+		return d.RenewAgent(r.PathValue("name"), time.Duration(b.Days)*24*time.Hour)
 	})
-	j("POST /admin/v1/agents/revoke", func(r *http.Request) (any, error) {
-		var b struct {
-			Name string `json:"name"`
-		}
-		if err := body(r, &b); err != nil {
-			return nil, err
-		}
-		id, err := d.RevokeAgent(b.Name)
+	j("POST /admin/v1/agents/{name}/revoke", "agents.revoke", func(r *http.Request) (any, error) {
+		id, err := d.RevokeAgent(r.PathValue("name"))
 		return map[string]string{"id": id}, err
 	})
-	j("GET /admin/v1/themes", func(r *http.Request) (any, error) { return d.Themes(), nil })
-	j("POST /admin/v1/theme", func(r *http.Request) (any, error) {
+
+	// Appearance.
+	j("GET /admin/v1/themes", "", func(r *http.Request) (any, error) { return d.Themes(), nil })
+	j("GET /admin/v1/theme", "", func(r *http.Request) (any, error) {
+		return map[string]any{"name": d.activeTheme(), "settings": d.themeSettings()}, nil
+	})
+	j("POST /admin/v1/theme", "theme.set", func(r *http.Request) (any, error) {
 		var b struct {
 			Name string `json:"name"`
 		}
@@ -228,19 +509,25 @@ func (d *Daemon) adminHandler() http.Handler {
 		}
 		return nil, d.SetTheme(b.Name)
 	})
-	j("POST /admin/v1/theme/settings", func(r *http.Request) (any, error) {
+	j("POST /admin/v1/theme/settings", "theme.settings", func(r *http.Request) (any, error) {
 		var b map[string]string
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
 		return d.UpdateThemeSettings(b)
 	})
-	j("GET /admin/v1/backup/words", func(r *http.Request) (any, error) {
-		w, err := d.BackupWords()
-		return map[string][]string{"words": w}, err
+
+	// Backup.
+	j("GET /admin/v1/backup", "", func(r *http.Request) (any, error) {
+		w, ok := d.Keyring.PendingWords()
+		if !ok {
+			return BackupState{Words: []string{}, Confirmed: d.Keyring.IsAdmin()}, nil
+		}
+		return BackupState{Words: w}, nil
 	})
-	j("POST /admin/v1/backup/confirm", func(r *http.Request) (any, error) { return nil, d.ConfirmBackup() })
-	j("POST /admin/v1/network-changed", func(r *http.Request) (any, error) {
+	j("POST /admin/v1/backup/confirm", "backup.confirm", func(r *http.Request) (any, error) { return nil, d.ConfirmBackup() })
+
+	j("POST /admin/v1/network-changed", "", func(r *http.Request) (any, error) {
 		var b struct {
 			Reason string `json:"reason"`
 		}
@@ -248,8 +535,27 @@ func (d *Daemon) adminHandler() http.Handler {
 		d.NetworkChanged(b.Reason)
 		return nil, nil
 	})
+	mx.HandleFunc("GET /admin/v1/events", func(w http.ResponseWriter, r *http.Request) { d.events.serve(w, r) })
+	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		sol.WriteError(w, sol.Errorf("not_found", "no such endpoint"))
+	})
 	return mx
 }
+
+// resolvePerson accepts a person ID or a contact's petname.
+func (d *Daemon) resolvePerson(s string) string {
+	if _, err := identity.ParseID(s); err == nil {
+		return s
+	}
+	for _, p := range d.People() {
+		if p.Petname == strings.ToLower(s) {
+			return p.ID
+		}
+	}
+	return s
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // NetworkChanged tells the daemon the network changed (an OS callback, `sol network-changed`):
 // every kept peer is redialed now instead of after its backoff.

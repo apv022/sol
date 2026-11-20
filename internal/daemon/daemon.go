@@ -14,9 +14,13 @@
 //	<dir>/inbox.json       the app inbox (internal/appapi, 0600)
 //	<dir>/agents.json      the agent keys this device issued (agents.go, 0600)
 //	<dir>/agents/          agent key files sol agent new writes by default (0700, files 0600)
+//	<dir>/browser-sessions.json  browser logins to the Sol app, token hashes only (0600)
+//	<dir>/services.json    local ports I share (port sharing, 0600)
+//	<dir>/tunnels.json     contacts' services I opened on local ports (0600)
+//	<dir>/petnames.json    the local names I gave contacts (0600)
 //	<dir>/admin.token      the CLI's secret for the admin API, new on every start (0600)
 //	<dir>/api.url          where the app API listens, in SOL_API form
-//	<dir>/ui.url           the launcher page
+//	<dir>/ui.url           the Sol app (the UI root)
 //	<dir>/apps/<id>/       installed apps (internal/apphost)
 //	<dir>/appdata/<id>/    each app's SOL_APP_DATA
 //	<dir>/run/             api.sock and the apps' sockets; a short temporary directory instead
@@ -78,7 +82,7 @@ type TransportConfig struct {
 // Config is the persisted configuration (config.json).
 type Config struct {
 	Transports []TransportConfig `json:"transports"`
-	// UI is the launcher's and app UIs' listen address, e.g. "127.0.0.1:7777".
+	// UI is the Sol app's and app UIs' listen address, e.g. "127.0.0.1:7777".
 	UI string `json:"ui"`
 	// Files is the synced folder (SOL_FILES).
 	Files string `json:"files"`
@@ -255,10 +259,17 @@ type Daemon struct {
 	tmpRun     bool
 	peers      *peerBook
 	agents     *agents
+	events     *adminEvents
+	browser    *browserAuth
+	pets       *petnames
+	ports      *portShare
+	admin      http.Handler
 	wg         sync.WaitGroup // background goroutines (the theme watcher)
 
-	mu     sync.Mutex
-	online map[string]int // person ID -> live sessions
+	mu       sync.Mutex
+	online   map[string]int       // person ID -> live sessions
+	since    map[string]time.Time // device ID -> when its live session came up
+	lastSeen map[string]time.Time // device or person ID -> when its last session ended
 }
 
 // appsRef lets the API server reach the host, which is built after it.
@@ -298,7 +309,8 @@ func Start(o Options) (_ *Daemon, err error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Daemon{dir: o.Dir, cfg: cfg, opt: o, log: o.Log, ctx: ctx, cancel: cancel, Keyring: kr,
-		Cache: identity.NewCache(), online: map[string]int{}}
+		Cache: identity.NewCache(), online: map[string]int{}, since: map[string]time.Time{},
+		lastSeen: map[string]time.Time{}, events: newAdminEvents()}
 	defer func() {
 		if err != nil {
 			d.Close()
@@ -309,6 +321,12 @@ func Start(o Options) (_ *Daemon, err error) {
 	}
 	d.peers.seed(kr, d.Cache)
 	if d.agents, err = openAgents(filepath.Join(o.Dir, "agents.json")); err != nil {
+		return nil, err
+	}
+	if d.browser, err = openBrowserAuth(filepath.Join(o.Dir, "browser-sessions.json")); err != nil {
+		return nil, err
+	}
+	if d.pets, err = openPetnames(filepath.Join(o.Dir, "petnames.json")); err != nil {
 		return nil, err
 	}
 	if d.Store, err = feeds.Open(feeds.Config{Dir: filepath.Join(o.Dir, "feeds"), Self: kr,
@@ -337,15 +355,23 @@ func Start(o Options) (_ *Daemon, err error) {
 	peerMux := http.NewServeMux()
 	peerMux.Handle(replicate.Path, d.Rep)
 	peerMux.Handle(blobnet.Path, d.Blobnet)
+	peerMux.HandleFunc("GET "+ServicePath+"{name}", func(w http.ResponseWriter, r *http.Request) { d.ports.peerService(w, r) })
+	peerMux.HandleFunc("POST "+ServicesPushPath, func(w http.ResponseWriter, r *http.Request) { d.ports.peerPush(w, r) })
+	peerMux.HandleFunc("POST "+UnpairPath, d.peerUnpair)
 	d.transports = d.buildTransports()
 	if d.Sessions, err = session.New(session.Config{Keyring: kr, Cache: d.Cache, Contacts: d.Contacts,
 		Tokens: pairing.NewTokens(), Transports: d.transports, Handler: peerMux, OnSession: d.onSession, Log: d.log}); err != nil {
 		return nil, err
 	}
+	if d.ports, err = openPortShare(d, filepath.Join(o.Dir, "services.json"), filepath.Join(o.Dir, "tunnels.json")); err != nil {
+		return nil, err
+	}
 	apps := &appsRef{}
+	d.admin = d.adminHandler()
 	if d.API, err = appapi.New(appapi.Config{Node: appapi.Node{Keyring: kr, Cache: d.Cache, Store: d.Store,
 		Contacts: d.Contacts, Shares: d.Shares, Pins: d.Pins, Blobs: d.Blobs, Blobnet: d.Blobnet, Sessions: d.Sessions},
-		Apps: apps, DataDir: o.Dir, Admin: d.adminHandler(), Agent: d.agentHandler(), Log: d.log}); err != nil {
+		Apps: apps, DataDir: o.Dir, Admin: d.admin, Agent: d.agentHandler(), Tap: d.tap, Petname: d.pets.get,
+		Log: d.log}); err != nil {
 		return nil, err
 	}
 	peerMux.Handle("/p/", d.API.PeerHandler())
@@ -365,13 +391,15 @@ func Start(o Options) (_ *Daemon, err error) {
 	if d.Host, err = apphost.New(apphost.Config{AppsDir: filepath.Join(o.Dir, "apps"),
 		DataDir: filepath.Join(o.Dir, "appdata"), RunDir: filepath.Join(d.runDir, "apps"), Files: files,
 		API: d.apiURL, Tokens: d.API, Builtins: o.Builtins, InProcess: o.InProcessApps, Exe: o.Exe,
-		Bridge: d.API.Handler(), Me: d.me, Anchor: d.anchor, Log: d.log}); err != nil {
+		Bridge: d.API.Handler(), Me: d.me, Anchor: d.anchor, Root: d.rootHandler(), Peer: d.peerHost,
+		OnChange: d.appChanged, Log: d.log}); err != nil {
 		return nil, err
 	}
 	apps.h = d.Host
 	if err := d.startUI(); err != nil {
 		return nil, err
 	}
+	d.ports.start()
 	if kr.Person() != nil {
 		d.Host.Start(d.ctx)
 	}
@@ -504,7 +532,7 @@ func (d *Daemon) startAPI() error {
 	return fsutil.WriteFileAtomic(filepath.Join(d.dir, "admin.token"), []byte(d.API.IssueAdmin()+"\n"), 0o600)
 }
 
-// startUI serves the launcher and app origins.
+// startUI serves the Sol app at the UI root and the app origins.
 func (d *Daemon) startUI() error {
 	addr := d.cfg.UI
 	if addr == "" {
@@ -525,7 +553,36 @@ func (d *Daemon) startUI() error {
 func (d *Daemon) onSession(s *session.Session) {
 	d.Blobnet.SessionUp(s)
 	p := s.Peer()
-	pid := identity.ID(p.Person)
+	pid, did := identity.ID(p.Person), identity.ID(p.Device)
+	d.mu.Lock()
+	d.since[did] = time.Now().UTC()
+	d.mu.Unlock()
+	up := true
+	si := d.sessionInfo(p.Person, p.Device, string(p.Relation))
+	si.Up = &up
+	d.emit(EvSession, si)
+	d.emitStatus()
+	if p.Relation == session.Self {
+		d.emit(EvDevice, d.device(did))
+	}
+	go d.ports.push(s)
+	defer func() {
+		now := time.Now().UTC()
+		d.mu.Lock()
+		delete(d.since, did)
+		d.lastSeen[did], d.lastSeen[pid] = now, now
+		d.mu.Unlock()
+		if d.ctx.Err() != nil {
+			return
+		}
+		down := false
+		si.Up = &down
+		d.emit(EvSession, si)
+		d.emitStatus()
+		if p.Relation == session.Self {
+			d.emit(EvDevice, d.device(did))
+		}
+	}()
 	go func() {
 		ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
 		defer cancel()
@@ -557,10 +614,10 @@ func (d *Daemon) onSession(s *session.Session) {
 // APIURL is where the app API listens (SOL_API form).
 func (d *Daemon) APIURL() string { return d.apiURL }
 
-// UIPort is the port of the launcher and app UIs.
+// UIPort is the port of the Sol app and app UIs.
 func (d *Daemon) UIPort() int { return d.uiPort }
 
-// UIURL is the launcher page.
+// UIURL is the Sol app (the UI root).
 func (d *Daemon) UIURL() string { return "http://localhost:" + strconv.Itoa(d.uiPort) + "/" }
 
 // Dir is the data directory.
@@ -610,13 +667,34 @@ func (d *Daemon) Pair(ctx context.Context, link string) (kind string, person str
 		}
 		d.API.PersonChanged(identity.ID(l.Person))
 	}
+	d.emitStatus()
 	return string(l.Kind), identity.ID(l.Person), nil
+}
+
+// tap follows the app API's person and inbox events onto the admin stream.
+func (d *Daemon) tap(kind, id string) {
+	switch kind {
+	case sol.EventPerson:
+		if p, ok := d.person(id); ok {
+			d.emit(EvPerson, p)
+		}
+	case sol.EventInbox:
+		if it, ok := d.API.InboxItem(id); ok {
+			d.emit(EvInbox, it)
+		}
+	}
 }
 
 // Close stops everything, in reverse order, and waits for it.
 func (d *Daemon) Close() error {
 	d.cancel()
 	d.wg.Wait()
+	if d.events != nil {
+		d.events.close()
+	}
+	if d.ports != nil {
+		d.ports.close()
+	}
 	if d.uiSrv != nil {
 		_ = d.uiSrv.Close()
 	}

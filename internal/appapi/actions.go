@@ -422,12 +422,13 @@ func (s *Server) sharesApp(person, app string) bool {
 	return false
 }
 
-// PeerHandler serves the session endpoints of the app API: /p/actions/{name}, /p/dial and
-// /p/inbox. Mount it on the session manager's handler.
+// PeerHandler serves the session endpoints of the app API: /p/actions/{name}, /p/dial,
+// /p/inbox and /p/ui/{app}/... Mount it on the session manager's handler.
 func (s *Server) PeerHandler() http.Handler {
 	mx := http.NewServeMux()
 	mx.HandleFunc("POST /p/actions/{name}", s.peerAction)
 	mx.HandleFunc("POST /p/dial", s.peerDial)
 	mx.HandleFunc("POST /p/inbox", s.peerInbox)
+	mx.HandleFunc(PeerUIPath+"{app}/{path...}", s.peerUI)
 	return mx
 }

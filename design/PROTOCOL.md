@@ -139,6 +139,9 @@ The caller's verified person, device and relation (`self` or `contact`) are know
 | `POST /p/actions/{name}` | per sharing + scopes | run an action on this device's app, caller headers attached |
 | `GET /p/dial/{app}/{path}` | per sharing | upgrade to a raw stream into that app |
 | `GET /p/service/{name}` | per sharing | upgrade to a raw stream into a shared local port (port sharing) |
+| `POST /p/services` | self, contacts | the services this device offers the caller, `{"services":[{name,http}]}`; pushed when the session comes up and whenever the list changes (port sharing) |
+| `GET /p/ui/{app}/{path}` | per sharing (any feed of the app shared with the caller; self always) | the app's UI, caller headers attached, for `http://<app>.<petname>.localhost` (API.md §10); `/_sol/` is never passed |
+| `POST /p/unpair` | contacts | the caller unpaired me: I drop them as a contact too |
 | `POST /p/inbox` | self, contacts | deliver an Inbox item |
 | `GET /p/presence` | self, contacts | stream: online status, which apps are shared with the caller |
 

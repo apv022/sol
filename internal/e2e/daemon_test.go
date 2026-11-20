@@ -26,7 +26,7 @@ func TestInitAndAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	var st sold.Status
-	if err := c.Do(context.Background(), "GET", "/admin/v1/status", nil, &st); err != nil || st.Name != "Alice" || st.Person != d.PersonID() || len(st.Endpoints) != 1 {
+	if err := c.Do(context.Background(), "GET", "/admin/v1/status", nil, &st); err != nil || st.Me.Person.Name != "Alice" || st.Me.Person.ID != d.PersonID() || len(st.Endpoints) != 1 {
 		t.Fatalf("%+v %v", st, err)
 	}
 	var inv struct{ Link string }

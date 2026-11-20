@@ -34,7 +34,13 @@ func (s *Server) Contact(id string) (sol.Contact, bool) {
 		return sol.Contact{}, false
 	}
 	name, _ := s.n.Contacts.Name(pub)
-	c := sol.Contact{ID: id, Name: name, Petname: petname(name, id), Devices: []sol.Device{},
+	pet := petname(name, id)
+	if s.cfg.Petname != nil {
+		if p := s.cfg.Petname(id); p != "" {
+			pet = p
+		}
+	}
+	c := sol.Contact{ID: id, Name: name, Petname: pet, Devices: []sol.Device{},
 		SharesWithMe: []string{}, IShare: []string{}}
 	if s.n.Cache != nil {
 		if _, dl, ok := s.n.Cache.Latest(pub); ok {

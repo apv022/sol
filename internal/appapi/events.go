@@ -41,6 +41,7 @@ type eventLog struct {
 	next   uint64 // n of the next event
 	wake   chan struct{}
 	closed bool
+	tap    func(rec) // called after each add, outside mu
 }
 
 func newEventLog() *eventLog {
@@ -49,10 +50,16 @@ func newEventLog() *eventLog {
 
 func (l *eventLog) add(r rec) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.closed {
+		l.mu.Unlock()
 		return
 	}
+	defer func() {
+		l.mu.Unlock()
+		if l.tap != nil {
+			l.tap(r)
+		}
+	}()
 	r.n = l.next
 	l.next++
 	l.recs = append(l.recs, r)

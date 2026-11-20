@@ -82,7 +82,13 @@ type Config struct {
 	// Agent serves /agent/ (agent keys, internal/daemon), which authenticates its own callers by
 	// their certificate and signature; nil refuses.
 	Agent http.Handler
-	Log   *slog.Logger
+	// Tap, if set, is told of every person and inbox event as it is logged (kind
+	// sol.EventPerson with the contact's ID, sol.EventInbox with the item's ID), so the
+	// daemon's admin event stream can follow them. It must not block.
+	Tap func(kind, id string)
+	// Petname, if set, returns the local petname I gave a contact ("" for the default).
+	Petname func(id string) string
+	Log     *slog.Logger
 }
 
 // principal is who a token belongs to.
@@ -125,6 +131,16 @@ func New(cfg Config) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{cfg: cfg, n: cfg.Node, log: cfg.Log, ctx: ctx, cancel: cancel,
 		tokens: map[[32]byte]principal{}, events: newEventLog(), inbox: in}
+	if cfg.Tap != nil {
+		s.events.tap = func(r rec) {
+			switch {
+			case r.kind == sol.EventPerson && r.person != nil:
+				cfg.Tap(r.kind, r.person.ID)
+			case r.kind == sol.EventInbox && r.inbox != nil:
+				cfg.Tap(r.kind, r.inbox.ID)
+			}
+		}
+	}
 	s.wg.Add(1)
 	go s.pump()
 	return s, nil

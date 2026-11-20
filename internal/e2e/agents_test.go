@@ -98,7 +98,7 @@ func TestAgentApprovalFlow(t *testing.T) {
 		t.Fatalf("agent's inbox: %+v %v", items, err)
 	}
 	var it sol.InboxItem
-	if err := admin.Do(context.Background(), "POST", "/admin/v1/inbox/answer", map[string]any{"id": id, "approve": true}, &it); err != nil {
+	if err := admin.Do(context.Background(), "POST", "/admin/v1/inbox/"+id+"/approve", nil, &it); err != nil {
 		t.Fatal(err)
 	}
 	if it.Answer != "approved" || it.Error != nil || len(it.Result) == 0 || it.Agent == "" {
@@ -107,7 +107,7 @@ func TestAgentApprovalFlow(t *testing.T) {
 	if _, out := do(t, admin, "files.list", "--json"); strings.Contains(out, "a.txt") {
 		t.Fatalf("not deleted after approval: %s", out)
 	}
-	if err := admin.Do(context.Background(), "POST", "/admin/v1/inbox/answer", map[string]any{"id": id, "approve": true}, &it); !errors.Is(err, sol.ErrConflict) {
+	if err := admin.Do(context.Background(), "POST", "/admin/v1/inbox/"+id+"/approve", nil, &it); !errors.Is(err, sol.ErrConflict) {
 		t.Fatalf("second answer: %v", err)
 	}
 	// The activity log names the agent.

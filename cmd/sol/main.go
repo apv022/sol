@@ -16,6 +16,9 @@
 //	sol backup words|confirm          the 24 recovery words
 //	sol restore --words "..."         set up a fresh directory from the words
 //	sol network-changed [reason]      redial peers now (OS network callbacks)
+//	sol open [--print]                open the Sol app in the browser, logged in
+//	sol service add|list|remove       share a local port with people (port sharing)
+//	sol tunnel open|list|close        open a contact's service on a local port
 //
 // Every command takes --dir (default $SOL_DIR or ~/.sol). The logic lives in internal/daemon;
 // this file only parses arguments and prints.
@@ -28,9 +31,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -120,11 +127,14 @@ const usage = `usage: sol <command> [flags]
   app install <dir> | app remove <id> | app run <id>
   do <app>.<action> [--name value ...] [--args JSON|-] [--json] [--dry-run] [--person ID] [--as-agent NAME]
   agent new <name> --scope PATTERN... [--person ID|self] [--days N] [--out FILE] | agent list | agent revoke <name|id> | agent renew <name> [--days N]
-  inbox [--json] | inbox approve <id> | inbox deny <id>
+  inbox [--json] | inbox approve <id> | inbox deny <id> | inbox dismiss <id>
   theme list | theme set <name> | theme settings [--scheme S] [--accent #rrggbb] [--density D] [--radius R] [--glass on|off] [--font F]
   backup words | backup confirm
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
   network-changed [reason]
+  open [--print]                    open the Sol app in the browser (prints the one-time login URL)
+  service add <name> <port> [--http] [--with PERSON]... | service list | service remove <name>
+  tunnel open <person> <service> [--port N] | tunnel list | tunnel close <id>
 
 Every command takes --dir DIR (default $SOL_DIR or ~/.sol).`
 
@@ -135,13 +145,13 @@ func run(args []string) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "app", "agent", "theme", "backup":
+	case "app", "agent", "theme", "backup", "service", "tunnel":
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			return errors.New(usage)
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	case "inbox":
-		if len(rest) > 0 && (rest[0] == "approve" || rest[0] == "deny") {
+		if len(rest) > 0 && (rest[0] == "approve" || rest[0] == "deny" || rest[0] == "dismiss") {
 			cmd, rest = cmd+" "+rest[0], rest[1:]
 		}
 	}
@@ -208,6 +218,11 @@ func run(args []string) error {
 		return b.Run(ctx, apphost.EnvFromOS())
 	}
 	inviteJoin := fs.Bool("join", false, "invite: a join link (add a device of mine) instead of a pair link")
+	noBrowser := fs.Bool("print", false, "open: only print the login URL")
+	svcHTTP := fs.Bool("http", false, "service add: it is a web service (contacts can open it in the browser)")
+	var people list
+	fs.Var(&people, "with", "service add: a person (ID or petname) to share with; repeatable")
+	port := fs.Int("port", 0, "tunnel open: the local port (default: the first free from 9000)")
 	var scopes list
 	fs.Var(&scopes, "scope", "agent new: an action pattern the agent may run (files.*, notes.read, *); repeatable")
 	person := fs.String("person", "", "agent new: limit the agent to this person's apps (an ID, or self)")
@@ -234,12 +249,18 @@ func run(args []string) error {
 		if *asJSON {
 			return printJSON(st)
 		}
-		fmt.Printf("person   %s (%s)\ndevice   %s (%s)\nui       %s\nfiles    %s\n", st.Name, st.Person, st.DevName, st.Device, st.UI, st.Files)
+		fmt.Printf("person   %s (%s)\ndevice   %s (%s)\nui       %s\nfiles    %s\n", st.Me.Person.Name, st.Me.Person.ID, st.Me.Device.Name, st.Me.Device.ID, st.UI, st.Files)
 		for _, e := range st.Endpoints {
-			fmt.Printf("endpoint %s\n", e)
+			fmt.Printf("endpoint %s %s\n", e.Kind, e.Addr)
 		}
-		for _, s := range st.Sessions {
-			fmt.Printf("session  %s %s (person %s)\n", s.Relation, s.Device, s.Person)
+		for _, t := range st.Transports {
+			fmt.Printf("transport %s %s\n", t.Name, t.State)
+		}
+		for _, s := range st.PeerSessions {
+			fmt.Printf("session  %s %s (%s)\n", s.Relation, s.Device, s.Peer)
+		}
+		if st.Storage != nil {
+			fmt.Printf("storage  %.1f of %.1f GB used\n", float64(st.Storage.Used)/1e9, float64(st.Storage.Total)/1e9)
 		}
 		return nil
 	case "invite":
@@ -291,7 +312,7 @@ func run(args []string) error {
 		if fs.NArg() != 1 {
 			return errors.New("usage: sol app remove <id>")
 		}
-		if err := c.Do(ctx, "POST", "/admin/v1/apps/remove", map[string]string{"id": fs.Arg(0)}, nil); err != nil {
+		if err := c.Do(ctx, "POST", "/admin/v1/apps/"+url.PathEscape(fs.Arg(0))+"/remove", nil, nil); err != nil {
 			return err
 		}
 		fmt.Println("Removed", fs.Arg(0))
@@ -322,7 +343,7 @@ func run(args []string) error {
 		if fs.NArg() != 1 {
 			return errors.New("usage: sol agent revoke <name|id>")
 		}
-		if err := c.Do(ctx, "POST", "/admin/v1/agents/revoke", map[string]string{"name": fs.Arg(0)}, nil); err != nil {
+		if err := c.Do(ctx, "POST", "/admin/v1/agents/"+url.PathEscape(fs.Arg(0))+"/revoke", nil, nil); err != nil {
 			return err
 		}
 		fmt.Println("Revoked", fs.Arg(0), "on all your devices.")
@@ -332,7 +353,7 @@ func run(args []string) error {
 			return errors.New("usage: sol agent renew <name> [--days N]")
 		}
 		var a daemon.AgentInfo
-		if err := c.Do(ctx, "POST", "/admin/v1/agents/renew", map[string]any{"name": fs.Arg(0), "days": *days}, &a); err != nil {
+		if err := c.Do(ctx, "POST", "/admin/v1/agents/"+url.PathEscape(fs.Arg(0))+"/renew", map[string]any{"days": *days}, &a); err != nil {
 			return err
 		}
 		p := agentKeyPath(*dir, a.Name)
@@ -372,12 +393,22 @@ func run(args []string) error {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.App, it.Kind, title, state, it.Time.Local().Format("2006-01-02 15:04"))
 		}
 		return tw.Flush()
+	case "inbox dismiss":
+		if fs.NArg() != 1 {
+			return errors.New("usage: sol inbox dismiss <id>")
+		}
+		if err := c.Do(ctx, "POST", "/admin/v1/inbox/"+url.PathEscape(fs.Arg(0))+"/dismiss", nil, nil); err != nil {
+			return err
+		}
+		fmt.Println("Dismissed", fs.Arg(0))
+		return nil
 	case "inbox approve", "inbox deny":
 		if fs.NArg() != 1 {
 			return errors.New("usage: sol " + cmd + " <id>")
 		}
 		var it sol.InboxItem
-		if err := c.Do(ctx, "POST", "/admin/v1/inbox/answer", map[string]any{"id": fs.Arg(0), "approve": cmd == "inbox approve"}, &it); err != nil {
+		verb := strings.TrimPrefix(cmd, "inbox ")
+		if err := c.Do(ctx, "POST", "/admin/v1/inbox/"+url.PathEscape(fs.Arg(0))+"/"+verb, nil, &it); err != nil {
 			return err
 		}
 		if *asJSON {
@@ -443,9 +474,12 @@ func run(args []string) error {
 		}
 		return printJSON(cur)
 	case "backup words":
-		var w struct{ Words []string }
-		if err := c.Do(ctx, "GET", "/admin/v1/backup/words", nil, &w); err != nil {
+		var w daemon.BackupState
+		if err := c.Do(ctx, "GET", "/admin/v1/backup", nil, &w); err != nil {
 			return err
+		}
+		if len(w.Words) == 0 {
+			return errors.New("no unconfirmed words here: the backup was confirmed, or this device did not create the identity")
 		}
 		fmt.Println("Write these 24 words on paper, in order, and keep them safe. They are your identity.")
 		for i, word := range w.Words {
@@ -461,6 +495,10 @@ func run(args []string) error {
 		return nil
 	case "network-changed":
 		return c.Do(ctx, "POST", "/admin/v1/network-changed", map[string]string{"reason": strings.Join(fs.Args(), " ")}, nil)
+	case "open":
+		return openUI(ctx, c, *noBrowser)
+	case "service add", "service list", "service remove", "tunnel open", "tunnel list", "tunnel close":
+		return portCmd(ctx, c, cmd, fs.Args(), *asJSON, *svcHTTP, people, *port)
 	}
 	return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 }
@@ -473,7 +511,11 @@ func runDaemon(dir string) error {
 		return err
 	}
 	st := d.Status()
-	fmt.Printf("Sol is running for %s on %s.\n  apps:     %s\n  endpoints: %s\nCtrl-C to stop.\n", st.Name, st.DevName, st.UI, strings.Join(st.Endpoints, ", "))
+	var eps []string
+	for _, e := range st.Endpoints {
+		eps = append(eps, e.Kind+" "+e.Addr)
+	}
+	fmt.Printf("Sol is running for %s on %s.\n  open it:   sol open\n  endpoints: %s\nCtrl-C to stop.\n", st.Me.Person.Name, st.Me.Device.Name, strings.Join(eps, ", "))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
@@ -516,7 +558,7 @@ func agentNew(ctx context.Context, c *daemon.Client, dir string, args, scopes []
 		if err := c.Do(ctx, "GET", "/admin/v1/status", nil, &st); err != nil {
 			return err
 		}
-		person = st.Person
+		person = st.Me.Person.ID
 	}
 	if person != "" {
 		scopes = append(scopes, "person:"+person)
@@ -560,4 +602,145 @@ func parseAnywhere(fs *flag.FlagSet, args []string) error {
 		args = fs.Args()[1:]
 	}
 	return fs.Parse(append([]string{"--"}, pos...))
+}
+
+// openUI is `sol open`: a one-time login code, then the browser at /login?code=.
+func openUI(ctx context.Context, c *daemon.Client, printOnly bool) error {
+	var lc struct {
+		URL string `json:"url"`
+	}
+	if err := c.Do(ctx, "POST", "/admin/v1/login-code", nil, &lc); err != nil {
+		return err
+	}
+	fmt.Println(lc.URL)
+	if printOnly {
+		return nil
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", lc.URL)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", lc.URL)
+	default:
+		cmd = exec.Command("xdg-open", lc.URL)
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "Could not start a browser; open the link above within a minute.")
+		return nil
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// portCmd is `sol service ...` and `sol tunnel ...` (port sharing).
+func portCmd(ctx context.Context, c *daemon.Client, cmd string, args []string, asJSON, httpSvc bool, people []string, port int) error {
+	switch cmd {
+	case "service add":
+		if len(args) != 2 {
+			return errors.New("usage: sol service add <name> <port> [--http] [--with PERSON]...")
+		}
+		p, err := strconv.Atoi(args[1])
+		if err != nil {
+			return errors.New("the port must be a number")
+		}
+		ids, err := resolvePeople(ctx, c, people)
+		if err != nil {
+			return err
+		}
+		var s daemon.Service
+		if err := c.Do(ctx, "POST", "/admin/v1/services", daemon.Service{Name: args[0], Port: p, HTTP: httpSvc, People: ids}, &s); err != nil {
+			return err
+		}
+		fmt.Printf("Sharing 127.0.0.1:%d as %s with %d people.\n", s.Port, s.Name, len(s.People))
+		return nil
+	case "service list":
+		var ss []daemon.Service
+		if err := c.Do(ctx, "GET", "/admin/v1/services", nil, &ss); err != nil {
+			return err
+		}
+		if asJSON {
+			return printJSON(ss)
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tPORT\tHTTP\tPEOPLE")
+		for _, s := range ss {
+			fmt.Fprintf(tw, "%s\t%d\t%v\t%s\n", s.Name, s.Port, s.HTTP, strings.Join(s.People, " "))
+		}
+		return tw.Flush()
+	case "service remove":
+		if len(args) != 1 {
+			return errors.New("usage: sol service remove <name>")
+		}
+		if err := c.Do(ctx, "DELETE", "/admin/v1/services/"+url.PathEscape(args[0]), nil, nil); err != nil {
+			return err
+		}
+		fmt.Println("Stopped sharing", args[0])
+		return nil
+	case "tunnel open":
+		if len(args) != 2 {
+			return errors.New("usage: sol tunnel open <person> <service> [--port N]")
+		}
+		var t daemon.TunnelInfo
+		if err := c.Do(ctx, "POST", "/admin/v1/tunnels", map[string]any{"person": args[0], "service": args[1], "port": port}, &t); err != nil {
+			return err
+		}
+		if asJSON {
+			return printJSON(t)
+		}
+		fmt.Printf("%s's %s is on %s (tunnel %s)\n", t.Name, t.Service, t.Addr, t.ID)
+		if t.URL != "" {
+			fmt.Println(t.URL)
+		}
+		return nil
+	case "tunnel list":
+		var ts []daemon.TunnelInfo
+		if err := c.Do(ctx, "GET", "/admin/v1/tunnels", nil, &ts); err != nil {
+			return err
+		}
+		if asJSON {
+			return printJSON(ts)
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tPERSON\tSERVICE\tADDRESS\tSTATE\tACTIVE\tERROR")
+		for _, t := range ts {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", t.ID, t.Name, t.Service, t.Addr, t.State, t.Active, t.LastError)
+		}
+		return tw.Flush()
+	case "tunnel close":
+		if len(args) != 1 {
+			return errors.New("usage: sol tunnel close <id>")
+		}
+		if err := c.Do(ctx, "DELETE", "/admin/v1/tunnels/"+url.PathEscape(args[0]), nil, nil); err != nil {
+			return err
+		}
+		fmt.Println("Closed", args[0])
+		return nil
+	}
+	return errors.New(usage)
+}
+
+// resolvePeople turns petnames into person IDs (IDs pass through).
+func resolvePeople(ctx context.Context, c *daemon.Client, in []string) ([]string, error) {
+	out := []string{}
+	if len(in) == 0 {
+		return out, nil
+	}
+	var ps []daemon.PersonInfo
+	if err := c.Do(ctx, "GET", "/admin/v1/people", nil, &ps); err != nil {
+		return nil, err
+	}
+	for _, x := range in {
+		id := ""
+		for _, p := range ps {
+			if p.ID == x || p.Petname == strings.ToLower(x) {
+				id = p.ID
+			}
+		}
+		if id == "" {
+			return nil, fmt.Errorf("no contact %q (see sol status / the People page)", x)
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }

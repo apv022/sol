@@ -14,7 +14,7 @@ import (
 	sold "github.com/apv022/sol/internal/daemon"
 )
 
-// ui sends a request to an app origin of d's UI server ("" app: the launcher).
+// ui sends a request to an app origin of d's UI server ("" app: the UI root, the Sol app).
 func ui(t *testing.T, d *sold.Daemon, app, method, path, origin, body string, hdr map[string]string) (int, string) {
 	t.Helper()
 	host := "localhost:" + strconv.Itoa(d.UIPort())
@@ -71,9 +71,9 @@ func TestFilesAcrossDevicesAndPeople(t *testing.T) {
 		return true
 	})
 
-	// The launcher lists the apps with their origins.
-	if code, page := ui(t, laptop, "", "GET", "/", "", "", nil); code != 200 || !strings.Contains(page, origin(laptop, "files")+"/") {
-		t.Fatalf("launcher: %d %s", code, page)
+	// The UI root serves the Sol app; the apps' origins come from the admin API.
+	if code, page := ui(t, laptop, "", "GET", "/", "", "", nil); code != 200 || !strings.Contains(page, "/app.js") {
+		t.Fatalf("Sol app: %d %s", code, page)
 	}
 	// An app origin serves the UI with the CSP, the kit, sol.js and the theme.
 	for _, p := range []string{"/", "/kit/kit.css", "/sol.js", "/_sol/theme.css"} {

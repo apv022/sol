@@ -49,6 +49,14 @@ other users on the same computer can reach loopback. So the browser needs a sess
 
 Errors use the API.md error shape. Every change is written to the activity log as `sol.*`.
 
+Settled in C8: `POST login-code` (admin token only) answers `{code, url, expires}`; `POST
+apps/install` and `POST agents` (issuing a key) are CLI-only, since they name files on this
+computer. A browser GET without `Origin` (EventSource and same-origin fetch omit it) is accepted
+unless `Sec-Fetch-Site` names another site; anything else needs `Origin` equal to the UI root.
+`PATCH devices/{id}` with a changed `admin` answers `not_implemented` until handing over P
+exists. Event data is the same object the matching GET returns (`{"id"|"name": …, "removed":
+true}` once gone; `session` adds `up`). Times are RFC 3339.
+
 ## Port sharing (services and tunnels)
 
 The PoC's proven feature, on the new wire: a service is a local TCP port (`127.0.0.1:<port>`)

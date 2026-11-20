@@ -143,8 +143,8 @@ func TestInstallRunAndUI(t *testing.T) {
 	if w := get("echo.bob.localhost:7777", "/", nil); w.Code != 501 {
 		t.Fatal(w.Code)
 	}
-	if w := get("localhost:7777", "/", nil); w.Code != 200 || !strings.Contains(w.Body.String(), "http://echo.localhost:7777/") {
-		t.Fatal(w.Body.String())
+	if w := get("localhost:7777", "/", nil); w.Code != 404 {
+		t.Fatal("no Root configured, yet the UI root answered", w.Code)
 	}
 	if w := get("echo.localhost:7777", "/_sol/theme.css", nil); w.Code != 200 || !strings.Contains(w.Body.String(), "@theme") {
 		t.Fatal(w.Code)

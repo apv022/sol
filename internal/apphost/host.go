@@ -1,7 +1,9 @@
 // Package apphost installs, removes, runs and serves Sol apps (design/API.md §9, §10): it keeps
 // the registry of installed manifests the app API routes actions by, supervises each app's
 // process with restart backoff, and serves every app's UI at its own origin
-// http://<app>.localhost:<port>/ with the /_sol/ bridge to the app API.
+// http://<app>.localhost:<port>/ with the /_sol/ bridge to the app API. The same router hands
+// the UI root (the Sol app, Config.Root) and http://<name>.<petname>.localhost:<port>/ (a
+// contact's app or service, Config.Peer) to the daemon, under the same Host check and CSP.
 //
 // An installed app is a directory <apps>/<id>/ holding its app.json and files. First-party apps
 // are built into the sol binary ("exec": "builtin:<name>"): the host runs them as
@@ -134,7 +136,16 @@ type Config struct {
 	// Anchor reports whether this device is an anchor (apps with runs_on "anchor" run only
 	// there). nil means never.
 	Anchor func() bool
-	Log    *slog.Logger
+	// Root serves the UI root, http://localhost:<port>/ (the Sol app and the browser's admin
+	// API); nil answers 404.
+	Root http.Handler
+	// Peer serves http://<name>.<peer>.localhost:<port>/ (a contact's app UI or HTTP service);
+	// origin is that origin. nil answers not_implemented.
+	Peer func(w http.ResponseWriter, r *http.Request, name, peer, origin string)
+	// OnChange, if set, is called (never with the host's lock held) whenever an app is
+	// installed, removed, restarted, or starts or stops running.
+	OnChange func(id string)
+	Log      *slog.Logger
 }
 
 // app is one installed app.
@@ -401,6 +412,50 @@ func (h *Host) setRunning(a *app, on bool) {
 	h.mu.Lock()
 	a.running = on
 	h.mu.Unlock()
+	h.changed(a.m.ID)
+}
+
+// changed reports a change of app id to Config.OnChange.
+func (h *Host) changed(id string) {
+	if h.cfg.OnChange != nil {
+		h.cfg.OnChange(id)
+	}
+}
+
+// Restart stops an app and starts it again (sol app restart). An attached app is not
+// supervised here, so it cannot be restarted.
+func (h *Host) Restart(id string) error {
+	h.mu.Lock()
+	a := h.apps[id]
+	if a == nil {
+		h.mu.Unlock()
+		return sol.Errorf("not_found", "no app "+id)
+	}
+	if a.attached {
+		h.mu.Unlock()
+		return sol.Errorf("conflict", id+" is attached for development; restart it yourself")
+	}
+	wait := h.stopLocked(a)
+	h.mu.Unlock()
+	<-wait
+	h.mu.Lock()
+	if h.apps[id] == a {
+		h.startLocked(a)
+	}
+	h.mu.Unlock()
+	h.changed(id)
+	return nil
+}
+
+// Manifest returns an installed app's manifest.
+func (h *Host) Manifest(id string) (*sol.Manifest, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	a := h.apps[id]
+	if a == nil {
+		return nil, false
+	}
+	return a.m, true
 }
 
 // env builds the environment of one run of a, with a fresh token.
@@ -563,6 +618,7 @@ func (h *Host) Install(dir string) (*sol.Manifest, error) {
 	}
 	h.startLocked(h.add(m, dst))
 	h.mu.Unlock()
+	h.changed(m.ID)
 	return m, nil
 }
 
@@ -579,6 +635,7 @@ func (h *Host) Remove(id string) error {
 	h.mu.Unlock()
 	<-wait
 	h.cfg.Tokens.Revoke(id)
+	defer h.changed(id)
 	if a.attached {
 		return nil
 	}
@@ -602,6 +659,9 @@ func (h *Host) Attach(m *sol.Manifest, addr string) (string, error) {
 	}
 	a := &app{m: m, addr: addr, attached: true, bridge: h.cfg.Tokens.Issue(m.ID)}
 	h.apps[m.ID] = a
+	if h.cfg.OnChange != nil {
+		go h.cfg.OnChange(m.ID) // h.mu is held here
+	}
 	return h.cfg.Tokens.Issue(m.ID), nil
 }
 

@@ -239,7 +239,11 @@ func (d *Daemon) themePayload() []byte {
 }
 
 // pushTheme sends the current theme event to every app's event stream.
-func (d *Daemon) pushTheme() { d.API.Theme(d.themePayload()) }
+func (d *Daemon) pushTheme() {
+	p := d.themePayload()
+	d.API.Theme(p)
+	d.emit(EvTheme, json.RawMessage(p))
+}
 
 // watchThemes pushes a theme event whenever the theme files change on disk, coalescing bursts
 // (an editor's save is several events). Where the OS has no watcher here, edits made outside

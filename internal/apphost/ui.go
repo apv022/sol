@@ -2,7 +2,6 @@ package apphost
 
 import (
 	"context"
-	"html/template"
 	"io/fs"
 	"net"
 	"net/http"
@@ -27,9 +26,11 @@ const CSP = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' da
 
 var themeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-// UI returns the UI router for the given port: http://localhost:<port>/ is the launcher,
-// http://<app>.localhost:<port>/ an app's origin. The port is part of the Host check, so a
-// page served elsewhere cannot rebind a name to it.
+// UI returns the UI router for the given port: http://localhost:<port>/ (and
+// http://127.0.0.1:<port>/) is the Sol app (Config.Root), http://<app>.localhost:<port>/ an
+// app's origin, and http://<name>.<petname>.localhost:<port>/ a contact's app or service
+// (Config.Peer). The port is part of the Host check, so a page served elsewhere cannot rebind a
+// name to it.
 func (h *Host) UI(port int) http.Handler {
 	ps := strconv.Itoa(port)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,8 +40,13 @@ func (h *Host) UI(port int) http.Handler {
 			return
 		}
 		host = strings.ToLower(host)
-		if host == "localhost" {
-			h.launcher(w, r, ps)
+		if host == "localhost" || host == "127.0.0.1" {
+			if h.cfg.Root == nil {
+				http.NotFound(w, r)
+				return
+			}
+			SecurityHeaders(w.Header())
+			h.cfg.Root.ServeHTTP(w, r)
 			return
 		}
 		sub, ok := strings.CutSuffix(host, ".localhost")
@@ -49,6 +55,15 @@ func (h *Host) UI(port int) http.Handler {
 			return
 		}
 		id, peer, _ := strings.Cut(sub, ".")
+		if peer != "" {
+			SecurityHeaders(w.Header())
+			if h.cfg.Peer == nil || strings.Contains(peer, ".") {
+				sol.WriteError(w, sol.Errorf("not_implemented", "opening a peer's app is not available here"))
+				return
+			}
+			h.cfg.Peer(w, r, id, peer, "http://"+host+":"+ps)
+			return
+		}
 		h.mu.Lock()
 		a := h.apps[id]
 		h.mu.Unlock()
@@ -56,33 +71,46 @@ func (h *Host) UI(port int) http.Handler {
 			http.Error(w, "no such app", http.StatusNotFound)
 			return
 		}
-		hd := w.Header()
-		hd.Set("Content-Security-Policy", CSP)
-		hd.Set("X-Content-Type-Options", "nosniff")
-		hd.Set("Referrer-Policy", "no-referrer")
-		hd.Set("Cross-Origin-Opener-Policy", "same-origin")
-		if peer != "" {
-			// A peer's app proxied over Sol (API.md §10) is a later ticket.
-			sol.WriteError(w, sol.Errorf("not_implemented", "opening a peer's app is not built yet"))
-			return
-		}
+		SecurityHeaders(w.Header())
 		h.serveApp(w, r, a, "http://"+id+".localhost:"+ps)
 	})
 }
 
-// serveApp serves one request on an app's origin.
-func (h *Host) serveApp(w http.ResponseWriter, r *http.Request, a *app, origin string) {
+// SecurityHeaders sets the headers every UI origin's responses carry: the CSP and its
+// companions. The Sol app at the UI root gets exactly the same policy as app origins.
+func SecurityHeaders(hd http.Header) {
+	hd.Set("Content-Security-Policy", CSP)
+	hd.Set("X-Content-Type-Options", "nosniff")
+	hd.Set("Referrer-Policy", "no-referrer")
+	hd.Set("Cross-Origin-Opener-Policy", "same-origin")
+}
+
+// ServeShared serves the files every UI origin has in common (/_sol/theme.css, /sol.js and
+// /kit/...) and reports whether r was one of them.
+func (h *Host) ServeShared(w http.ResponseWriter, r *http.Request) bool {
 	switch p := r.URL.Path; {
 	case p == "/_sol/theme.css":
 		h.theme(w, r)
-	case strings.HasPrefix(p, "/_sol/v1/"):
-		h.bridge(w, r, a, origin)
-	case strings.HasPrefix(p, "/_sol/"):
-		sol.WriteError(w, sol.Errorf("not_found", "no such path"))
 	case p == "/sol.js":
 		http.ServeFileFS(w, r, soljs.FS, "sol.js")
 	case strings.HasPrefix(p, "/kit/"):
 		http.StripPrefix("/kit/", http.FileServerFS(kit.FS)).ServeHTTP(w, r)
+	default:
+		return false
+	}
+	return true
+}
+
+// serveApp serves one request on an app's origin.
+func (h *Host) serveApp(w http.ResponseWriter, r *http.Request, a *app, origin string) {
+	if h.ServeShared(w, r) {
+		return
+	}
+	switch p := r.URL.Path; {
+	case strings.HasPrefix(p, "/_sol/v1/"):
+		h.bridge(w, r, a, origin)
+	case strings.HasPrefix(p, "/_sol/"):
+		sol.WriteError(w, sol.Errorf("not_found", "no such path"))
 	default:
 		h.proxy(w, r, a)
 	}
@@ -198,52 +226,6 @@ func (h *Host) proxy(w http.ResponseWriter, r *http.Request, a *app) {
 		},
 	}
 	rp.ServeHTTP(w, r)
-}
-
-var launcherPage = template.Must(template.New("launcher").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sol</title>
-<style>
-:root{color-scheme:light dark;--bg:#f6f6f8;--fg:#1c1c1e;--muted:#6e6e73;--card:#fff;--line:#e5e5ea;--tint:#c8890a}
-@media (prefers-color-scheme:dark){:root{--bg:#111114;--fg:#f2f2f7;--muted:#98989f;--card:#1c1c1f;--line:#2c2c30}}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:640px;margin:0 auto;padding:40px 16px}
-h1{font-size:22px;margin:0 0 4px}p{color:var(--muted);margin:0 0 24px}
-ul{list-style:none;padding:0;margin:0;display:grid;gap:10px}
-a,div.app{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;color:inherit;text-decoration:none}
-a:hover{border-color:var(--tint)}b{display:block}span{color:var(--muted);font-size:13px}
-</style></head><body><main>
-<h1>Sol</h1><p>Your apps on this device.</p>
-<ul>{{range .}}<li>{{if .URL}}<a href="{{.URL}}">{{else}}<div class="app">{{end}}<b>{{.Name}}</b><span>{{.Description}}{{if not .Running}} (not running){{end}}</span>{{if .URL}}</a>{{else}}</div>{{end}}</li>{{else}}<li><div class="app"><span>No apps installed.</span></div></li>{{end}}</ul>
-</main></body></html>`))
-
-// launcher serves the page at http://localhost:<port>/ that lists the installed apps.
-func (h *Host) launcher(w http.ResponseWriter, r *http.Request, port string) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	type row struct {
-		Name, Description, URL string
-		Running                bool
-	}
-	var rows []row
-	h.mu.Lock()
-	for _, s := range h.statusLocked() {
-		a := h.apps[s.ID]
-		rw := row{Name: a.m.Name, Description: a.m.Description, Running: s.Running}
-		if rw.Name == "" {
-			rw.Name = a.m.ID
-		}
-		if a.m.UI != "" {
-			rw.URL = "http://" + a.m.ID + ".localhost:" + port + a.m.UI
-		}
-		rows = append(rows, rw)
-	}
-	h.mu.Unlock()
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = launcherPage.Execute(w, rows)
 }
 
 // AppURL returns the UI origin of an app for a UI port.
