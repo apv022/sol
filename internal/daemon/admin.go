@@ -25,7 +25,6 @@ import (
 	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/session"
-	"github.com/apv022/sol/internal/transport"
 	"github.com/apv022/sol/sdk/go/sol"
 )
 
@@ -38,7 +37,7 @@ import (
 type Status struct {
 	Me           StatusMe         `json:"me"`
 	Endpoints    []EndpointInfo   `json:"endpoints"`
-	Transports   []TransportInfo  `json:"transports"`
+	Transports   []TransportState `json:"transports"`
 	PeerSessions []SessionInfo    `json:"peer_sessions"`
 	Sessions     []BrowserSession `json:"sessions"`
 	Storage      *Storage         `json:"storage,omitempty"`
@@ -64,14 +63,6 @@ type IDName struct {
 type EndpointInfo struct {
 	Addr string `json:"addr"`
 	Kind string `json:"kind"`
-}
-
-// TransportInfo is one transport and its state ("up" when ready, else the transport's state:
-// starting, stopped, failed).
-type TransportInfo struct {
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Detail string `json:"detail,omitempty"`
 }
 
 // SessionInfo is one live session with a device (and, as an event, one that came up or ended).
@@ -111,7 +102,7 @@ func (d *Daemon) Status() Status {
 
 func (d *Daemon) status(browser string) Status {
 	st := Status{PID: os.Getpid(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
-		Transports: []TransportInfo{}, PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
+		Transports: d.Transports(), PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
 	st.Me.Person.ID, st.Me.Device.ID = d.me()
 	if b, err := d.Keyring.Bundle(); err == nil {
 		st.Me.Person.Name = b.Person.Name
@@ -121,14 +112,6 @@ func (d *Daemon) status(browser string) Status {
 	}
 	for _, e := range d.Keyring.Endpoints().Endpoints {
 		st.Endpoints = append(st.Endpoints, EndpointInfo{Addr: e.Address, Kind: e.Transport})
-	}
-	for _, t := range d.transports {
-		ts := t.Status()
-		state := string(ts.State)
-		if ts.State == transport.StateReady {
-			state = "up"
-		}
-		st.Transports = append(st.Transports, TransportInfo{Name: t.Name(), State: state, Detail: ts.Detail})
 	}
 	for _, s := range d.Sessions.Sessions() {
 		st.PeerSessions = append(st.PeerSessions, d.liveSessionInfo(s))
@@ -318,14 +301,27 @@ func (d *Daemon) adminHandler() http.Handler {
 
 	// People and devices.
 	j("GET /admin/v1/people", "", func(r *http.Request) (any, error) { return d.People(), nil })
-	j("PATCH /admin/v1/people/{id}", "people.rename", func(r *http.Request) (any, error) {
+	j("PATCH /admin/v1/people/{id}", "people.update", func(r *http.Request) (any, error) {
 		var b struct {
-			Petname string `json:"petname"`
+			Petname   *string `json:"petname"`
+			Anonymous *bool   `json:"anonymous"`
 		}
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		return d.SetPetname(r.PathValue("id"), b.Petname)
+		if b.Petname == nil && b.Anonymous == nil {
+			return nil, sol.Errorf("bad_request", "nothing to change (petname, anonymous)")
+		}
+		if b.Anonymous != nil {
+			if _, err := d.SetAnonymous(r.PathValue("id"), *b.Anonymous); err != nil {
+				return nil, err
+			}
+		}
+		if b.Petname != nil {
+			return d.SetPetname(r.PathValue("id"), *b.Petname)
+		}
+		p, _ := d.person(r.PathValue("id"))
+		return p, nil
 	})
 	j("DELETE /admin/v1/people/{id}", "people.unpair", func(r *http.Request) (any, error) {
 		return nil, d.Unpair(r.Context(), r.PathValue("id"))
@@ -343,12 +339,22 @@ func (d *Daemon) adminHandler() http.Handler {
 	})
 	j("POST /admin/v1/invite", "invite", func(r *http.Request) (any, error) {
 		var b struct {
-			Join bool `json:"join"`
+			Join      bool `json:"join"`
+			Anonymous bool `json:"anonymous"`
 		}
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		l, err := d.Invite(b.Join)
+		var l string
+		var err error
+		switch {
+		case b.Anonymous && b.Join:
+			return nil, sol.Errorf("bad_request", "a join link adds your own device; it can't be anonymous")
+		case b.Anonymous:
+			l, err = d.InviteAnonymous()
+		default:
+			l, err = d.Invite(b.Join)
+		}
 		return map[string]any{"link": l, "expires": time.Now().Add(pairing.TTL).UTC()}, err
 	})
 	j("POST /admin/v1/pair", "pair", func(r *http.Request) (any, error) {
@@ -362,6 +368,21 @@ func (d *Daemon) adminHandler() http.Handler {
 		defer cancel()
 		kind, person, err := d.Pair(ctx, b.Link)
 		return map[string]string{"kind": kind, "person": person}, err
+	})
+
+	// Transports.
+	j("GET /admin/v1/transports", "", func(r *http.Request) (any, error) { return d.Transports(), nil })
+	j("POST /admin/v1/transports/{name}", "", func(r *http.Request) (any, error) {
+		var b struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		if b.Enabled == nil {
+			return nil, sol.Errorf("bad_request", `say {"enabled": true} or false`)
+		}
+		return d.SetTransport(r.PathValue("name"), *b.Enabled)
 	})
 
 	// Apps.

@@ -32,7 +32,17 @@ func solActions() ActionApp {
 		}
 		props[k] = s
 	}
-	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance", Actions: []sol.ActionSpec{
+	name := &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
+		"name": {Type: "string", Enum: enumOf(KnownTransports)}}}
+	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance, transports and people's privacy", Actions: []sol.ActionSpec{
+		{Name: "sol.transports.list", Description: "List the transports, whether each is on and how it is doing", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "enabled", "state", "detail"}},
+		{Name: "sol.transports.enable", Description: "Turn a transport on (wg, direct, tor), now and after restarts", Effect: sol.EffectWrite, Input: name},
+		{Name: "sol.transports.disable", Description: "Turn a transport off; the last one stays on", Effect: sol.EffectWrite, Input: name},
+		{Name: "sol.people.set", Description: "Make a contact anonymous (Tor only both ways; they only learn your onion) or a buddy (every transport)",
+			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Required: []string{"person", "privacy"}, Properties: map[string]*sol.Schema{
+				"person":  {Type: "string"},
+				"privacy": {Type: "string", Enum: enumOf([]string{"anonymous", "buddy"})}}}},
 		{Name: "sol.theme.list", Description: "List the themes, the active one and the appearance settings", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "title", "author", "builtin"}},
 		{Name: "sol.theme.set", Description: "Make a theme the active one on every app and device", Effect: sol.EffectWrite,
@@ -79,6 +89,32 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 			return nil, true, err
 		} else {
 			res = map[string]string{"active": args["name"]}
+		}
+	case "sol.transports.list":
+		res = d.Transports()
+	case "sol.transports.enable", "sol.transports.disable":
+		on := c.Action == "sol.transports.enable"
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "name": args["name"], "enabled": on}
+		} else if res, err = d.SetTransport(args["name"], on); err != nil {
+			return nil, true, err
+		}
+	case "sol.people.set":
+		id := d.resolvePerson(args["person"])
+		anon := args["privacy"] == "anonymous"
+		switch {
+		case c.DryRun:
+			out := map[string]any{"dry_run": true, "person": id, "anonymous": anon}
+			if anon {
+				out["warning"] = AnonymousWarning
+			}
+			res = out
+		default:
+			p, err := d.SetAnonymous(id, anon)
+			if err != nil {
+				return nil, true, err
+			}
+			res = p
 		}
 	case "sol.theme.settings":
 		switch {

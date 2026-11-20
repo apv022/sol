@@ -97,11 +97,11 @@ func (d *Daemon) refreshAccess() time.Time {
 		return next
 	}
 	d.lastAccess = sig
-	for _, t := range d.transports {
+	for _, t := range d.transportsNow() {
 		if !issuesAccess(t) {
 			continue
 		}
-		p := transport.Publication{ID: "node", Target: d.nodeLn.Addr().String(), ClientAuth: keys}
+		p := transport.Publication{ID: "node", Target: d.targetFor(t), ClientAuth: keys}
 		if _, err := t.Publish(d.ctx, p); err != nil {
 			// A tor that is not up yet keeps the publication and registers it when it is.
 			d.log.Debug("republishing the onion with a new client-auth set", "transport", t.Name(), "err", err)

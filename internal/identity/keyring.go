@@ -561,3 +561,48 @@ func (k *Keyring) RenewAgent(c AgentCert, ttl time.Duration, now time.Time) (Age
 	}
 	return k.IssueAgent(c.Agent, c.Name, c.Scopes, ttl, now)
 }
+
+// AnonymousTransport reports whether endpoints of the named transport hide where a device is
+// ("tor", "i2p"): the only ones an anonymous contact may see or be reached over.
+func AnonymousTransport(name string) bool { return name == "tor" || name == "i2p" }
+
+// OnlyAnonymous returns eps without the entries of transports that reveal an address
+// (WireGuard, TLS direct, clearnet, LAN): what an anonymous contact may see.
+func OnlyAnonymous(eps []Endpoint) []Endpoint {
+	var out []Endpoint
+	for _, e := range eps {
+		if AnonymousTransport(e.Transport) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// AnonymousBundle is this device's bundle as an anonymous contact sees it: the same person
+// certificate and device list, and an endpoint record with only the onion (and I2P) entries,
+// signed by this device with the same seq as the full record (IDENTITY.md §Endpoint record).
+// A contact only ever receives one of the two forms; switching a contact between them bumps
+// the seq first (BumpEndpoints), so nobody holds both forms of one seq.
+func (k *Keyring) AnonymousBundle() (Bundle, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.st.pc == nil {
+		return Bundle{}, ErrNoPerson
+	}
+	dl := *k.st.dl
+	dl.Devices = append([]Device(nil), dl.Devices...)
+	ep := EndpointRecord{Device: k.st.ep.Device, Seq: k.st.ep.Seq, Endpoints: OnlyAnonymous(k.st.ep.Endpoints)}
+	if len(ep.Device) == 0 {
+		ep.Device = k.st.device.Public().(ed25519.PublicKey)
+	}
+	if err := ep.Sign(k.st.device); err != nil {
+		return Bundle{}, err
+	}
+	return Bundle{Person: *k.st.pc, Devices: dl, Endpoints: ep}, nil
+}
+
+// BumpEndpoints re-signs the endpoint record with the same entries and a higher seq, so the
+// next record any peer receives (full or anonymous form) replaces whatever it holds.
+func (k *Keyring) BumpEndpoints(now time.Time) (EndpointRecord, error) {
+	return k.SetEndpoints(k.Endpoints().Endpoints, now)
+}

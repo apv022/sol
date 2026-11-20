@@ -34,6 +34,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -120,8 +121,12 @@ type Manager struct {
 	endpoints map[string]identity.EndpointRecord // newest seen per device
 	dialing   map[string]*sync.Mutex
 	listeners map[net.Listener]struct{}
-	links     map[string]*link // path state per peer device (paths.go)
-	auth      clientAuth       // client-auth keys installed for peers' onions (toraccess.go)
+	links     map[string]*link  // path state per peer device (paths.go)
+	auth      clientAuth        // client-auth keys installed for peers' onions (toraccess.go)
+	peerAddrs map[string]string // "<device>|<transport>" -> address given to a PeerSetter
+
+	trMu sync.RWMutex
+	ts   []transport.Transport // Config.Transports, replaced by SetTransports
 }
 
 // New returns a Manager. Call Serve to accept connections.
@@ -148,6 +153,8 @@ func New(cfg Config) (*Manager, error) {
 		dialing:   map[string]*sync.Mutex{},
 		listeners: map[net.Listener]struct{}{},
 		links:     map[string]*link{},
+		peerAddrs: map[string]string{},
+		ts:        cfg.Transports,
 		announce:  make(chan struct{}, 1),
 		probes:    make(chan struct{}, maxProbes),
 	}
@@ -190,6 +197,7 @@ type Session struct {
 	path    PathInfo  // how it was reached
 	pathKey string    // the endpoint it was dialed over ("" inbound)
 	started time.Time // when it came up
+	anon    bool      // it runs over an anonymous transport (Tor, I2P)
 }
 
 // Path says how the session was reached and why that path.
@@ -219,7 +227,13 @@ func (s *Session) HTTPClient() *http.Client { return s.client }
 
 // Serve accepts connections on ln (the local target the transports publish)
 // until ln is closed or the Manager is.
-func (m *Manager) Serve(ln net.Listener) error {
+func (m *Manager) Serve(ln net.Listener) error { return m.serve(ln, false) }
+
+// ServeAnonymous is Serve for the local target of the anonymous transports (the onion): only
+// connections accepted here may carry a session with an anonymous contact.
+func (m *Manager) ServeAnonymous(ln net.Listener) error { return m.serve(ln, true) }
+
+func (m *Manager) serve(ln net.Listener, anon bool) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -249,7 +263,7 @@ func (m *Manager) Serve(ln net.Listener) error {
 		}
 		go func() {
 			defer func() { <-m.slots }()
-			m.answer(conn)
+			m.answer(conn, anon)
 		}()
 	}
 }
@@ -314,14 +328,38 @@ func (m *Manager) NoteEndpoints(rec identity.EndpointRecord) {
 		return
 	}
 	m.endpoints[string(rec.Device)] = rec
+	var person ed25519.PublicKey
+	if k := m.keepers[string(rec.Device)]; k != nil {
+		person = k.person
+	}
+	if person != nil {
+		m.goBGLocked(func() { m.syncPeer(person, rec.Device) })
+	}
 }
 
+// goBGLocked is goBG with m.mu held.
+func (m *Manager) goBGLocked(f func()) {
+	if m.closed {
+		return
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		f()
+	}()
+}
+
+// endpointsFor returns where device of person may be dialed: its newest endpoint record,
+// reduced to the anonymous transports for an anonymous contact.
 func (m *Manager) endpointsFor(person, device ed25519.PublicKey) (identity.EndpointRecord, bool) {
 	m.mu.Lock()
 	rec, ok := m.endpoints[string(device)]
 	m.mu.Unlock()
 	if c, cok := m.cache.Endpoints(person, device); cok && (!ok || c.Seq > rec.Seq) {
-		return c, true
+		rec, ok = c, true
+	}
+	if ok && m.Anonymous(person) {
+		rec = onlyAnonymous(rec)
 	}
 	return rec, ok
 }
@@ -336,8 +374,9 @@ func (m *Manager) myBundle() ([]byte, error) {
 }
 
 // admit decides whether a verified device may hold a session with us (in
-// either direction) and folds its bundle into what we know.
-func (m *Manager) admit(b identity.Bundle, dev ed25519.PublicKey) (Peer, error) {
+// either direction) and folds its bundle into what we know. anon says the connection runs
+// over an anonymous transport; an anonymous contact is refused on any other.
+func (m *Manager) admit(b identity.Bundle, dev ed25519.PublicKey, anon bool) (Peer, error) {
 	person := b.Person.Person
 	me := m.kr.Person()
 	if me == nil {
@@ -365,6 +404,9 @@ func (m *Manager) admit(b identity.Bundle, dev ed25519.PublicKey) (Peer, error) 
 	}
 	if !m.cfg.Contacts.IsContact(person) {
 		return Peer{}, ErrNotRelated
+	}
+	if !anon && m.Anonymous(person) {
+		return Peer{}, ErrNotAnonymousPath
 	}
 	changed, err := m.foldContact(b, dev)
 	if err != nil {
@@ -444,6 +486,7 @@ func (m *Manager) prune(person ed25519.PublicKey) {
 	}
 	for _, k := range stop {
 		k.cancel()
+		m.syncPeer(k.person, k.device)
 	}
 }
 
@@ -460,23 +503,26 @@ func (m *Manager) RemoveDevice(device ed25519.PublicKey) (identity.DeviceList, e
 }
 
 // answer runs the callee side of one inbound connection.
-func (m *Manager) answer(conn net.Conn) {
+func (m *Manager) answer(conn net.Conn, anon bool) {
 	var peer Peer
 	var recovered []byte
 	decide := func(r *wire.Request) ([]byte, error) {
 		if r.Op == wire.OpRecover {
+			if !anon && m.Anonymous(r.Person) {
+				return nil, ErrNotAnonymousPath
+			}
 			var err error
 			if recovered, err = m.recoverable(r.Person); err != nil {
 				return nil, err
 			}
-			return m.myBundle()
+			return m.bundleFor(r.Person)
 		}
 		var err error
-		peer, err = m.decide(r)
+		peer, err = m.decide(r, anon)
 		if err != nil {
 			return nil, err
 		}
-		return m.myBundle()
+		return m.bundleFor(peer.Person)
 	}
 	req, err := wire.Answer(conn, m.kr, decide)
 	if err != nil {
@@ -501,17 +547,18 @@ func (m *Manager) answer(conn net.Conn) {
 	if req.Op == wire.OpJoin {
 		m.BundleChanged() // the device list grew: tell everyone
 	}
-	s := m.start(conn, false, peer, req.Device, PathInfo{Inbound: true, Reason: "the peer dialed this device"}, "")
+	s := m.start(conn, false, peer, req.Device, PathInfo{Inbound: true, Reason: "the peer dialed this device"}, "", anon)
 	if s != nil {
 		m.Keep(peer.Person, peer.Device)
 	}
 }
 
-// decide is the callee's policy for each op (PROTOCOL.md §Callee decision).
-func (m *Manager) decide(r *wire.Request) (Peer, error) {
+// decide is the callee's policy for each op (PROTOCOL.md §Callee decision). anon says the
+// connection came over an anonymous transport.
+func (m *Manager) decide(r *wire.Request, anon bool) (Peer, error) {
 	switch r.Op {
 	case wire.OpSession, wire.OpProbe:
-		return m.admit(r.Bundle, r.Device)
+		return m.admit(r.Bundle, r.Device, anon)
 	case wire.OpPair:
 		person := r.Bundle.Person.Person
 		if me := m.kr.Person(); me == nil || bytes.Equal(person, me) {
@@ -520,13 +567,24 @@ func (m *Manager) decide(r *wire.Request) (Peer, error) {
 		if m.cfg.Tokens == nil {
 			return Peer{}, errors.New("pairing is off")
 		}
-		if err := m.cfg.Tokens.Consume(pairing.KindPair, r.Secret); err != nil {
+		if !anon && m.cfg.Tokens.Anonymous(r.Secret) {
+			return Peer{}, ErrNotAnonymousPath // not burned: the link holder may still use Tor
+		}
+		tok, err := m.cfg.Tokens.Redeem(pairing.KindPair, r.Secret)
+		if err != nil {
 			return Peer{}, err
 		}
 		if _, err := m.cache.Accept(r.Bundle, r.Device); err != nil {
 			return Peer{}, err
 		}
-		if err := m.cfg.Contacts.AddContact(person, r.Bundle.Person.Name); err != nil {
+		if ac, ok := m.cfg.Contacts.(AnonymousContacts); ok && tok.Anonymous {
+			err = ac.AddAnonymousContact(person, r.Bundle.Person.Name)
+		} else if tok.Anonymous {
+			err = errors.New("session: this contacts store cannot keep anonymous contacts")
+		} else {
+			err = m.cfg.Contacts.AddContact(person, r.Bundle.Person.Name)
+		}
+		if err != nil {
 			return Peer{}, err
 		}
 		m.NoteEndpoints(r.Bundle.Endpoints)
@@ -560,14 +618,14 @@ func (m *Manager) decide(r *wire.Request) (Peer, error) {
 
 // start turns a handshaken connection into a registered session. It returns
 // the session that won the tie-break (nil if the manager is closed).
-func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.PublicKey, path PathInfo, pk string) *Session {
+func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.PublicKey, path PathInfo, pk string, anon bool) *Session {
 	var ms *mux.Session
 	if weCalled {
 		ms = mux.Client(conn)
 	} else {
 		ms = mux.Server(conn)
 	}
-	s := &Session{m: m, mux: ms, peer: peer, caller: caller, path: path, pathKey: pk, started: time.Now()}
+	s := &Session{m: m, mux: ms, peer: peer, caller: caller, path: path, pathKey: pk, started: time.Now(), anon: anon}
 	s.client = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return ms.Open(ctx)
@@ -659,7 +717,8 @@ func (m *Manager) handler() http.Handler {
 	mx := http.NewServeMux()
 	mx.HandleFunc("POST "+BundlePath, m.servePush)
 	mx.HandleFunc("GET "+BundlePath, func(w http.ResponseWriter, r *http.Request) {
-		b, err := m.myBundle()
+		p, _ := PeerFrom(r.Context())
+		b, err := m.bundleFor(p.Person)
 		if err != nil {
 			http.Error(w, "no identity", http.StatusServiceUnavailable)
 			return
@@ -820,12 +879,13 @@ func (m *Manager) Connect(ctx context.Context, person, device ed25519.PublicKey)
 	if err != nil {
 		return nil, err
 	}
-	peer, err := m.admit(res.Bundle, res.Device)
+	anon := identity.AnonymousTransport(path.Transport)
+	peer, err := m.admit(res.Bundle, res.Device, anon)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	s := m.start(conn, true, peer, m.kr.DevicePublic(), path, pk)
+	s := m.start(conn, true, peer, m.kr.DevicePublic(), path, pk, anon)
 	if s == nil {
 		return nil, ErrClosed
 	}
@@ -849,7 +909,7 @@ func (m *Manager) dialMutex(device ed25519.PublicKey) *sync.Mutex {
 
 // transportFor returns the first configured transport that can dial ep.
 func (m *Manager) transportFor(ep identity.Endpoint) transport.Transport {
-	for _, t := range m.cfg.Transports {
+	for _, t := range m.transportsNow() {
 		if t.Name() == ep.Transport && t.Handles(ep.Address) {
 			return t
 		}
@@ -865,7 +925,7 @@ func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, c wire.
 	if c.Op == wire.OpJoin {
 		c.Bundle = m.kr.Endpoints().Marshal()
 	} else {
-		b, err := m.myBundle()
+		b, err := m.bundleFor(wantPerson)
 		if err != nil {
 			return nil, nil, PathInfo{}, "", err
 		}
@@ -908,7 +968,8 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 		return nil, err
 	}
 	m.NoteEndpoints(res.Bundle.Endpoints)
-	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic(), path, pk)
+	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic(), path, pk,
+		identity.AnonymousTransport(path.Transport))
 	if s == nil {
 		return nil, ErrClosed
 	}
@@ -936,7 +997,8 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 	}
 	m.BundleChanged() // this device has a person now
 	m.NoteEndpoints(res.Bundle.Endpoints)
-	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic(), path, pk)
+	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic(), path, pk,
+		identity.AnonymousTransport(path.Transport))
 	if s == nil {
 		return nil, ErrClosed
 	}
@@ -947,6 +1009,15 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 // Invite issues a one-time pair or join link for this device. Join links
 // need an admin device.
 func (m *Manager) Invite(kind pairing.Kind) (pairing.Link, error) {
+	return m.InviteToken(pairing.Token{Kind: kind})
+}
+
+// ErrNoOnion: an anonymous invite needs this device's onion, and there is none yet.
+var ErrNoOnion = errors.New("session: an anonymous invite needs Tor, and this device has no onion yet (is tor on and started?)")
+
+// InviteToken is Invite for any token: an anonymous one makes a link that carries only the
+// onion (and redeeming it makes an anonymous contact).
+func (m *Manager) InviteToken(tok pairing.Token) (pairing.Link, error) {
 	if m.cfg.Tokens == nil {
 		return pairing.Link{}, errors.New("session: no token store")
 	}
@@ -954,15 +1025,25 @@ func (m *Manager) Invite(kind pairing.Kind) (pairing.Link, error) {
 	if err != nil {
 		return pairing.Link{}, err
 	}
-	if kind == pairing.KindJoin && !m.kr.IsAdmin() {
+	if tok.Kind == pairing.KindJoin && !m.kr.IsAdmin() {
 		return pairing.Link{}, identity.ErrNotAdmin
 	}
-	secret, _, err := m.cfg.Tokens.New(kind)
+	eps := b.Endpoints
+	if tok.Anonymous {
+		if _, ok := m.cfg.Contacts.(AnonymousContacts); !ok {
+			return pairing.Link{}, errors.New("session: this contacts store cannot keep anonymous contacts")
+		}
+		eps = onlyAnonymous(eps)
+		if !slices.ContainsFunc(eps.Endpoints, func(e identity.Endpoint) bool { return e.Transport == "tor" }) {
+			return pairing.Link{}, ErrNoOnion
+		}
+	}
+	secret, _, err := m.cfg.Tokens.NewToken(tok)
 	if err != nil {
 		return pairing.Link{}, err
 	}
-	return pairing.Link{Kind: kind, Person: b.Person.Person, Device: m.kr.DevicePublic(),
-		Secret: secret, Endpoints: b.Endpoints}, nil
+	return pairing.Link{Kind: tok.Kind, Person: b.Person.Person, Device: m.kr.DevicePublic(),
+		Secret: secret, Endpoints: eps}, nil
 }
 
 // keeper keeps a session with one device up.
@@ -996,6 +1077,7 @@ func (m *Manager) Keep(person, device ed25519.PublicKey) {
 	m.wg.Add(1)
 	m.mu.Unlock()
 	go m.keep(k)
+	m.syncPeer(person, device)
 }
 
 // Forget stops keeping device and closes its session.
@@ -1007,6 +1089,7 @@ func (m *Manager) Forget(device ed25519.PublicKey) {
 	m.mu.Unlock()
 	if k != nil {
 		k.cancel()
+		m.syncPeer(k.person, device)
 	}
 	if s != nil {
 		s.Close()

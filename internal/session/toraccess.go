@@ -70,7 +70,7 @@ func (m *Manager) deauthorize(device ed25519.PublicKey) {
 	if !ok {
 		return
 	}
-	for _, t := range m.cfg.Transports {
+	for _, t := range m.transportsNow() {
 		if ca, ok := t.(transport.ClientAuthorizer); ok && t.Handles(addr) {
 			_ = ca.DeauthorizeClient(addr)
 		}

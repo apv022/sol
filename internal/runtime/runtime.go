@@ -5,13 +5,13 @@
 // A Provider knows how to obtain and start a program. Providers are tried in
 // the order from config (runtime.provider_order):
 //
-//	bundled  binaries embedded at build time with -tags bundled (release builds)
+//	bundled  binaries embedded at build time with -tags bundled (release builds: tor
+//	         0.4.9.16 and its shared libraries, extracted into the data dir, bundled.go)
 //	native   the program found on PATH (default for development: apt install tor)
 //	docker   containers (stub; see docker.go)
 //
 // Every provider returns the same thing: a *Proc with a Done channel and a
 // Stop method. Callers (transports) never care which provider was used.
-// See docs/spec.md 6.2.1.
 package runtime
 
 import (
@@ -52,27 +52,42 @@ type Options struct {
 	ContainerRuntime string // "docker" or "podman"
 }
 
-// Select returns the first provider in order that can run program.
+// Select returns the first provider in order that can run program. A bundled provider falls
+// back, at Start, to the next one in order that can run it (a tor on PATH).
 func Select(order []string, program string, opts Options) (Provider, error) {
 	var tried []string
-	for _, name := range order {
-		var p Provider
-		switch name {
-		case "bundled":
-			p = &Bundled{BinDir: opts.BinDir}
-		case "native":
-			p = &Native{}
-		case "docker":
-			p = &Docker{Binary: opts.ContainerRuntime}
-		default:
-			return nil, fmt.Errorf("unknown provider %q", name)
+	for i, name := range order {
+		p, err := provider(name, opts)
+		if err != nil {
+			return nil, err
 		}
-		if p.Available(program) {
-			return p, nil
+		if !p.Available(program) {
+			tried = append(tried, name)
+			continue
 		}
-		tried = append(tried, name)
+		if b, ok := p.(*Bundled); ok {
+			for _, next := range order[i+1:] {
+				if f, err := provider(next, opts); err == nil && f.Available(program) {
+					b.Fallback = f
+					break
+				}
+			}
+		}
+		return p, nil
 	}
 	return nil, fmt.Errorf("no provider can run %s (tried %v); install it, e.g. `sudo apt install %s`", program, tried, program)
+}
+
+func provider(name string, opts Options) (Provider, error) {
+	switch name {
+	case "bundled":
+		return &Bundled{BinDir: opts.BinDir}, nil
+	case "native":
+		return &Native{}, nil
+	case "docker":
+		return &Docker{Binary: opts.ContainerRuntime}, nil
+	}
+	return nil, fmt.Errorf("unknown provider %q", name)
 }
 
 // Proc is a running program.

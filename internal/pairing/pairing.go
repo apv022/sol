@@ -83,9 +83,18 @@ var (
 )
 
 type token struct {
-	kind    Kind
-	expires time.Time
-	access  string // AccessKey(secret).TorPublic()
+	kind      Kind
+	expires   time.Time
+	access    string // AccessKey(secret).TorPublic()
+	anonymous bool   // an anonymous invite: whoever redeems it becomes an anonymous contact
+}
+
+// Token is what a redeemed secret was issued as.
+type Token struct {
+	Kind Kind
+	// Anonymous: the link carried only the onion, and whoever redeems it becomes an anonymous
+	// contact (Tor only, both ways; PROTOCOL.md §Anonymous contacts).
+	Anonymous bool
 }
 
 // Tokens holds pending secrets. Safe for concurrent use.
@@ -107,7 +116,14 @@ func NewTokens() *Tokens {
 }
 
 // New issues a secret of the given kind.
-func (t *Tokens) New(kind Kind) ([]byte, time.Time, error) {
+func (t *Tokens) New(kind Kind) ([]byte, time.Time, error) { return t.NewToken(Token{Kind: kind}) }
+
+// NewToken issues a secret for tok (an anonymous invite: Anonymous set, Kind pair).
+func (t *Tokens) NewToken(tok Token) ([]byte, time.Time, error) {
+	kind := tok.Kind
+	if tok.Anonymous && kind != KindPair {
+		return nil, time.Time{}, errors.New("pairing: only a pair link can be anonymous")
+	}
 	if kind != KindPair && kind != KindJoin {
 		return nil, time.Time{}, fmt.Errorf("pairing: unknown kind %q", kind)
 	}
@@ -122,7 +138,7 @@ func (t *Tokens) New(kind Kind) ([]byte, time.Time, error) {
 	exp := t.now().Add(t.ttl)
 	t.mu.Lock()
 	t.purgeLocked()
-	t.m[sha256.Sum256(secret)] = token{kind, exp, ak.TorPublic()}
+	t.m[sha256.Sum256(secret)] = token{kind, exp, ak.TorPublic(), tok.Anonymous}
 	t.mu.Unlock()
 	t.changed()
 	return secret, exp, nil
@@ -131,6 +147,12 @@ func (t *Tokens) New(kind Kind) ([]byte, time.Time, error) {
 // Consume checks a secret and burns it. It succeeds only for an unexpired
 // secret of the given kind; any presented secret that exists is burned.
 func (t *Tokens) Consume(kind Kind, secret []byte) error {
+	_, err := t.Redeem(kind, secret)
+	return err
+}
+
+// Redeem is Consume that also says what the secret was issued as.
+func (t *Tokens) Redeem(kind Kind, secret []byte) (Token, error) {
 	key := sha256.Sum256(secret)
 	t.mu.Lock()
 	tok, ok := t.m[key]
@@ -140,9 +162,19 @@ func (t *Tokens) Consume(kind Kind, secret []byte) error {
 		t.changed()
 	}
 	if !ok || tok.kind != kind || t.now().After(tok.expires) || len(secret) != SecretSize {
-		return ErrInvalidToken
+		return Token{}, ErrInvalidToken
 	}
-	return nil
+	return Token{Kind: tok.kind, Anonymous: tok.anonymous}, nil
+}
+
+// Anonymous reports whether secret is a pending anonymous invite, without burning it (the
+// callee checks it arrived over Tor before redeeming it).
+func (t *Tokens) Anonymous(secret []byte) bool {
+	key := sha256.Sum256(secret)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tok, ok := t.m[key]
+	return ok && tok.anonymous
 }
 
 // Pending returns how many unexpired secrets are outstanding.

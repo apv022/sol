@@ -40,7 +40,7 @@ func (d *Daemon) NetworkChanged(reason string) {
 		reason = reason[:64]
 	}
 	d.log.Info("network changed; checking sessions", "reason", reason)
-	for _, t := range d.transports {
+	for _, t := range d.transportsNow() {
 		if w, ok := t.(transport.NetworkWatcher); ok {
 			w.NetworkChanged(reason)
 		}
@@ -66,7 +66,7 @@ func (d *Daemon) refreshEndpoints() {
 		return
 	}
 	var eps []identity.Endpoint
-	for _, t := range d.transports {
+	for _, t := range d.transportsNow() {
 		if !transport.Usable(t) {
 			continue
 		}
@@ -104,6 +104,7 @@ func (d *Daemon) watchContacts() {
 				return
 			case ev := <-sub.C():
 				if ev.Entry != nil && strings.HasSuffix(ev.Entry.Feed, suffix) {
+					d.privacyChanged() // before keeping: an anonymous contact is dialed over Tor only
 					d.Sessions.KeepContacts()
 					d.kickAccess() // a contact came or went: so do their keys on my onion
 				}

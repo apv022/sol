@@ -8,6 +8,8 @@
 //	SOCKS5     the same shaping behind a SOCKS5 server; real tor can be
 //	           pointed at it ("Socks5Proxy") to see a slow network for real.
 //	UDPProxy   forwards UDP datagrams (WireGuard) and can drop or delay them.
+//	NAT        a home router for one host's UDP socket: only answers to what the host
+//	           sent get in (hole punching needed), and Block cuts UDP altogether (nat.go).
 //	FakeTor    a scripted stand-in for the tor program: it stalls at a chosen
 //	           bootstrap percentage, exits, drops or freezes its control
 //	           port, or never publishes a descriptor (faketor.go).

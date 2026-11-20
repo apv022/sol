@@ -572,7 +572,7 @@ func (m *Manager) probePath(ctx context.Context, person, device ed25519.PublicKe
 	}
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	bundle, err := m.myBundle()
+	bundle, err := m.bundleFor(person)
 	if err != nil {
 		return err
 	}
@@ -634,7 +634,7 @@ func (m *Manager) dialPath(ctx context.Context, s *Session, ep identity.Endpoint
 	if cur, ok := m.Session(s.peer.Device); !ok || cur != s {
 		return // it changed meanwhile
 	}
-	bundle, err := m.myBundle()
+	bundle, err := m.bundleFor(s.peer.Person)
 	if err != nil {
 		return
 	}
@@ -643,12 +643,13 @@ func (m *Manager) dialPath(ctx context.Context, s *Session, ep identity.Endpoint
 	if err != nil {
 		return
 	}
-	peer, err := m.admit(res.Bundle, res.Device)
+	anon := identity.AnonymousTransport(ep.Transport)
+	peer, err := m.admit(res.Bundle, res.Device, anon)
 	if err != nil {
 		conn.Close()
 		return
 	}
-	m.start(conn, true, peer, m.kr.DevicePublic(), PathInfo{Transport: ep.Transport, Reason: reason}, pathKey(ep))
+	m.start(conn, true, peer, m.kr.DevicePublic(), PathInfo{Transport: ep.Transport, Reason: reason}, pathKey(ep), anon)
 }
 
 // checkSessions makes sure every session still answers after a network change: one whose

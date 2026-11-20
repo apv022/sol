@@ -1,6 +1,6 @@
 // Command sol is the Sol daemon, its CLI, and the first-party apps in one binary.
 //
-//	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
+//	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--ui ADDR] [--files DIR]
 //	sol                          start this device in the background (same as sol start); on a
 //	                             machine with no data directory it sets Sol up first and opens it
 //	sol start | stop | restart   manage the background daemon
@@ -9,7 +9,9 @@
 //	sol launcher on|off|status   the "Sol" app-menu entry (Linux .desktop; `autostart` manages it too)
 //	sol run                      run this device in the foreground (what the above run)
 //	sol status                   who I am, my endpoints and sessions
-//	sol invite [--join]          print a one-time pair (or join) link
+//	sol invite [--join|--anonymous]  print a one-time pair (or join, or anonymous pair) link
+//	sol people [set <name> --anonymous|--buddy]  list contacts; make one Tor-only (anonymous) or a buddy
+//	sol transports [enable|disable <name>]  list the transports (wg, direct, tor); turn one on or off
 //	sol pair <link>              redeem a pair link, or a join link on a fresh --join device
 //	sol apps                     list installed apps and their UI addresses
 //	sol app install <dir>        install (or replace) the app in dir
@@ -125,14 +127,16 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 
 const usage = `usage: sol <command> [flags]
 
-  init [--name N --device D | --join] [--listen ADDR] [--transport NAME] [--ui ADDR] [--files DIR]
+  init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--ui ADDR] [--files DIR]
   (no command) | start | stop | restart       run Sol in the background; stop it; restart it
   logs [-f] [-n N]                  what the background daemon logged (-f follows)
   autostart on|off|status           start Sol when you log in (and add Sol to the app menu)
   launcher on|off|status            the "Sol" entry in the app menu (Linux)
   run                               run in the foreground
   status [--json]
-  invite [--join]
+  invite [--join | --anonymous]
+  people [--json] | people set <name> --anonymous|--buddy
+  transports [--json] | transports enable <name> | transports disable <name>
   pair <link>
   apps [--json]
   app install <dir> | app remove <id> | app run <id>
@@ -160,6 +164,11 @@ func run(args []string) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "transports", "people":
+		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+			rest = append([]string{"list"}, rest...)
+		}
+		cmd, rest = cmd+" "+rest[0], rest[1:]
 	case "app", "agent", "theme", "backup", "service", "tunnel":
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			return errors.New(usage)
@@ -179,7 +188,8 @@ func run(args []string) error {
 		device := fs.String("device", hostname(), "this device's name")
 		join := fs.Bool("join", false, "this device will join an existing person (then: sol pair <join link>)")
 		listen := fs.String("listen", "", "transport listen address (default: a free port on 0.0.0.0)")
-		tr := fs.String("transport", "direct", "transport: direct, clearnet, wg or tor")
+		var trs list
+		fs.Var(&trs, "transport", "a transport to turn on: wg, direct, tor or clearnet; repeatable, or comma-separated (default: wg, direct and tor)")
 		ui := fs.String("ui", "127.0.0.1:7777", "address of the app UIs")
 		files := fs.String("files", "", "the synced folder (default ~/SolDrive)")
 		words := fs.String("words", "", "restore: the 24 recovery words")
@@ -188,9 +198,11 @@ func run(args []string) error {
 			return err
 		}
 		cfg := daemon.Config{UI: *ui, Files: absOrEmpty(*files)}
-		if *listen != "" || *tr != "direct" {
-			cfg.Transports = []daemon.TransportConfig{{Name: *tr, Listen: *listen}}
+		tcs, err := transportConfigs(trs, *listen)
+		if err != nil {
+			return err
 		}
+		cfg.Transports = tcs
 		if cmd == "restore" {
 			if *words == "" {
 				return errors.New("restore: --words is required")
@@ -256,6 +268,8 @@ func run(args []string) error {
 		return b.Run(ctx, apphost.EnvFromOS())
 	}
 	inviteJoin := fs.Bool("join", false, "invite: a join link (add a device of mine) instead of a pair link")
+	inviteAnon := fs.Bool("anonymous", false, "invite: an anonymous link (only the onion; they become an anonymous contact); people set: Tor only, both ways")
+	buddy := fs.Bool("buddy", false, "people set: every transport (the default for a contact)")
 	noBrowser := fs.Bool("print", false, "open: only print the login URL")
 	svcHTTP := fs.Bool("http", false, "service add: it is a web service (contacts can open it in the browser)")
 	var people list
@@ -308,7 +322,7 @@ func run(args []string) error {
 		return nil
 	case "invite":
 		var out struct{ Link string }
-		if err := c.Do(ctx, "POST", "/admin/v1/invite", map[string]bool{"join": *inviteJoin}, &out); err != nil {
+		if err := c.Do(ctx, "POST", "/admin/v1/invite", map[string]bool{"join": *inviteJoin, "anonymous": *inviteAnon}, &out); err != nil {
 			return err
 		}
 		fmt.Println(out.Link)
@@ -542,6 +556,10 @@ func run(args []string) error {
 		return openUI(ctx, c, *noBrowser)
 	case "service add", "service list", "service remove", "tunnel open", "tunnel list", "tunnel close":
 		return portCmd(ctx, c, cmd, fs.Args(), *asJSON, *svcHTTP, people, *port)
+	case "transports list", "transports enable", "transports disable":
+		return transportsCmd(ctx, c, cmd, fs.Args(), *asJSON)
+	case "people list", "people set":
+		return peopleCmd(ctx, c, cmd, fs.Args(), *asJSON, *inviteAnon, *buddy)
 	}
 	return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 }

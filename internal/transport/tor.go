@@ -61,6 +61,11 @@ type Tor struct {
 	// the supervisor recovers from something (tor exited, bootstrap stalled,
 	// ...), for the node's activity log. It must not block.
 	Notify func(msg string)
+	// OnAddress, if set before Start, is called (in its own goroutine) whenever a
+	// publication's onion address becomes known or changes: the first registration with a
+	// tor that was not up when Publish was called, so the node can re-sign its endpoints
+	// without waiting for tor at startup.
+	OnAddress func()
 
 	mu         sync.Mutex
 	state      State
@@ -742,7 +747,11 @@ func (t *Tor) addOnion(p Publication) (string, error) {
 	}
 	t.mu.Lock()
 	t.onions[p.ID] = &onion{serviceID: sid, pub: p, live: true}
+	hook := t.OnAddress
 	t.mu.Unlock()
+	if hook != nil && (old == nil || old.serviceID != sid) {
+		go hook()
+	}
 	if len(p.ClientAuth) > 0 && len(t.self.Private) > 0 {
 		if err := t.addClientAuth(sid, t.self.TorPrivate()); err != nil {
 			slog.Debug("tor: self client auth", "err", err)

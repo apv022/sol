@@ -73,7 +73,23 @@ func (m *Manager) announcer() {
 			continue
 		}
 		last = b
-		m.pushAll(m.Sessions(), [][]byte{b})
+		m.pushMine(m.Sessions())
+	}
+}
+
+// pushMine pushes this device's bundle to every session in ss, each in the form its person
+// may see (an anonymous contact gets the onion-only record), and waits for them.
+func (m *Manager) pushMine(ss []*Session) {
+	byForm := map[string][]*Session{}
+	for _, s := range ss {
+		b, err := m.bundleFor(s.peer.Person)
+		if err != nil {
+			continue
+		}
+		byForm[string(b)] = append(byForm[string(b)], s)
+	}
+	for b, group := range byForm {
+		m.pushAll(group, [][]byte{[]byte(b)})
 	}
 }
 

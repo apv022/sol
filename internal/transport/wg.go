@@ -108,6 +108,9 @@ type WG struct {
 	ListenAddr string   // UDP, e.g. ":7701"
 	Advertise  []string // replaces the advertised candidates (a forwarded port)
 	STUN       []string // STUN servers the user chose (presets or host:port); empty means none
+	// PacketConn, if set before Start, replaces the UDP socket (tests: a host behind a
+	// simulated NAT, internal/faultnet.NAT). Its local address is what the transport listens on.
+	PacketConn func() (net.PacketConn, error)
 	keyPath    string
 
 	allowLoopback bool
@@ -308,7 +311,11 @@ func (w *WG) Start(ctx context.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	bind := newSTUNBind(conn.NewDefaultBind())
+	var inner conn.Bind = conn.NewDefaultBind()
+	if w.PacketConn != nil {
+		inner = &packetBind{open: w.PacketConn}
+	}
+	bind := newSTUNBind(inner)
 	bind.onPunch, bind.onQuery, bind.onReply = w.onPunch, w.onQuery, w.onReply
 	dev := device.NewDevice(tun, bind, device.NewLogger(wgLogLevel(), "wg: "))
 	note := ""

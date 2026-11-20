@@ -103,6 +103,15 @@ type NetworkWatcher interface {
 	NetworkChanged(reason string)
 }
 
+// PeerSetter is implemented by transports that must be told about a peer before either side
+// can reach the other (WireGuard: it answers only keys it knows, and both sides punch). The
+// session layer calls SetPeer for every kept device allowed on the transport and RemovePeer
+// when it stops keeping it (or it became an anonymous contact).
+type PeerSetter interface {
+	SetPeer(addr string) error
+	RemovePeer(addr string)
+}
+
 // Publication describes one thing to expose through a transport.
 type Publication struct {
 	// ID is a stable name ("node", "svc-blog"). Transports that derive

@@ -48,6 +48,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,10 +155,9 @@ func prepareDir(dir string, cfg *Config, builtins map[string]apphost.Builtin) er
 		}
 	}
 	if len(cfg.Transports) == 0 {
-		cfg.Transports = []TransportConfig{{Name: "direct", Listen: "0.0.0.0:" + strconv.Itoa(freePort())}}
+		cfg.Transports = DefaultTransports()
 	}
-	b, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := fsutil.WriteFileAtomic(filepath.Join(dir, "config.json"), b, 0o600); err != nil {
+	if err := writeConfig(dir, *cfg); err != nil {
 		return err
 	}
 	for name, bi := range builtins {
@@ -174,6 +174,12 @@ func prepareDir(dir string, cfg *Config, builtins map[string]apphost.Builtin) er
 		}
 	}
 	return nil
+}
+
+// writeConfig replaces config.json (0600, atomically).
+func writeConfig(dir string, cfg Config) error {
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return fsutil.WriteFileAtomic(filepath.Join(dir, "config.json"), b, 0o600)
 }
 
 // freePort returns a TCP port free right now, so a default config gets a stable port.
@@ -249,8 +255,10 @@ type Daemon struct {
 	API      *appapi.Server
 	Host     *apphost.Host
 
-	transports []transport.Transport
-	nodeLn     net.Listener
+	trMu       sync.Mutex            // guards transports and cfg.Transports
+	transports []transport.Transport // the running transports (transportsNow)
+	nodeLn     net.Listener          // where the direct transports forward sessions
+	anonLn     net.Listener          // where Tor and I2P forward them (anonymous contacts)
 	apiSrv     *http.Server
 	uiSrv      *http.Server
 	apiURL     string
@@ -273,6 +281,10 @@ type Daemon struct {
 	settle   *time.Timer          // the second endpoint check after a network change
 
 	netMu sync.Mutex // serializes refreshEndpoints with itself and Close
+
+	privMu sync.Mutex      // serializes privacyChanged
+	known  map[string]bool // contacts at the last privacy check
+	anon   map[string]bool // of those, the anonymous ones
 
 	tokens     *pairing.Tokens
 	accessKick chan struct{} // wakes watchAccess (toraccess.go)
@@ -371,7 +383,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	peerMux.HandleFunc("GET "+ServicePath+"{name}", func(w http.ResponseWriter, r *http.Request) { d.ports.peerService(w, r) })
 	peerMux.HandleFunc("POST "+ServicesPushPath, func(w http.ResponseWriter, r *http.Request) { d.ports.peerPush(w, r) })
 	peerMux.HandleFunc("POST "+UnpairPath, d.peerUnpair)
-	d.transports = d.buildTransports()
+	d.transports = d.newTransports(cfg.Transports)
 	d.tokens, d.accessKick = pairing.NewTokens(), make(chan struct{}, 1)
 	d.tokens.OnChange = d.kickAccess
 	if d.Sessions, err = session.New(session.Config{Keyring: kr, Cache: d.Cache, Contacts: d.Contacts,
@@ -420,6 +432,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if kr.Person() != nil {
 		d.Host.Start(d.ctx)
 	}
+	d.notePrivacy()
 	d.watchThemes()
 	d.watchNetwork()
 	d.watchContacts()
@@ -446,11 +459,12 @@ func (d *Daemon) anchor() bool {
 	return ok && dev.Anchor()
 }
 
-// buildTransports constructs the configured transports.
-func (d *Daemon) buildTransports() []transport.Transport {
-	ts := newTransports(d.dir, d.cfg.Transports, d.Keyring.Signer(), d.opt.TorProvider, d.log)
-	if d.opt.WrapTransport != nil {
-		for i, t := range ts {
+// newTransports constructs transports from tcs, hooked to this daemon (and wrapped, in tests).
+func (d *Daemon) newTransports(tcs []TransportConfig) []transport.Transport {
+	ts := newTransports(d.dir, tcs, d.Keyring.Signer(), d.opt.TorProvider, d.log)
+	for i, t := range ts {
+		d.hookTransport(t)
+		if d.opt.WrapTransport != nil {
 			ts[i] = d.opt.WrapTransport(t)
 		}
 	}
@@ -476,6 +490,7 @@ func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp
 		case "tor":
 			p, err := torp, error(nil)
 			if p == nil {
+				// The tor embedded in release builds (-tags bundled) first, else the system's.
 				p, err = solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin")})
 			}
 			if err != nil {
@@ -490,37 +505,45 @@ func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp
 	return out
 }
 
-// startNet listens for sessions, publishes the listener on every transport and signs the
-// resulting endpoint record (refreshEndpoints keeps it current).
+// startNet listens for sessions, publishes the listeners on every transport and signs the
+// resulting endpoint record (refreshEndpoints keeps it current). Tor starts in the
+// background: the record gains the onion once tor has registered it (transports.go).
 func (d *Daemon) startNet() error {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	d.nodeLn = ln
-	var eps []identity.Endpoint
-	auth, _ := d.accessSet()
-	d.lastAccess = strings.Join(auth, ",")
-	for _, t := range d.transports {
-		if err := t.Start(d.ctx); err != nil {
-			d.log.Warn("transport did not start", "transport", t.Name(), "err", err)
-			continue
-		}
-		p := transport.Publication{ID: "node", Target: ln.Addr().String()}
-		if issuesAccess(t) {
-			p.ClientAuth = auth // never an open onion, not even for a moment
-		}
-		addr, err := t.Publish(d.ctx, p)
-		if err != nil {
-			d.log.Warn("transport did not publish", "transport", t.Name(), "err", err)
-			continue
-		}
-		eps = append(eps, endpointOf(t, addr))
-	}
-	if _, err := d.Keyring.SetEndpoints(eps, time.Now()); err != nil {
+	if d.anonLn, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
 		return err
 	}
+	auth, _ := d.accessSet()
+	d.lastAccess = strings.Join(auth, ",")
+	var eps []identity.Endpoint
+	var slow []transport.Transport
+	for _, t := range d.transportsNow() {
+		if slowStart(t) {
+			slow = append(slow, t)
+			continue
+		}
+		if ep, ok := d.startTransport(t); ok {
+			eps = append(eps, ep)
+		}
+	}
+	// Keep a known onion until tor says otherwise: peers can still reach it once tor is up.
+	for _, e := range d.Keyring.Endpoints().Endpoints {
+		if identity.AnonymousTransport(e.Transport) && slices.ContainsFunc(slow, func(t transport.Transport) bool { return t.Name() == e.Transport }) {
+			eps = append(eps, e)
+		}
+	}
+	if !slices.Equal(eps, d.Keyring.Endpoints().Endpoints) {
+		if _, err := d.Keyring.SetEndpoints(eps, time.Now()); err != nil {
+			return err
+		}
+	}
 	go func() { _ = d.Sessions.Serve(ln) }()
+	go func() { _ = d.Sessions.ServeAnonymous(d.anonLn) }()
+	d.startSlow(slow)
 	return nil
 }
 
@@ -663,7 +686,17 @@ func (d *Daemon) Invite(join bool) (string, error) {
 	if join {
 		k = pairing.KindJoin
 	}
-	l, err := d.Sessions.Invite(k)
+	return d.invite(pairing.Token{Kind: k})
+}
+
+// InviteAnonymous issues a one-time anonymous pair link: it carries only this device's onion,
+// and whoever redeems it becomes an anonymous contact (Tor only, both ways).
+func (d *Daemon) InviteAnonymous() (string, error) {
+	return d.invite(pairing.Token{Kind: pairing.KindPair, Anonymous: true})
+}
+
+func (d *Daemon) invite(tok pairing.Token) (string, error) {
+	l, err := d.Sessions.InviteToken(tok)
 	if err != nil {
 		return "", err
 	}
@@ -746,13 +779,16 @@ func (d *Daemon) Close() error {
 	if d.nodeLn != nil {
 		_ = d.nodeLn.Close()
 	}
+	if d.anonLn != nil {
+		_ = d.anonLn.Close()
+	}
 	if d.Rep != nil {
 		d.Rep.Close()
 	}
 	if d.Blobnet != nil {
 		d.Blobnet.Close()
 	}
-	for _, t := range d.transports {
+	for _, t := range d.transportsNow() {
 		_ = t.Stop()
 	}
 	if d.API != nil {

@@ -1,7 +1,14 @@
-.PHONY: build check test fmt browser-test ui-e2e
+.PHONY: build build-bundled fetch-tor check test fmt browser-test ui-e2e
 
 build:                ## bin/sol
 	go build -trimpath -o bin/sol ./cmd/sol
+
+fetch-tor:            ## download + verify the bundled tor (Tor Browser expert bundles) into internal/runtime/bin
+	sh scripts/fetch-tor.sh
+
+build-bundled:        ## bin/sol with tor embedded (fetches it first when this platform's folder is missing)
+	@[ -d internal/runtime/bin/$$(go env GOOS)-$$(go env GOARCH) ] || sh scripts/fetch-tor.sh
+	go build -trimpath -tags bundled -o bin/sol ./cmd/sol
 
 test:
 	go test -race ./...

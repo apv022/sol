@@ -44,10 +44,12 @@ type ShareRef struct {
 
 // PersonInfo is one contact (GET /admin/v1/people).
 type PersonInfo struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Petname      string       `json:"petname"`
-	Online       bool         `json:"online"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Petname string `json:"petname"`
+	Online  bool   `json:"online"`
+	// Anonymous: reached over Tor only, both ways; they only ever learn my onion addresses.
+	Anonymous    bool         `json:"anonymous"`
 	Devices      []sol.Device `json:"devices"`
 	SharesWithMe []ShareRef   `json:"shares_with_me"`
 	IShare       []ShareRef   `json:"i_share"`
@@ -103,6 +105,9 @@ func (d *Daemon) person(id string) (PersonInfo, bool) {
 	}
 	pi := PersonInfo{ID: c.ID, Name: c.Name, Petname: c.Petname, Online: c.Online, Devices: c.Devices,
 		SharesWithMe: []ShareRef{}, IShare: []ShareRef{}}
+	if pub, err := identity.ParseID(c.ID); err == nil {
+		pi.Anonymous = d.Contacts.Anonymous(pub)
+	}
 	group := func(keys []string, url bool) []ShareRef {
 		apps := map[string][]string{}
 		for _, k := range keys {

@@ -1,2 +1,7 @@
-# Versions of the binaries placed here by scripts/fetch-binaries.sh.
+# Versions of the binaries placed here by scripts/fetch-tor.sh.
 # Format: <os>-<arch>/<name> <version>
+darwin-amd64/tor tor 0.4.9.16 (Tor Browser 16.0.1 expert bundle)
+darwin-arm64/tor tor 0.4.9.16 (Tor Browser 16.0.1 expert bundle)
+linux-amd64/tor tor 0.4.9.16 (Tor Browser 16.0.1 expert bundle)
+linux-arm64/tor tor 0.4.9.16 (Tor Browser 16.0.1 expert bundle)
+windows-amd64/tor.exe tor 0.4.9.16 (Tor Browser 16.0.1 expert bundle)

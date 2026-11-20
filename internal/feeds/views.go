@@ -137,6 +137,8 @@ type contactRecord struct {
 	Person  string `json:"person"`
 	Name    string `json:"name"`
 	Removed bool   `json:"removed,omitempty"`
+	// Anonymous: Tor only, both ways (PROTOCOL.md §Anonymous contacts). Absent means a buddy.
+	Anonymous bool `json:"anonymous,omitempty"`
 }
 
 // Contacts is my contacts list, kept in my internal contacts feed so every
@@ -157,12 +159,37 @@ func (c *Contacts) IsContact(person ed25519.PublicKey) bool {
 	return ok && !r.Removed
 }
 
-// AddContact adds or renames person.
+// AddContact adds or renames person, keeping whether they are anonymous.
 func (c *Contacts) AddContact(person ed25519.PublicKey, name string) error {
-	if r, ok := c.l.get(identity.ID(person)); ok && !r.Removed && r.Name == name {
+	r, ok := c.l.get(identity.ID(person))
+	if ok && !r.Removed && r.Name == name {
 		return nil
 	}
-	return c.l.put(contactRecord{Person: identity.ID(person), Name: name})
+	return c.l.put(contactRecord{Person: identity.ID(person), Name: name, Anonymous: ok && !r.Removed && r.Anonymous})
+}
+
+// AddAnonymousContact adds person as an anonymous contact (an anonymous invite was redeemed).
+func (c *Contacts) AddAnonymousContact(person ed25519.PublicKey, name string) error {
+	return c.l.put(contactRecord{Person: identity.ID(person), Name: name, Anonymous: true})
+}
+
+// Anonymous reports whether person is a contact reached only over Tor.
+func (c *Contacts) Anonymous(person ed25519.PublicKey) bool {
+	r, ok := c.l.get(identity.ID(person))
+	return ok && !r.Removed && r.Anonymous
+}
+
+// SetAnonymous makes a contact anonymous (Tor only) or a buddy (every transport).
+func (c *Contacts) SetAnonymous(person ed25519.PublicKey, anonymous bool) error {
+	r, ok := c.l.get(identity.ID(person))
+	if !ok || r.Removed {
+		return errors.New("feeds: not a contact")
+	}
+	if r.Anonymous == anonymous {
+		return nil
+	}
+	r.Anonymous = anonymous
+	return c.l.put(r)
 }
 
 // RemoveContact removes person from the list.

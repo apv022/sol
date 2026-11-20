@@ -1,10 +1,15 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -82,5 +87,135 @@ func TestNativeEnvOverride(t *testing.T) {
 	t.Setenv("SOL_BIN_SNOWFLAKE_PROXY", filepath.Join(t.TempDir(), "missing"))
 	if n.Available("snowflake-proxy") {
 		t.Fatal("a missing SOL_BIN file counted as available")
+	}
+}
+
+func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+
+// fakeBundle is a bundle with a tor script and a library next to it; tamper changes the
+// library after pinning, unpinned leaves it out of checksums.json.
+func fakeBundle(t *testing.T, script string, tamper, unpinned bool) {
+	t.Helper()
+	tor, lib := []byte(script), []byte("not really a library")
+	sums := map[string]string{platformPath("tor"): sum(tor)}
+	if !unpinned {
+		sums[platform()+"/libevent-2.1.so.7"] = sum(lib)
+	}
+	if tamper {
+		lib = []byte("a library someone swapped")
+	}
+	raw, _ := json.Marshal(sums)
+	withBundle(t, fstest.MapFS{
+		"bin/" + platformPath("tor"):               {Data: tor, Mode: 0o755},
+		"bin/" + platform() + "/libevent-2.1.so.7": {Data: lib},
+		"bin/checksums.json":                       {Data: raw},
+	})
+}
+
+// Every file next to tor is extracted only if pinned and matching: a swapped or unpinned
+// library refuses the whole bundle.
+func TestBundledRefusesUnpinnedLibrary(t *testing.T) {
+	fakeBundle(t, "#!/bin/sh\n", false, false)
+	dir := t.TempDir()
+	exe, err := ExtractBundled("tor", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), "libevent-2.1.so.7")); err != nil {
+		t.Fatal("the library was not extracted next to tor:", err)
+	}
+	fakeBundle(t, "#!/bin/sh\n", true, false)
+	if _, err := ExtractBundled("tor", t.TempDir()); err == nil || !strings.Contains(err.Error(), "pinned checksum") {
+		t.Fatalf("a tampered library: %v", err)
+	}
+	fakeBundle(t, "#!/bin/sh\n", false, true)
+	if _, err := ExtractBundled("tor", t.TempDir()); err == nil || !strings.Contains(err.Error(), "no pinned checksum") {
+		t.Fatalf("an unpinned library: %v", err)
+	}
+}
+
+// The bundled tor runs with its own folder on the library path.
+func TestBundledLibraryPath(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		if env := LibraryEnv(`C:\x`); env != nil {
+			t.Fatalf("Windows needs no library path, got %v", env)
+		}
+		t.Skip("Windows finds DLLs next to the .exe; no shell script to run")
+	}
+	out := filepath.Join(t.TempDir(), "env")
+	fakeBundle(t, "#!/bin/sh\necho \"$LD_LIBRARY_PATH|$DYLD_LIBRARY_PATH\" > "+out+"\n", false, false)
+	t.Setenv("LD_LIBRARY_PATH", "/old")
+	t.Setenv("DYLD_LIBRARY_PATH", "/old")
+	b := &Bundled{BinDir: t.TempDir()}
+	if !b.Available("tor") {
+		t.Fatal("not available")
+	}
+	p, err := b.Start(context.Background(), Program{Name: "tor", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-p.Done()
+	got, _ := os.ReadFile(out)
+	want := filepath.Join(b.BinDir, platform()) + string(os.PathListSeparator) + "/old"
+	ld, dyld, _ := strings.Cut(strings.TrimSpace(string(got)), "|")
+	if goruntime.GOOS == "darwin" {
+		ld, dyld = dyld, ld
+	}
+	if ld != want || dyld != "/old" {
+		t.Fatalf("library path %q (other %q), want %q", ld, dyld, want)
+	}
+}
+
+// A bundle that can't be used (here: a tampered library) falls back to the system's tor.
+func TestBundledFallsBackToNative(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("needs a shell script as the native tor")
+	}
+	fakeBundle(t, "#!/bin/sh\n", true, false)
+	bin := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
+	if err := os.WriteFile(filepath.Join(bin, "tor"), []byte("#!/bin/sh\n: > "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	p, err := Select([]string{"bundled", "native"}, "tor", Options{BinDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Name() != "bundled" {
+		t.Fatalf("selected %s, want bundled (it is embedded)", p.Name())
+	}
+	proc, err := p.Start(context.Background(), Program{Name: "tor", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-proc.Done()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the native tor did not run:", err)
+	}
+	// Without a native tor, the refusal is the error.
+	t.Setenv("PATH", t.TempDir())
+	p, _ = Select([]string{"bundled", "native"}, "tor", Options{BinDir: t.TempDir()})
+	if _, err := p.Start(context.Background(), Program{Name: "tor", DataDir: t.TempDir()}); err == nil {
+		t.Fatal("a tampered bundle ran")
+	}
+}
+
+// With -tags bundled and the bundle fetched (scripts/fetch-tor.sh), the embedded tor
+// extracts, passes its checksums and runs with its own libraries.
+func TestRealBundledTor(t *testing.T) {
+	b := &Bundled{BinDir: t.TempDir()}
+	if !b.Available("tor") {
+		t.Skip("no bundled tor in this build (go test -tags bundled after scripts/fetch-tor.sh)")
+	}
+	exe, err := ExtractBundled("tor", b.BinDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "--version")
+	cmd.Env = append(os.Environ(), LibraryEnv(filepath.Dir(exe))...)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "Tor version 0.4.9.16") {
+		t.Fatalf("%s: %v", out, err)
 	}
 }
