@@ -2,9 +2,11 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -151,9 +153,15 @@ func (t *Tor) onNetworkChanged(ev netEvent) (restarted bool) {
 // netSignature summarises the machine's usable network addresses. A change
 // means routes probably changed too, so tor's connections may be stale.
 func netSignature() string {
-	ifs, err := net.Interfaces()
+	s, _ := readNetSignature()
+	return s
+}
+
+// readNetSignature is netSignature with the reason it could not read the interfaces.
+func readNetSignature() (string, error) {
+	ifs, err := netInterfaces()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var parts []string
 	for _, ifc := range ifs {
@@ -170,7 +178,7 @@ func netSignature() string {
 		}
 	}
 	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	return strings.Join(parts, ","), nil
 }
 
 func ignoredInterface(name string) bool {
@@ -183,9 +191,15 @@ func ignoredInterface(name string) bool {
 }
 
 // watchNetwork reports a change of the machine's addresses to
-// NetworkChanged, which debounces it.
+// NetworkChanged, which debounces it. Where the OS forbids reading the interfaces (Android:
+// SELinux denies the netlink socket) it stops at once rather than be refused every
+// netPollEvery; there the platform's callback reports changes (`sol network-changed`).
 func (t *Tor) watchNetwork(runCtx context.Context) {
-	last := netSignature()
+	last, err := readNetSignature()
+	if errors.Is(err, os.ErrPermission) {
+		slog.Debug("tor: the OS does not let Sol read the network interfaces; not watching them", "err", err.Error())
+		return
+	}
 	for {
 		select {
 		case <-runCtx.Done():

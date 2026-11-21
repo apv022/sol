@@ -32,9 +32,14 @@ var bundledFS fs.FS
 // @executable_path; Windows looks next to the .exe by itself). If extraction or start fails
 // and Fallback is set (Select sets it to the next provider that can run the program, the
 // system's tor), that runs instead, and the reason is logged.
+//
+// The first start logs the extracted file and its version.
 type Bundled struct {
 	BinDir   string // extraction target, normally <data dir>/bin
 	Fallback Provider
+	Log      *slog.Logger // nil: slog's default
+
+	ver versionOnce
 }
 
 // Name implements Provider.
@@ -69,7 +74,11 @@ func (b *Bundled) Start(ctx context.Context, p Program) (*Proc, error) {
 	if err == nil || b.Fallback == nil || !b.Fallback.Available(p.Name) {
 		return proc, err
 	}
-	slog.Warn("the bundled program could not run; using the system's", "program", p.Name, "fallback", b.Fallback.Name(), "err", err)
+	log := b.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Warn("the bundled program could not run; using the system's", "program", p.Name, "fallback", b.Fallback.Name(), "err", err)
 	return b.Fallback.Start(ctx, p)
 }
 
@@ -78,7 +87,9 @@ func (b *Bundled) start(ctx context.Context, p Program) (*Proc, error) {
 	if err != nil {
 		return nil, err
 	}
-	return startBinaryEnv(ctx, exe, p, LibraryEnv(filepath.Dir(exe)))
+	env := LibraryEnv(filepath.Dir(exe))
+	b.ver.log(ctx, b.Log, b.Name(), p.Name, exe, env)
+	return startBinaryEnv(ctx, exe, p, env)
 }
 
 // LibraryEnv is the environment that makes a program load its shared libraries from dir:

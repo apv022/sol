@@ -39,9 +39,11 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apv022/sol/internal/identity"
@@ -301,6 +303,10 @@ func candidates(la *net.TCPAddr, listen string) []string {
 // simulate Android, where apps may not enumerate them.
 var netInterfaces = net.Interfaces
 
+// ifacesForbidden is set once listing the interfaces was refused by the OS
+// (Android): localIPs goes straight to outboundIPs from then on.
+var ifacesForbidden atomic.Bool
+
 // outboundIPs finds the addresses the OS would send from, without netlink.
 // It is the fallback for when interfaces can't be listed: since Android 11
 // an app is denied the netlink socket net.Interfaces needs, and with no
@@ -323,7 +329,14 @@ var outboundIPs = func() []net.IP {
 // candidates are built, so a network change is picked up.
 func localIPs() []net.IP {
 	var ips []net.IP
-	ifaces, _ := netInterfaces()
+	var ifaces []net.Interface
+	if !ifacesForbidden.Load() {
+		var err error
+		ifaces, err = netInterfaces()
+		// Android forbids it for good: asking again would only be refused (and
+		// audited) each time.
+		ifacesForbidden.Store(errors.Is(err, os.ErrPermission))
+	}
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || skipIface(ifc.Name) {
 			continue

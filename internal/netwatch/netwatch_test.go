@@ -2,7 +2,12 @@ package netwatch
 
 import (
 	"context"
+	"log/slog"
+	"net"
+	"os"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -63,5 +68,33 @@ func TestIgnoredAndSignature(t *testing.T) {
 	}
 	if Signature() != Signature() {
 		t.Fatal("signature is not stable")
+	}
+}
+
+// TestScanForbidden: where reading the interfaces is refused (Android), the scan is not
+// retried every PollEvery; the refusal is logged once.
+func TestScanForbidden(t *testing.T) {
+	var scans atomic.Int32
+	old := interfaces
+	t.Cleanup(func() { interfaces = old })
+	interfaces = func() ([]net.Interface, error) {
+		scans.Add(1)
+		return nil, &net.OpError{Op: "route", Net: "ip+net", Err: os.NewSyscallError("netlinkrib", syscall.EACCES)}
+	}
+	var log strings.Builder
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		Watch(ctx, Options{PollEvery: 5 * time.Millisecond, NoOS: true, Log: slog.New(slog.NewTextHandler(&log, nil))}, func(string) {})
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+	if n := scans.Load(); n != 1 {
+		t.Fatalf("scanned %d times", n)
+	}
+	if strings.Count(log.String(), "does not let Sol read the network interfaces") != 1 {
+		t.Fatalf("log: %q", log.String())
 	}
 }

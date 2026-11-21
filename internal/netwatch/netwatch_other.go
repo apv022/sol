@@ -2,8 +2,13 @@
 
 package netwatch
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // watchOS has no push source here yet (route sockets on macOS and the BSDs,
 // NotifyIpInterfaceChange on Windows are later work): Watch scans the addresses instead.
-func watchOS(context.Context, func(string)) bool { return false }
+func watchOS(context.Context, func(string)) error {
+	return errors.New("netwatch: no OS change source on this platform")
+}

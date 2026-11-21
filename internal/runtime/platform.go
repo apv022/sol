@@ -26,7 +26,7 @@ type Platform struct {
 	// Log receives the version line (nil: slog's default).
 	Log *slog.Logger
 
-	once sync.Once
+	ver versionOnce
 }
 
 // Name implements Provider.
@@ -48,14 +48,21 @@ func (p *Platform) Start(ctx context.Context, prog Program) (*Proc, error) {
 	if !p.Available(prog.Name) {
 		return nil, fmt.Errorf("the platform's %s (%s) is not a program file", prog.Name, path)
 	}
-	p.once.Do(func() {
-		log := p.Log
+	p.ver.log(ctx, p.Log, p.Name(), prog.Name, path, nil)
+	return startBinary(ctx, path, prog)
+}
+
+// versionOnce logs, the first time a provider starts a program, which file runs and its
+// version (`--version`), so every log says which tor ran, whichever provider ran it.
+type versionOnce struct{ once sync.Once }
+
+func (v *versionOnce) log(ctx context.Context, log *slog.Logger, provider, program, path string, env []string) {
+	v.once.Do(func() {
 		if log == nil {
 			log = slog.Default()
 		}
-		log.Info("using the platform's program", "program", prog.Name, "path", path, "version", Version(ctx, path))
+		log.Info("starting "+program, "provider", provider, "path", path, "version", Version(ctx, path, env...))
 	})
-	return startBinary(ctx, path, prog)
 }
 
 // Version runs `<path> --version` (5 seconds at most) and returns the first line of its

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -366,7 +368,8 @@ func isTimeout(err error) bool {
 func stubInterfaces(t *testing.T, list func() ([]net.Interface, error), out ...string) {
 	t.Helper()
 	oldList, oldOut := netInterfaces, outboundIPs
-	t.Cleanup(func() { netInterfaces, outboundIPs = oldList, oldOut })
+	t.Cleanup(func() { netInterfaces, outboundIPs = oldList, oldOut; ifacesForbidden.Store(false) })
+	ifacesForbidden.Store(false)
 	netInterfaces = list
 	outboundIPs = func() []net.IP {
 		var ips []net.IP
@@ -374,6 +377,24 @@ func stubInterfaces(t *testing.T, list func() ([]net.Interface, error), out ...s
 			ips = append(ips, net.ParseIP(s))
 		}
 		return ips
+	}
+}
+
+// Once the OS refused listing the interfaces (EACCES, Android), they are not asked for
+// again: the outbound address stands in from then on.
+func TestCandidatesForbiddenOnce(t *testing.T) {
+	calls := 0
+	stubInterfaces(t, func() ([]net.Interface, error) {
+		calls++
+		return nil, &net.OpError{Op: "route", Net: "ip+net", Err: os.NewSyscallError("netlinkrib", syscall.EACCES)}
+	}, "192.168.1.7")
+	for range 3 {
+		if got := localIPs(); len(got) != 1 || got[0].String() != "192.168.1.7" {
+			t.Fatalf("%v", got)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("asked %d times", calls)
 	}
 }
 

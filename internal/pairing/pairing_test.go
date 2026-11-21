@@ -173,6 +173,56 @@ func TestParseLinkRejects(t *testing.T) {
 	}
 }
 
+// An anonymous pair link says so, carries only the onion (whatever the record held), stays
+// short, and fields from a newer Sol are refused as such rather than as garbage.
+func TestLinkAnonymous(t *testing.T) {
+	onion := onionOf(t)
+	l, _ := testLink(t, KindPair,
+		identity.Endpoint{Transport: "clearnet", Address: "192.0.2.1:7700"},
+		identity.Endpoint{Transport: "tor", Address: onion})
+	l.Anonymous = true
+	s, err := l.Encode()
+	if err != nil || len(s) > MaxLinkLen {
+		t.Fatalf("%d chars: %v", len(s), err)
+	}
+	got, err := ParseLink(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Anonymous || !slices.Equal(got.Endpoints.Endpoints, []identity.Endpoint{{Transport: "tor", Address: onion}}) {
+		t.Fatalf("%+v", got)
+	}
+	// A plain link is not anonymous and has no flags field.
+	l.Anonymous = false
+	if got, _ := ParseLink(l.String()); got.Anonymous || len(got.Endpoints.Endpoints) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	// Without an onion an anonymous link reaches nothing.
+	l.Anonymous = true
+	l.Endpoints.Endpoints = l.Endpoints.Endpoints[:1]
+	if _, err := l.Encode(); !errors.Is(err, ErrNoAddress) {
+		t.Fatal(err)
+	}
+	// A join link can't be anonymous, either way.
+	j, _ := testLink(t, KindJoin, identity.Endpoint{Transport: "tor", Address: onion})
+	j.Anonymous = true
+	if _, err := j.Encode(); err == nil {
+		t.Fatal("an anonymous join link was encoded")
+	}
+	raw, _ := b64.DecodeString(strings.SplitN(s, "k=", 2)[1])
+	join := "sol://join?v=3&k=" + b64.EncodeToString(raw)
+	if _, err := ParseLink(join); !errors.Is(err, ErrBadLink) {
+		t.Fatalf("anonymous join link: %v", err)
+	}
+	// Unknown flags or fields: made by a newer Sol.
+	for _, extra := range [][]byte{{tagFlags, 0x80}, {9, 1, 2}} {
+		b := slices.Concat(raw[:fixedLen], extra, raw[fixedLen:])
+		if _, err := ParseLink("sol://pair?v=3&k=" + b64.EncodeToString(b)); !errors.Is(err, ErrLinkVersion) {
+			t.Errorf("% x: %v", extra, err)
+		}
+	}
+}
+
 // The secret's access key is listed while the secret is pending, and OnChange fires when it
 // is issued and when it is burned.
 func TestTokensAccessKeys(t *testing.T) {

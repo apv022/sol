@@ -443,3 +443,81 @@ func testLog(name string) *slog.Logger {
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})).With("node", name)
 }
+
+// TestAnonymousBothWays: the anonymous link says it is anonymous, so the side that redeems it
+// treats the inviter as anonymous too. Each holds only onion-only records of the other, no
+// non-onion address of either crosses Tor in either direction (not when an address changes
+// either), and each refuses the other's direct dial.
+func TestAnonymousBothWays(t *testing.T) {
+	fake := faultnet.NewFakeTor(t.TempDir())
+	both := []sold.TransportConfig{{Name: "clearnet", Listen: "127.0.0.1:0"}, {Name: "tor"}}
+	tpA, tpB := &tap{}, &tap{}
+	alice := startNet(t, netNode{o: sold.InitOptions{Name: "Alice", Device: "laptop"}, tor: fake.Provider(), wrap: tpA.wrap, transports: both})
+	bob := startNet(t, netNode{o: sold.InitOptions{Name: "Bob", Device: "desktop"}, tor: fake.Provider(), wrap: tpB.wrap, transports: both})
+	for _, d := range []*sold.Daemon{alice, bob} {
+		waitOnion(t, d, time.Minute)
+	}
+	link, err := alice.InviteAnonymous()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l, err := pairing.ParseLink(link); err != nil || !l.Anonymous || len(link) > pairing.MaxLinkLen {
+		t.Fatalf("%d chars, %+v, %v", len(link), l, err)
+	}
+	redeem(t, bob, link)
+	aliceID, _ := identity.ParseID(alice.PersonID())
+	bobID, _ := identity.ParseID(bob.PersonID())
+	if !bob.Contacts.Anonymous(aliceID) {
+		t.Fatal("Bob does not treat Alice as anonymous")
+	}
+	eventually(t, "Alice treats Bob as anonymous", func() bool { return alice.Contacts.Anonymous(bobID) })
+	waitSession(t, bob, alice)
+	waitSession(t, alice, bob)
+
+	// Both change their addresses: the new records cross onion-only.
+	seqA, seqB := heldSeq(bob, alice), heldSeq(alice, bob)
+	for _, d := range []*sold.Daemon{alice, bob} {
+		if _, err := d.SetTransport("direct", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the new records", func() bool { return heldSeq(bob, alice) > seqA && heldSeq(alice, bob) > seqB })
+	onlyOnions(t, bob, alice)
+	onlyOnions(t, alice, bob)
+	if tpA.total() == 0 || tpB.total() == 0 {
+		t.Fatal("a tap recorded nothing")
+	}
+	for _, a := range revealing(alice) {
+		if tpB.contains(a) {
+			t.Fatalf("Alice's address reached Bob: %s", a)
+		}
+	}
+	for _, a := range revealing(bob) {
+		if tpA.contains(a) {
+			t.Fatalf("Bob's address reached Alice: %s", a)
+		}
+	}
+	for _, p := range [][2]*sold.Daemon{{alice, bob}, {bob, alice}} {
+		dev, _ := identity.ParseID(p[1].DeviceID())
+		if s, ok := p[0].Sessions.Session(dev); ok && s.Path().Transport != "" && s.Path().Transport != "tor" {
+			t.Fatalf("%s reaches %s over %s", p[0].DeviceID(), p[1].DeviceID(), s.Path().Transport)
+		}
+	}
+
+	// Direct dials are refused both ways (as if the address had leaked elsewhere).
+	clearOf := func(d *sold.Daemon) string {
+		for _, e := range d.Keyring.Endpoints().Endpoints {
+			if e.Transport == "clearnet" {
+				return e.Address
+			}
+		}
+		t.Fatalf("%s has no clearnet address", d.DeviceID())
+		return ""
+	}
+	if err := dialDirect(alice, bob, clearOf(bob)); err == nil {
+		t.Fatal("the inviter's direct dial was admitted by the anonymous redeemer")
+	}
+	if err := dialDirect(bob, alice, clearOf(alice)); err == nil {
+		t.Fatal("the redeemer's direct dial was admitted by the anonymous inviter")
+	}
+}

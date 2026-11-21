@@ -271,8 +271,22 @@ func TestPlatformTorPriority(t *testing.T) {
 	if got := run(PlatformPaths(fromCfg)); !strings.HasPrefix(got, "platform|") || !strings.Contains(got, "0.4.9.15") {
 		t.Fatalf("tor_bin did not win: %s", got)
 	}
-	if got := run(PlatformPaths("")); !strings.HasPrefix(got, "bundled|") {
+	if got := run(PlatformPaths("")); !strings.HasPrefix(got, "bundled|") || !strings.Contains(got, "provider=bundled") || !strings.Contains(got, "version=") {
 		t.Fatalf("without a platform tor: %s", got)
+	}
+	// The system's tor logs its version too.
+	var logged strings.Builder
+	p, err := Select([]string{"native"}, "tor", Options{Log: slog.New(slog.NewTextHandler(&logged, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc, err := p.Start(context.Background(), Program{Name: "tor", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-proc.Done()
+	if !strings.Contains(logged.String(), "provider=native") || !strings.Contains(logged.String(), "0.0.0 (native)") {
+		t.Fatalf("the native tor's version was not logged: %s", logged.String())
 	}
 	t.Setenv(TorBinEnv, filepath.Join(dir, "missing"))
 	if _, err := Select(TorProviders, "tor", Options{BinDir: t.TempDir(), Platform: PlatformPaths("")}); err == nil || !strings.Contains(err.Error(), "not a program file") {

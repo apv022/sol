@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -351,6 +353,32 @@ func TestNetSignatureIgnoresVirtual(t *testing.T) {
 	first := netSignature()
 	if second := netSignature(); first != second {
 		t.Fatalf("signature not stable: %q vs %q", first, second)
+	}
+}
+
+// TestWatchNetworkForbidden: where reading the interfaces is refused (Android), the Tor
+// transport's own address watch stops at once instead of being refused every poll.
+func TestWatchNetworkForbidden(t *testing.T) {
+	var calls atomic.Int32
+	old, oldEvery := netInterfaces, netPollEvery
+	t.Cleanup(func() { netInterfaces, netPollEvery = old, oldEvery })
+	netPollEvery = time.Millisecond
+	netInterfaces = func() ([]net.Interface, error) {
+		calls.Add(1)
+		return nil, os.NewSyscallError("netlinkrib", syscall.EACCES)
+	}
+	done := make(chan struct{})
+	go func() {
+		(&Tor{}).watchNetwork(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the watch kept polling")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("read the interfaces %d times", calls.Load())
 	}
 }
 

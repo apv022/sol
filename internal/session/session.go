@@ -925,7 +925,7 @@ func (m *Manager) transportFor(ep identity.Endpoint) transport.Transport {
 func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, c wire.Call, wantPerson ed25519.PublicKey) (net.Conn, *wire.Result, PathInfo, string, error) {
 	if c.Op == wire.OpJoin {
 		c.Bundle = m.kr.Endpoints().Marshal()
-	} else {
+	} else if c.Bundle == nil {
 		b, err := m.bundleFor(wantPerson)
 		if err != nil {
 			return nil, nil, PathInfo{}, "", err
@@ -945,9 +945,12 @@ func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, c wire.
 }
 
 // Pair redeems a sol://pair link: the inviter and this person become
-// contacts, and a session comes up.
+// contacts, and a session comes up. An anonymous link makes the inviter an anonymous
+// contact here too: it is dialed over Tor only, gets only the onion-only form of my
+// bundle (already in this handshake), and is refused on any other transport.
 func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 	me := m.kr.Person()
+	ac, canAnon := m.cfg.Contacts.(AnonymousContacts)
 	switch {
 	case l.Kind != pairing.KindPair:
 		return nil, errors.New("session: not a pair link")
@@ -955,16 +958,37 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 		return nil, identity.ErrNoPerson
 	case bytes.Equal(l.Person, me):
 		return nil, errors.New("session: that link is from my own person; use a join link to add a device")
+	case l.Anonymous && !canAnon:
+		return nil, errors.New("session: this contacts store cannot keep anonymous contacts")
 	}
-	conn, res, path, pk, err := m.dial(ctx, l.Endpoints, wire.Call{Op: wire.OpPair, Secret: l.Secret}, l.Person)
+	c := wire.Call{Op: wire.OpPair, Secret: l.Secret}
+	rec := l.Endpoints
+	if l.Anonymous {
+		rec = onlyAnonymous(rec)
+		b, err := m.kr.AnonymousBundle()
+		if err != nil {
+			return nil, err
+		}
+		c.Bundle = b.Marshal() // dial keeps it: the inviter is not a contact yet
+	}
+	conn, res, path, pk, err := m.dial(ctx, rec, c, l.Person)
 	if err != nil {
 		return nil, err
+	}
+	if l.Anonymous && !identity.AnonymousTransport(path.Transport) {
+		conn.Close() // cannot happen (rec is onion-only), but never pair anonymously in the clear
+		return nil, ErrNotAnonymousPath
 	}
 	if _, err := m.cache.Accept(res.Bundle, res.Device); err != nil {
 		conn.Close()
 		return nil, err
 	}
-	if err := m.cfg.Contacts.AddContact(l.Person, res.Bundle.Person.Name); err != nil {
+	if l.Anonymous {
+		err = ac.AddAnonymousContact(l.Person, res.Bundle.Person.Name)
+	} else {
+		err = m.cfg.Contacts.AddContact(l.Person, res.Bundle.Person.Name)
+	}
+	if err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -1045,7 +1069,7 @@ func (m *Manager) InviteToken(tok pairing.Token) (pairing.Link, error) {
 		return pairing.Link{}, err
 	}
 	return pairing.Link{Kind: tok.Kind, Person: b.Person.Person, Device: m.kr.DevicePublic(),
-		Secret: secret, Endpoints: eps}, nil
+		Secret: secret, Endpoints: eps, Anonymous: tok.Anonymous}, nil
 }
 
 // keeper keeps a session with one device up.

@@ -20,19 +20,30 @@ const (
 	rtmgrpIPv6Route  = 0x400
 )
 
-// watchOS subscribes to the kernel's route netlink groups and sends a reason for every
-// relevant message until ctx ends. It reports false when netlink is unavailable (some
-// sandboxes), so the caller scans instead.
-func watchOS(ctx context.Context, send func(string)) bool {
+// openNetlink opens a non-blocking route netlink socket bound to the change groups (a test
+// hook: a test injects the error Android's SELinux gives, EACCES).
+var openNetlink = func() (int, error) {
 	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK, syscall.NETLINK_ROUTE)
 	if err != nil {
-		return false
+		return -1, os.NewSyscallError("socket", err)
 	}
 	sa := &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK,
 		Groups: rtmgrpLink | rtmgrpIPv4IfAddr | rtmgrpIPv6IfAddr | rtmgrpIPv4Route | rtmgrpIPv6Route}
 	if err := syscall.Bind(fd, sa); err != nil {
 		syscall.Close(fd)
-		return false
+		return -1, os.NewSyscallError("netlink bind", err)
+	}
+	return fd, nil
+}
+
+// watchOS subscribes to the kernel's route netlink groups and sends a reason for every
+// relevant message until ctx ends. It returns an error when netlink is unavailable: one
+// that is os.ErrPermission when the OS forbids it (Android), so the caller neither retries
+// nor scans; any other (some sandboxes), so the caller scans instead.
+func watchOS(ctx context.Context, send func(string)) error {
+	fd, err := openNetlink()
+	if err != nil {
+		return err
 	}
 	// Non-blocking, so the runtime poller serves Read and Close interrupts it.
 	f := os.NewFile(uintptr(fd), "netlink")
@@ -65,7 +76,7 @@ func watchOS(ctx context.Context, send func(string)) bool {
 			}
 		}
 	}()
-	return true
+	return nil
 }
 
 // relevant says why a netlink message matters ("" when it doesn't): an address or link

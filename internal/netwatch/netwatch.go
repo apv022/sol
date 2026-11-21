@@ -12,6 +12,11 @@
 //     arrive as they happen.
 //   - Elsewhere (or when netlink is unavailable), a scan of the interface addresses every
 //     PollEvery: the only portable way without cgo.
+//   - Where the OS forbids watching (Android's SELinux policy denies apps a bound netlink
+//     route socket, and with it net.Interfaces), neither: retrying or scanning would only
+//     be refused every few seconds. The platform's own callback reports changes instead
+//     (the Android shell's network callback runs `sol network-changed`), and the clock
+//     still catches wake-ups. Said once in the log.
 //
 // Invariants: bursts collapse into one call after Debounce; the callback never runs
 // concurrently with itself; nothing runs after ctx ends. Virtual interfaces (containers,
@@ -20,7 +25,10 @@ package netwatch
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +48,8 @@ type Options struct {
 	Wall func() time.Time
 	// NoOS turns off the OS change source (tests): only the clock and the scan run.
 	NoOS bool
+	// Log says once when the OS forbids watching the network [slog's default].
+	Log *slog.Logger
 }
 
 func (o Options) withDefaults() Options {
@@ -54,6 +64,9 @@ func (o Options) withDefaults() Options {
 	def(&o.PollEvery, 5*time.Second)
 	if o.Wall == nil {
 		o.Wall = func() time.Time { return time.Now().Round(0) }
+	}
+	if o.Log == nil {
+		o.Log = slog.Default()
 	}
 	return o
 }
@@ -76,17 +89,30 @@ func Watch(ctx context.Context, o Options, onChange func(reason string)) {
 		default: // a burst: one is pending already
 		}
 	}
-	scan := o.NoOS || !watchOS(ctx, send)
+	scan := o.NoOS
+	if !scan {
+		err := watchOS(ctx, send)
+		scan = err != nil
+		if errors.Is(err, os.ErrPermission) {
+			scan = false
+			o.Log.Info("the OS does not let Sol watch the network; relying on the platform's network callback (sol network-changed) and the sleep detector", "err", err.Error())
+		}
+	}
+	var lastSig string
 	var poll <-chan time.Time
 	if scan {
-		t := time.NewTicker(o.PollEvery)
-		defer t.Stop()
-		poll = t.C
+		var err error
+		if lastSig, err = signature(); errors.Is(err, os.ErrPermission) {
+			o.Log.Info("the OS does not let Sol read the network interfaces; relying on the platform's network callback (sol network-changed) and the sleep detector", "err", err.Error())
+		} else {
+			t := time.NewTicker(o.PollEvery)
+			defer t.Stop()
+			poll = t.C
+		}
 	}
 	clock := time.NewTicker(o.SleepCheckEvery)
 	defer clock.Stop()
 	lastMono, lastWall := time.Now(), o.Wall()
-	lastSig := Signature()
 	var debounce <-chan time.Time
 	var reasons []string
 	for {
@@ -105,7 +131,7 @@ func Watch(ctx context.Context, o Options, onChange func(reason string)) {
 			onChange(strings.Join(reasons, ", "))
 			reasons = nil
 		case <-poll:
-			if sig := Signature(); sig != lastSig {
+			if sig, _ := signature(); sig != lastSig {
 				lastSig = sig
 				send(ReasonAddresses)
 			}
@@ -144,9 +170,18 @@ func Ignored(name string) bool {
 // Signature summarises the machine's usable network addresses ("" if they can't be read).
 // A change means routes probably changed too.
 func Signature() string {
-	ifs, err := net.Interfaces()
+	s, _ := signature()
+	return s
+}
+
+// interfaces lists the network interfaces (a test hook).
+var interfaces = net.Interfaces
+
+// signature is Signature with the reason it could not read the interfaces.
+func signature() (string, error) {
+	ifs, err := interfaces()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var parts []string
 	for _, ifc := range ifs {
@@ -163,5 +198,5 @@ func Signature() string {
 		}
 	}
 	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	return strings.Join(parts, ","), nil
 }

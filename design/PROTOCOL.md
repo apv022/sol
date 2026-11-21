@@ -178,7 +178,8 @@ bundle) and that `sig_b` verifies; otherwise it closes.
 sol://pair?v=3&k=<base64url(payload)>
 sol://join?v=3&k=<base64url(payload)>
 
-payload = R_pub (32) | D_pub (32) | secret (32) | up to two addresses
+payload = R_pub (32) | D_pub (32) | secret (32) | [flags] | up to two addresses
+flags   = 0x06 | u8 (bit 0: anonymous; written only when non-zero)
 address = 0x01 | onion v3 public key (32)
         | 0x02 | IPv4 (4) | port (2)      a candidate of the direct (TLS) transport
         | 0x03 | IPv6 (16) | port (2)
@@ -193,6 +194,12 @@ that still fits (same room, same Wi-Fi), or without an onion the two best IP add
 addresses are unsigned hints; the handshake checks that whoever answers is `D_pub` speaking for
 `R_pub`, and brings the full signed bundle, endpoint record included. The onion's checksum is
 recomputed from the key. A pending secret opens the onion (§Tor client authorization).
+
+An **anonymous** pair link (§Anonymous contacts) sets the anonymous flag and carries only the
+onion: the redeemer treats the inviter as an anonymous contact too (Tor only both ways, its
+handshake bundle and every later one onion-only, the inviter's non-Tor dials refused). A field or
+flag this build does not know is refused as made by a newer Sol, so new fields need no new
+version.
 
 Version 2 links (full endpoint records and the inviter's name, about 600 characters) are refused
 with "made by an older Sol"; a link with a higher version says to update Sol.
@@ -323,7 +330,9 @@ mine that isn't an onion:
   `{anonymous: true}`) issues a pair link that carries only this device's onion (an error while it
   has none; never a join link). Its secret is marked anonymous: redeeming it over anything but an
   anonymous transport is refused without burning it, and whoever redeems it is added to my
-  contacts feed with `anonymous: true`.
+  contacts feed with `anonymous: true`. The link carries the anonymous flag (§Pairing links),
+  so the redeemer adds me with `anonymous: true` as well and sends the onion-only form of its
+  bundle already in the pairing handshake: Tor only, both ways. *(Built in C10b.)*
 - **Records.** Every bundle of mine an anonymous contact receives (handshake, push, `GET
   /p/bundle`, probe) carries the onion-only form of my endpoint record: the same person
   certificate and device list, and an endpoint record with only the `tor` (and `i2p`) entries,
@@ -350,7 +359,8 @@ mine that isn't an onion:
 
 The e2e test (`internal/e2e/transports_test.go`) records every byte an anonymous contact
 receives over (fake) Tor and asserts no non-onion address of any of my devices is in it, before
-and after my addresses change, and that its direct dial is refused.
+and after my addresses change, and that its direct dial is refused; `TestAnonymousBothWays`
+checks the same in both directions for the inviter and the redeemer.
 
 ## Versioning
 

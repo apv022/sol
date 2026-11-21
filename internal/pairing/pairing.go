@@ -2,7 +2,7 @@
 // and `join` (add a device to my identity), and encodes the links that carry
 // them (design/PROTOCOL.md §Pairing links):
 //
-//	sol://pair?v=3&k=<base64url(person | device | secret | addresses)>
+//	sol://pair?v=3&k=<base64url(person | device | secret | [flags] | addresses)>
 //	sol://join?v=3&k=<…>
 //
 // Invariants:
@@ -16,6 +16,9 @@
 //     MaxLinkLen characters (an easily scanned QR code). The addresses are
 //     hints, not signed: who answers is checked by the handshake against the
 //     link's device key, and the full endpoint record comes in that handshake.
+//   - An anonymous invite's link says so (a flags field), so the redeemer treats the inviter
+//     as anonymous too: Tor only, both ways. It carries only the onion. A field this build
+//     does not know is refused as made by a newer Sol.
 //   - A pending secret also opens the inviter's onion: AccessKey derives a Tor
 //     client-auth key from it, which the inviter lists on its onion until the
 //     secret is used or expires (Tokens.AccessKeys).
@@ -237,22 +240,28 @@ type Link struct {
 	// Endpoints are where to reach Device. String keeps at most two addresses of them (the
 	// signature is not carried); ParseLink returns an unsigned record of those, for dialing.
 	Endpoints identity.EndpointRecord
+	// Anonymous marks an anonymous invite (only a pair link): the inviter is Tor only, both
+	// ways, so whoever redeems it also treats the inviter as an anonymous contact, and
+	// Encode keeps only the onion.
+	Anonymous bool
 }
 
 var b64 = base64.RawURLEncoding
 
 // Address tags in a link's payload. Ports are big-endian.
 const (
-	tagTor      = 1 // 32-byte onion v3 public key
-	tagDirect4  = 2 // IPv4 (4) | port (2), a candidate of the direct transport
-	tagDirect6  = 3 // IPv6 (16) | port (2)
-	tagClear4   = 4 // clearnet IPv4 | port
-	tagClear6   = 5 // clearnet IPv6 | port
-	maxAddrs    = 2
-	fixedLen    = 3 * 32 // person | device | secret
-	linkPrefix  = len("sol://join?v=3&k=")
-	maxPayload  = (MaxLinkLen - linkPrefix) * 3 / 4 // raw base64url: 4 characters per 3 bytes
-	onionKeyLen = 32
+	tagTor        = 1 // 32-byte onion v3 public key
+	tagDirect4    = 2 // IPv4 (4) | port (2), a candidate of the direct transport
+	tagDirect6    = 3 // IPv6 (16) | port (2)
+	tagClear4     = 4 // clearnet IPv4 | port
+	tagClear6     = 5 // clearnet IPv6 | port
+	tagFlags      = 6 // one byte of flags (flagAnonymous); written only when non-zero
+	flagAnonymous = 1 // an anonymous invite: the redeemer treats the inviter as anonymous too
+	maxAddrs      = 2
+	fixedLen      = 3 * 32 // person | device | secret
+	linkPrefix    = len("sol://join?v=3&k=")
+	maxPayload    = (MaxLinkLen - linkPrefix) * 3 / 4 // raw base64url: 4 characters per 3 bytes
+	onionKeyLen   = 32
 )
 
 // String encodes the link. A link with no address that fits reaches nothing; Encode reports
@@ -270,7 +279,15 @@ func (l Link) Encode() (string, error) {
 	b = append(b, l.Person...)
 	b = append(b, l.Device...)
 	b = append(b, l.Secret...)
-	addrs := linkAddrs(l.Endpoints, maxPayload-len(b))
+	eps := l.Endpoints
+	if l.Anonymous {
+		if l.Kind != KindPair {
+			return "", errors.New("pairing: only a pair link can be anonymous")
+		}
+		b = append(b, tagFlags, flagAnonymous)
+		eps.Endpoints = identity.OnlyAnonymous(eps.Endpoints)
+	}
+	addrs := linkAddrs(eps, maxPayload-len(b))
 	for _, a := range addrs {
 		b = append(b, a...)
 	}
@@ -397,13 +414,23 @@ func ParseLink(s string) (Link, error) {
 	var direct []string
 	for rest := b[fixedLen:]; len(rest) > 0; {
 		tag := rest[0]
-		size := map[byte]int{tagTor: onionKeyLen, tagDirect4: 6, tagDirect6: 18, tagClear4: 6, tagClear6: 18}[tag]
+		size := map[byte]int{tagTor: onionKeyLen, tagDirect4: 6, tagDirect6: 18, tagClear4: 6, tagClear6: 18, tagFlags: 1}[tag]
+		if size == 0 && tag > tagFlags {
+			// A field this build does not know: a newer Sol made the link (new fields get new
+			// tags; v stays 3 while older readers can refuse them like this).
+			return Link{}, fmt.Errorf("%w (unknown link field %d)", ErrLinkVersion, tag)
+		}
 		if size == 0 || len(rest) < 1+size {
 			return Link{}, fmt.Errorf("%w: bad address", ErrBadLink)
 		}
 		body := rest[1 : 1+size]
 		rest = rest[1+size:]
 		switch tag {
+		case tagFlags:
+			if body[0]&^flagAnonymous != 0 {
+				return Link{}, fmt.Errorf("%w (unknown link flags %#x)", ErrLinkVersion, body[0])
+			}
+			l.Anonymous = body[0]&flagAnonymous != 0
 		case tagTor:
 			l.Endpoints.Endpoints = append(l.Endpoints.Endpoints, identity.Endpoint{Transport: "tor", Address: onionAddress(body)})
 		case tagDirect4, tagDirect6:
@@ -415,6 +442,12 @@ func ParseLink(s string) (Link, error) {
 	if len(direct) > 0 {
 		l.Endpoints.Endpoints = append(l.Endpoints.Endpoints, identity.Endpoint{Transport: "direct",
 			Address: "sol-direct:" + identity.NodeID(l.Device) + "@" + strings.Join(direct, ",")})
+	}
+	if l.Anonymous {
+		if l.Kind != KindPair {
+			return Link{}, fmt.Errorf("%w: only a pair link can be anonymous", ErrBadLink)
+		}
+		l.Endpoints.Endpoints = identity.OnlyAnonymous(l.Endpoints.Endpoints) // Tor only, whatever it carried
 	}
 	if len(l.Endpoints.Endpoints) == 0 {
 		return Link{}, fmt.Errorf("%w: no way to reach the device", ErrBadLink)

@@ -7,8 +7,8 @@
 //
 //	platform a file the platform ships and has already verified: SOL_TOR_BIN, else the
 //	         config's tor_bin (`sol init --tor-bin <path>`). Android sets SOL_TOR_BIN to
-//	         the APK's lib/<abi>/libtor.so (the APK is signed, so no checksum here); the
-//	         version (`--version`) is logged. Named but missing is an error, not a fallback.
+//	         the APK's lib/<abi>/libtor.so (the APK is signed, so no checksum here).
+//	         Named but missing is an error, not a fallback.
 //	bundled  binaries embedded at build time with -tags bundled (desktop release builds,
 //	         `make build-bundled`: tor 0.4.9.16 from the Tor Browser 16.0.1 expert bundles
 //	         and its shared libraries, fetched and signature-checked by
@@ -20,6 +20,9 @@
 //	native   the program found on PATH (development: apt install tor), or the file named
 //	         by SOL_BIN_<NAME>
 //	docker   containers (stub; see docker.go)
+//
+// Whichever provider runs a program logs, at its first start, the file and its version
+// (`<file> --version`, first line), so a log always says which tor ran.
 //
 // Every provider returns the same thing: a *Proc with a Done channel and a
 // Stop method. Callers (transports) never care which provider was used.
@@ -106,9 +109,9 @@ func provider(name string, opts Options) (Provider, error) {
 	case "platform":
 		return &Platform{Paths: opts.Platform, Log: opts.Log}, nil
 	case "bundled":
-		return &Bundled{BinDir: opts.BinDir}, nil
+		return &Bundled{BinDir: opts.BinDir, Log: opts.Log}, nil
 	case "native":
-		return &Native{}, nil
+		return &Native{Log: opts.Log}, nil
 	case "docker":
 		return &Docker{Binary: opts.ContainerRuntime}, nil
 	}

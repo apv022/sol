@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,7 +15,13 @@ import (
 // (SOL_BIN_TOR=/path/to/tor), for platforms that have no PATH to speak of:
 // an Android app may only run files from its native-library directory,
 // where tor is called libtor.so.
-type Native struct{}
+//
+// The first Start logs the file and its version.
+type Native struct {
+	Log *slog.Logger // nil: slog's default
+
+	ver versionOnce
+}
 
 func (n *Native) Name() string { return "native" }
 
@@ -40,5 +47,6 @@ func (n *Native) Start(ctx context.Context, p Program) (*Proc, error) {
 	if err != nil {
 		return nil, err
 	}
+	n.ver.log(ctx, n.Log, n.Name(), p.Name, path, nil)
 	return startBinary(ctx, path, p)
 }

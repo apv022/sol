@@ -27,7 +27,11 @@ func (d *Daemon) watchNetwork() {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		netwatch.Watch(d.ctx, NetWatch, d.NetworkChanged)
+		o := NetWatch
+		if o.Log == nil {
+			o.Log = d.log
+		}
+		netwatch.Watch(d.ctx, o, d.NetworkChanged)
 	}()
 }
 
