@@ -187,28 +187,80 @@ public class MainActivity extends Activity {
             }
             String[] r = NodeService.ready() ? NodeService.cli(this, "pair", link) : new String[]{"-1", "The node did not start."};
             boolean ok = r[0].equals("0");
+            if (ok && !join) r[1] = pairedText(r[1]);
             runOnUiThread(() -> {
                 if (join && joinSpinner != null) joinSpinner.setVisibility(View.GONE);
                 if (ok && join) {
                     setJoinPending(false);
+                    startService(new Intent(this, NodeService.class).setAction(NodeService.ACTION_JOINED));
                     joinedSummary(r[1], status);
                 } else if (ok) {
-                    toast(r[1]);
+                    notice("Paired", r[1]);
                 } else if (status != null) {
-                    status.setText(r[1].isEmpty() ? "Joining failed." : r[1]);
+                    status.setText(failure(r[1], "Joining failed."));
                     joinGo.setEnabled(true);
                 } else {
-                    toast(r[1].isEmpty() ? "Pairing failed." : r[1]);
+                    notice("Could not pair", failure(r[1], "Pairing failed."));
                 }
             });
         }, "sol-pair").start();
+    }
+
+    /**
+     * "Paired with <person ID>" from the CLI, said with the person's name: the link carries no
+     * name, but the handshake has just exchanged it, so `people --json` knows it. Runs off the UI
+     * thread. Falls back to a sentence without the ID, which means nothing to a person.
+     */
+    private String pairedText(String cli) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("[a-z2-7]{52}").matcher(cli);
+        if (!m.find()) return cli;
+        String id = m.group();
+        String[] r = NodeService.cli(this, "people", "--json");
+        if (r[0].equals("0")) {
+            try {
+                org.json.JSONArray a = new org.json.JSONArray(r[1]);
+                for (int i = 0; i < a.length(); i++) {
+                    org.json.JSONObject p = a.getJSONObject(i);
+                    String name = p.optString("name", "").trim();
+                    if (id.equals(p.optString("id")) && !name.isEmpty()) return "You and " + name + " can now share with each other.";
+                }
+            } catch (org.json.JSONException ignored) { }
+        }
+        return "You can now share with each other.";
+    }
+
+    /** The CLI's error text without its "sol:" prefix, or the fallback when there is none. */
+    private static String failure(String cli, String fallback) {
+        String t = cli == null ? "" : cli.trim();
+        if (t.startsWith("sol: ")) t = t.substring(5);
+        if (t.startsWith("bad_request: ")) t = t.substring(13);
+        String low = t.toLowerCase(java.util.Locale.ROOT);
+        // The CLI's text is for a terminal; say what the person can do about the common cases.
+        if (low.contains("not a valid")) return "That is not a Sol link. Copy the whole sol:// link and try again.";
+        // A used, expired or unknown secret is refused in the handshake ("rejected the connection").
+        if (low.contains("invalid or expired") || low.contains("expired") || low.contains("rejected the connection"))
+            return "This link has expired or was already used. Ask for a new one.";
+        if (low.contains("link version") || low.contains("unsupported version")) return "This link is from a different version of Sol. Update Sol on both devices.";
+        if (low.contains("unreachable") || low.contains("timeout") || low.contains("deadline") || low.contains("refused")
+                || low.contains("no route") || low.contains("unavailable"))
+            return "Could not reach the other device. Check that Sol is open on it and that both are online, then try again.";
+        return t.isEmpty() ? fallback : t;
+    }
+
+    /** A message that stays until dismissed (a toast is too short for an error to be read). */
+    private void notice(String title, String text) {
+        new android.app.AlertDialog.Builder(this).setTitle(title).setMessage(text)
+                .setPositiveButton("OK", null).show();
     }
 
     private void joinedSummary(String cliText, TextView status) {
         // The CLI says "Joined. This device now belongs to <person>"; show it as "<person>'s <device>".
         String person = cliText.contains("belongs to ") ? cliText.substring(cliText.indexOf("belongs to ") + 11).trim() : null;
         String device = deviceField != null ? deviceField.getText().toString().trim() : Build.MODEL;
-        status.setText(person == null ? cliText : "Joined as " + person + "'s " + device);
+        // Right after joining, the person's name may not have synced yet and the CLI names them by
+        // ID; a 52-character key means nothing to a person, so leave it out.
+        if (person != null && person.matches("[a-z2-7]{40,}")) person = null;
+        status.setText(person == null ? "Joined. This phone is now one of your devices." : "Joined as " + person + "'s " + device);
         root.postDelayed(() -> {
             if (setup != null) root.removeView(setup);
             setup = null;
@@ -300,6 +352,7 @@ public class MainActivity extends Activity {
         col.addView(go);
         col.addView(back);
         show(col);
+        name.requestFocus();
     }
 
     /**
@@ -307,7 +360,7 @@ public class MainActivity extends Activity {
      * delivered by a sol://join tap or QR scan. With a link in hand it starts at once.
      */
     private void showJoin(String link, boolean auto) {
-        LinearLayout col = column("Add to my Sol", "On your other device, run `sol invite --join` and scan its QR code with the camera, or paste the link here.");
+        LinearLayout col = column("Add to my Sol", "On your other device open Sol, choose Add my device, and scan the QR code with the camera app, or paste the link here.");
         deviceField = new EditText(this);
         deviceField.setSingleLine();
         deviceField.setText(Build.MODEL);
@@ -316,6 +369,9 @@ public class MainActivity extends Activity {
         EditText linkField = new EditText(this);
         linkField.setHint("Paste link (sol://join…)");
         linkField.setSingleLine();
+        // A link, not words: no autocorrect or suggestions mangling a pasted or typed link.
+        linkField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        linkField.setImeOptions(EditorInfo.IME_ACTION_GO);
         linkField.setTextColor(textColor());
         if (link != null) linkField.setText(link);
         joinGo = new Button(this);
@@ -328,13 +384,17 @@ public class MainActivity extends Activity {
         spin.setVisibility(View.GONE);
         joinSpinner = spin;
         Button back = new Button(this);
-        back.setText("Back");
-        back.setOnClickListener(v -> { if (!NodeService.initialised(this)) showWelcome(); });
+        back.setText(NodeService.initialised(this) ? "Start new instead" : "Back");
+        back.setOnClickListener(v -> {
+            if (!NodeService.initialised(this)) showWelcome();
+            else abandonJoin();
+        });
         Runnable submit = () -> {
             String l = linkField.getText().toString().trim();
             if (!l.startsWith("sol://join")) { linkField.setError("Paste a sol://join link"); return; }
             String dev = deviceField.getText().toString().trim();
             joinGo.setEnabled(false);
+            back.setText("Start new instead");
             if (!NodeService.initialised(this) && !joinPending()) {
                 setJoinPending(true);
                 startNode("", "join", dev.isEmpty() ? Build.MODEL : dev);
@@ -344,6 +404,7 @@ public class MainActivity extends Activity {
             runPair(l, true);
         };
         joinGo.setOnClickListener(v -> submit.run());
+        linkField.setOnEditorActionListener((v, a, e) -> { if (joinGo.isEnabled()) submit.run(); return true; });
         col.addView(deviceField);
         col.addView(linkField);
         col.addView(joinGo);
@@ -352,6 +413,34 @@ public class MainActivity extends Activity {
         col.addView(back);
         show(col);
         if (auto) submit.run();
+    }
+
+    /**
+     * "Start new instead" on a join that has not completed: stops the node, deletes the half-made
+     * identity (nothing has been shared yet) and returns to the welcome screen, so "Start new"
+     * then makes a fresh person instead of staying stuck as a device waiting for a link.
+     */
+    private void abandonJoin() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Start a new Sol instead?")
+                .setMessage("This device will not be added to your other Sol.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Start new", (d, w) -> new Thread(() -> {
+                    stopService(new Intent(this, NodeService.class));
+                    for (int i = 0; i < 100 && NodeService.isAlive(); i++) {
+                        try { Thread.sleep(100); } catch (InterruptedException e) { return; }
+                    }
+                    deleteTree(NodeService.dataDir(this));
+                    getSharedPreferences("sol", MODE_PRIVATE).edit().clear().apply();
+                    runOnUiThread(this::showWelcome);
+                }, "sol-abandon").start())
+                .show();
+    }
+
+    private static void deleteTree(File f) {
+        File[] kids = f.listFiles();
+        if (kids != null) for (File k : kids) deleteTree(k);
+        f.delete();
     }
 
     private int textColor() {
@@ -407,9 +496,19 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
+                if (isLocal(u) && ORIGIN_SUFFIX.equals(u.getHost()) && "/_sol/open".equals(u.getPath())) {
+                    openApp(u); // an app origin asks the root to sign this WebView in there
+                    return true;
+                }
                 if (isLocal(u)) return false; // launcher and app origins stay in this WebView
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (RuntimeException ignored) { }
                 return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                // The login redirect has landed on /: now go where the user was headed (Files after a share).
+                if (afterLogin != null && HOME.equals(url)) { String t = afterLogin; afterLogin = null; v.loadUrl(t); }
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -437,14 +536,120 @@ public class MainActivity extends Activity {
                 && (h.equals(ORIGIN_SUFFIX) || h.endsWith("." + ORIGIN_SUFFIX));
     }
 
-    /** Shows the UI once the node is serving. */
+    /**
+     * Shows the UI once the node is serving. The WebView is logged into the Sol app with a one-time
+     * login code from `libsol.so open --print`, which works on every Android version. (The daemon's
+     * same-user auto-login reads /proc/net/tcp, which Android 10+ hides from apps, so it cannot be
+     * relied on.) The session cookie outlives the process, so a restart whose cookie the node
+     * still accepts just loads the page; a fresh code is fetched only when it does not. App
+     * origins are signed in from this session on first use (openApp).
+     */
     private void showWeb() {
         if (web == null) return;
-        String url = pendingUrl != null ? pendingUrl : HOME;
+        final String target = pendingUrl != null ? pendingUrl : HOME;
         pendingUrl = null;
-        if (!loaded || !url.equals(HOME)) web.loadUrl(url);
-        loaded = true;
         web.setVisibility(View.VISIBLE);
+        loaded = true;
+        String cookie = CookieManager.getInstance().getCookie(HOME);
+        new Thread(() -> {
+            if (sessionLive(cookie)) { // signed in from an earlier start: no new session
+                runOnUiThread(() -> { if (web != null) web.loadUrl(target); });
+                return;
+            }
+            String[] r = NodeService.cli(this, "open", "--print");
+            String last = r[1].contains("\n") ? r[1].substring(r[1].lastIndexOf('\n') + 1) : r[1];
+            String login = r[0].equals("0") && last.startsWith(HOME + "login?code=") ? last : null;
+            runOnUiThread(() -> {
+                if (web == null) return;
+                if (login != null) { afterLogin = target.equals(HOME) ? null : target; web.loadUrl(login); }
+                else web.loadUrl(target); // no code: fall back to same-user auto-login
+            });
+        }, "sol-login").start();
+    }
+
+    private String afterLogin;
+
+    /** Whether the WebView's Sol session cookie is still accepted by the node (an admin read). */
+    private static boolean sessionLive(String cookie) {
+        if (cookie == null || !cookie.contains("sol_session=")) return false;
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + NodeService.PORT + "/admin/v1/status").openConnection();
+            c.setRequestProperty("Host", "localhost:" + NodeService.PORT);
+            c.setRequestProperty("Origin", "http://localhost:" + NodeService.PORT);
+            c.setRequestProperty("Cookie", cookie);
+            try { return c.getResponseCode() == 200; } finally { c.disconnect(); }
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Signs the WebView in on an app origin (Files, Notes, a contact's app) and opens it there.
+     *
+     * The daemon's own flow is a redirect chain: the app origin sends an unsigned page load to
+     * the root's /_sol/open, which mints a one-time code and redirects to /_sol/login?code= on
+     * the app origin, which sets its sol_app cookie (SameSite=Strict). Chromium counts
+     * files.localhost and localhost as different sites ("localhost" has no registrable domain),
+     * so the WebView neither keeps nor sends a Strict cookie that arrived through that cross-site
+     * chain, and the page redirects forever. The same two requests are made here instead, with
+     * the root session's cookie, and the resulting sol_app cookie is stored for exactly that
+     * origin, HttpOnly (Lax: the daemon's Origin / Sec-Fetch checks are the CSRF guard). The
+     * code, the session and the cookie are never logged.
+     */
+    private void openApp(Uri open) {
+        String rootCookie = CookieManager.getInstance().getCookie(HOME);
+        new Thread(() -> {
+            String target = null;
+            try {
+                String[] first = get(HOME.substring(0, HOME.length() - 1) + open.getEncodedPath()
+                        + (open.getEncodedQuery() != null ? "?" + open.getEncodedQuery() : ""), rootCookie);
+                Uri login = first[0] == null ? null : Uri.parse(first[0]);
+                if (login != null && isLocal(login) && "/_sol/login".equals(login.getPath())) {
+                    String origin = "http://" + login.getHost() + ":" + NodeService.PORT;
+                    String[] second = get(login.toString(), null);
+                    if (second[1] != null) {
+                        CookieManager cm = CookieManager.getInstance();
+                        cm.setCookie(origin, second[1] + "; Path=/; Max-Age=2592000; HttpOnly");
+                        cm.flush();
+                        String next = second[0] != null && second[0].startsWith("/") ? second[0] : "/";
+                        target = origin + next;
+                    }
+                }
+            } catch (java.io.IOException ignored) { }
+            String go = target;
+            runOnUiThread(() -> {
+                if (web == null) return;
+                if (go != null) web.loadUrl(go);
+                else showWeb(); // the root session is gone: sign in again, then go home
+            });
+        }, "sol-open-app").start();
+    }
+
+    /**
+     * One GET to the node on loopback without following redirects; returns {Location,
+     * "sol_app=..." from Set-Cookie}. The URL's host goes in the Host header (the node routes
+     * on it), the connection itself is to 127.0.0.1.
+     */
+    private static String[] get(String url, String cookie) throws java.io.IOException {
+        Uri u = Uri.parse(url);
+        HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + NodeService.PORT
+                + u.getEncodedPath() + (u.getEncodedQuery() != null ? "?" + u.getEncodedQuery() : "")).openConnection();
+        c.setInstanceFollowRedirects(false);
+        c.setRequestProperty("Host", u.getHost() + ":" + NodeService.PORT);
+        c.setRequestProperty("Sec-Fetch-Mode", "navigate");
+        if (cookie != null) c.setRequestProperty("Cookie", cookie);
+        try {
+            c.getResponseCode();
+            String app = null;
+            java.util.List<String> set = c.getHeaderFields().get("Set-Cookie");
+            if (set != null) for (String h : set) {
+                String kv = h.split(";", 2)[0].trim();
+                if (kv.startsWith("sol_app=")) app = kv;
+            }
+            return new String[]{c.getHeaderField("Location"), app};
+        } finally {
+            c.disconnect();
+        }
     }
 
     @Override
@@ -469,7 +674,7 @@ public class MainActivity extends Activity {
         Uri u = Uri.parse(url);
         if (!isLocal(u)) return;
         String cookie = CookieManager.getInstance().getCookie(url);
-        String name = URLUtil.guessFileName(url, disposition, mime);
+        String name = fileName(url, disposition, mime);
         new Thread(() -> {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + NodeService.PORT
@@ -484,6 +689,25 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show());
             }
         }, "sol-download").start();
+    }
+
+    /**
+     * The download's file name. Files sends only the RFC 6266 form
+     * {@code filename*=UTF-8''<percent-encoded>} (it is the one that carries any name), which
+     * URLUtil.guessFileName does not read: it would save every download as "raw.txt".
+     */
+    static String fileName(String url, String disposition, String mime) {
+        if (disposition != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("filename\\*\\s*=\\s*UTF-8''([^;]+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(disposition);
+            if (m.find()) {
+                try {
+                    String n = sanitize(java.net.URLDecoder.decode(m.group(1).trim().replace("+", "%2B"), "UTF-8"));
+                    if (!n.equals("shared")) return n;
+                } catch (java.io.UnsupportedEncodingException | IllegalArgumentException ignored) { }
+            }
+        }
+        return URLUtil.guessFileName(url, disposition, mime);
     }
 
     private OutputStream openDownload(String name, String mime) throws java.io.IOException {
@@ -537,11 +761,7 @@ public class MainActivity extends Activity {
             int saved = n;
             runOnUiThread(() -> {
                 Toast.makeText(this, saved == 0 ? "Nothing to save" : "Saved " + saved + " to Files", Toast.LENGTH_SHORT).show();
-                if (NodeService.isReady() && web != null) {
-                    String url = pendingUrl;
-                    pendingUrl = null;
-                    web.loadUrl(url);
-                }
+                if (NodeService.isReady() && web != null) showWeb();
             });
         }, "sol-share").start();
     }
