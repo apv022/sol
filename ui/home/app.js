@@ -109,16 +109,26 @@ function wireShare(d, invite, title) {
   d.querySelector('[data-share]')?.addEventListener('click', () => navigator.share({ title, url: invite.link }).catch(() => {}));
 }
 
+// Shown before a contact is made anonymous (the daemon's AnonymousWarning says the same).
+const ANON_WARNING = 'From now on they only reach you over Tor and only learn your onion address. Any IP address of yours they have already seen can’t be taken back.';
+
 function addPerson() {
-  dialog('Add a person', html`<div class="form" id="ap"><div id="ap-qr" class="share-box"><p class="muted">Making a link</p></div>
+  dialog('Add a person', html`<div class="form" id="ap"><div class="list"><div data-item><span class="grow">Anonymous<span class="row-sub">They reach you over Tor only and never learn your IP address</span></span><input type="checkbox" role="switch" id="ap-anon" aria-label="Anonymous"></div></div>
+    <div id="ap-qr" class="share-box"><p class="muted">Making a link</p></div>
     <hr class="rule">
     <form id="ap-paste" class="form"><label>Or paste a link from them<input name="link" placeholder="sol://pair?..." autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
     <div class="dlg-actions"><button class="primary" type="submit">Connect</button></div></form></div>`, async (d, close) => {
-    try {
-      const inv = await admin.invite(false);
-      render(d.querySelector('#ap-qr'), shareBlock(inv, 'Ask them to scan this with Sol, or send them the link.'));
-      wireShare(d, inv, 'Add me on Sol');
-    } catch (e) { fail(e); }
+    const make = async () => {
+      const anon = d.querySelector('#ap-anon').checked;
+      render(d.querySelector('#ap-qr'), html`<p class="muted">Making a link</p>`);
+      try {
+        const inv = await admin.invite(false, anon);
+        render(d.querySelector('#ap-qr'), shareBlock(inv, anon ? 'An anonymous link: it carries only your onion address.' : 'Ask them to scan this with Sol, or send them the link.'));
+        wireShare(d, inv, 'Add me on Sol');
+      } catch (e) { render(d.querySelector('#ap-qr'), html`<p class="muted">${e?.message || String(e)}</p>`); }
+    };
+    d.querySelector('#ap-anon').onchange = make;
+    await make();
     d.querySelector('#ap-paste').onsubmit = async (ev) => {
       ev.preventDefault();
       const link = new FormData(ev.target).get('link').trim();
@@ -224,7 +234,7 @@ function confirmBackup(words) {
 function personRow(p) {
   const on = isOnline(p), n = onlineDevices(p);
   return html`<a data-item data-chevron href="#/people/${encodeURIComponent(p.id)}"><sol-avatar name="${nameOf(p)}" id="${p.id}" ${on ? raw('online') : ''}></sol-avatar>
-    <span class="grow"><span class="row-title">${nameOf(p)}</span><span class="row-sub">${on ? `Online on ${n} device${n === 1 ? '' : 's'}` : (p.last_seen ? `Last seen ${relTime(p.last_seen)}` : 'Offline')}</span></span></a>`;
+    <span class="grow"><span class="row-title">${nameOf(p)}</span><span class="row-sub">${on ? `Online on ${n} device${n === 1 ? '' : 's'}` : (p.last_seen ? `Last seen ${relTime(p.last_seen)}` : 'Offline')}${p.anonymous ? ' · Anonymous' : ''}</span></span></a>`;
 }
 
 function pageHead(title, actions = '', back = '') {
@@ -250,6 +260,7 @@ function personView(id) {
     <div class="person-head"><sol-avatar name="${nameOf(p)}" id="${p.id}" size="84px" ${on ? raw('online') : ''}></sol-avatar><h1>${nameOf(p)}</h1>
       <span class="muted">${p.petname && p.name !== p.petname ? `${p.name} · ` : ''}<span class="${on ? 'dot-online' : 'dot-off'}"></span>${on ? 'Online' : `Last seen ${relTime(p.last_seen)}`}</span>
       <div class="person-actions"><button type="button" data-act="rename-person" data-id="${p.id}">${ic('edit')}Rename</button><button type="button" class="danger" data-act="unpair" data-id="${p.id}">Unpair</button></div></div>
+    <section class="section"><h3 class="group-title">Privacy</h3><div class="list"><div data-item><span class="grow">Anonymous<span class="row-sub">${p.anonymous ? 'Tor only, both ways: they only know your onion address' : 'Off: the fastest path (WireGuard, then direct, Tor last)'}</span></span><input type="checkbox" role="switch" data-anon="${p.id}" aria-label="Anonymous" ${p.anonymous ? raw('checked') : ''}></div></div></section>
     <section class="section"><h3 class="group-title">Devices</h3><div class="list">${list(p.devices).map((d) => html`<div data-item><span class="row-icon">${ic('device')}</span><span class="grow"><span class="row-title">${d.name}</span><span class="row-sub">${d.online ? 'Online' : 'Offline'}</span></span>${d.anchor ? html`<span class="badge tint">Anchor</span>` : ''}</div>`)}</div></section>
     <section class="section"><h3 class="group-title">Shared with me</h3>${list(p.shares_with_me).length ? html`<div class="list">${p.shares_with_me.map(shareRow)}</div>` : html`<div class="list"><div data-item class="muted">Nothing yet</div></div>`}</section>
     <section class="section"><h3 class="group-title">I share with them</h3>${list(p.i_share).length ? html`<div class="list">${p.i_share.map(shareRow)}</div>` : html`<div class="list"><div data-item class="muted">Nothing yet</div></div>`}</section></div>`;
@@ -311,9 +322,19 @@ function settingsView() {
     <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span><button type="button" data-act="logout">Sign out</button>` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
     <section class="section"><details class="adv"><summary class="group-title">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
-      <h3 class="group-title">Transports</h3><div class="list">${list(st.transports).map((t) => html`<div data-item><span class="grow">${t.name}</span><span class="badge ${t.state === 'up' ? 'ok' : ''}">${t.state}</span></div>`)}</div>
+      <h3 class="group-title">Transports</h3><div class="list">${transportRows(list(st.transports))}</div>
       <h3 class="group-title">Connections</h3><div class="list">${list(st.peer_sessions).length ? list(st.peer_sessions).map((x) => html`<div data-item><span class="grow"><span class="row-title">${x.peer}</span><span class="row-sub">${x.relation || ''} · since ${relTime(x.since)}</span></span></div>`) : html`<div data-item class="muted">None</div>`}</div>
       <p class="group-footer"><button type="button" class="tinted" data-act="network">${ic('refresh')}Check network now</button></p></details></section></div>`;
+}
+
+const TRANSPORTS = { wg: ['WireGuard', 'Direct and fast; punches through home routers'], direct: ['Direct (TLS)', 'For networks that block UDP'], tor: ['Tor', 'Works anywhere; hides your address'], clearnet: ['Clearnet', 'Unencrypted; tests and LAN only'] };
+function transportRows(ts) {
+  const on = ts.filter((t) => t.enabled).length;
+  return ts.map((t) => {
+    const [title, sub] = TRANSPORTS[t.name] || [t.name, ''];
+    const last = t.enabled && on === 1;
+    return html`<div data-item><span class="grow">${title}<span class="row-sub">${t.enabled && t.detail ? t.detail : sub}</span></span>${t.enabled ? html`<span class="badge ${t.state === 'up' ? 'ok' : ''}">${t.state}</span>` : ''}<input type="checkbox" role="switch" data-transport="${t.name}" aria-label="${title}" ${t.enabled ? raw('checked') : ''} ${last ? raw('disabled') : ''}></div>`;
+  });
 }
 
 // Home: wallpaper, greeting and clock, glass widgets, app grid, Inbox preview, dock.
@@ -413,6 +434,17 @@ const ACTIONS = {
   network: () => act(() => admin.networkChanged(), 'Checking the network'),
 };
 
+/** The person page's Anonymous switch: turning it on warns first (an IP already seen stays seen). */
+function setAnonymous(input) {
+  const p = personOf(input.dataset.anon);
+  if (!p) return;
+  const run = async () => { await admin.setAnonymous(p.id, input.checked); await load('people'); };
+  if (!input.checked) { act(run, `${nameOf(p)} is a buddy again`); return; }
+  input.checked = false; // until confirmed
+  confirmDialog({ title: `Make ${nameOf(p)} anonymous?`, text: ANON_WARNING, action: 'Make anonymous', danger: false,
+    run: async () => { input.checked = true; await run(); toast(`${nameOf(p)} is anonymous`); } });
+}
+
 /** Saves an appearance setting: updates the screen first, then tells the daemon. */
 async function setSetting(patch) {
   const prev = state.theme;
@@ -430,6 +462,8 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const t = e.target;
   if (t.dataset.toggle) setSetting({ [t.dataset.toggle]: t.checked ? 'on' : 'off' });
+  else if (t.dataset.transport) act(async () => { await admin.setTransport(t.dataset.transport, t.checked); await load('status'); }, t.checked ? 'Turned on' : 'Turned off').then(() => draw());
+  else if (t.dataset.anon) setAnonymous(t);
   else if (t.dataset.select === 'font') setSetting({ font: t.value });
   else if (t.dataset.select === 'theme') act(() => admin.setTheme(t.value), 'Theme changed');
 });

@@ -1,6 +1,6 @@
 // Command sol is the Sol daemon, its CLI, and the first-party apps in one binary.
 //
-//	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--ui ADDR] [--files DIR]
+//	sol init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--tor-bin PATH] [--ui ADDR] [--files DIR]
 //	sol                          start this device in the background (same as sol start); on a
 //	                             machine with no data directory it sets Sol up first and opens it
 //	sol start | stop | restart   manage the background daemon
@@ -127,7 +127,7 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 
 const usage = `usage: sol <command> [flags]
 
-  init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--ui ADDR] [--files DIR]
+  init [--name N --device D | --join] [--listen ADDR] [--transport NAME]... [--tor-bin PATH] [--ui ADDR] [--files DIR]
   (no command) | start | stop | restart       run Sol in the background; stop it; restart it
   logs [-f] [-n N]                  what the background daemon logged (-f follows)
   autostart on|off|status           start Sol when you log in (and add Sol to the app menu)
@@ -194,10 +194,11 @@ func run(args []string) error {
 		files := fs.String("files", "", "the synced folder (default ~/SolDrive)")
 		words := fs.String("words", "", "restore: the 24 recovery words")
 		from := fs.String("from", "", "restore: a pair or join link of a device that knows you (yours or a contact's)")
+		torBin := fs.String("tor-bin", "", "a tor the platform provides, used before any other (no checksum check; SOL_TOR_BIN overrides it)")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		cfg := daemon.Config{UI: *ui, Files: absOrEmpty(*files)}
+		cfg := daemon.Config{UI: *ui, Files: absOrEmpty(*files), TorBin: absOrEmpty(*torBin)}
 		tcs, err := transportConfigs(trs, *listen)
 		if err != nil {
 			return err

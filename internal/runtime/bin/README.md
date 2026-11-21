@@ -24,7 +24,9 @@ whose SHA-256 is not pinned in `checksums.json`, runs tor with that folder on
 `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS), and falls back to a tor on PATH if it
 can't. Windows on arm64 has no expert bundle: those builds embed no tor and use a tor on PATH
 (for example the x86_64 expert bundle, which runs under emulation). Android ships its own tor
-(`android/`).
+(`android/`) and points `SOL_TOR_BIN` at it (the "platform" provider, tried before the bundled
+one, without a checksum: the APK is signed); `sol init --tor-bin <path>` does the same for any
+other packaged tor.
 
 ```sh
 scripts/fetch-tor.sh          # fetch + verify; fails unless every file matches checksums.json

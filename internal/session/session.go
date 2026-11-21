@@ -588,6 +588,7 @@ func (m *Manager) decide(r *wire.Request, anon bool) (Peer, error) {
 			return Peer{}, err
 		}
 		m.NoteEndpoints(r.Bundle.Endpoints)
+		m.relay(r.Bundle) // my other devices reach the new contact too (once the contacts feed says so)
 		m.log.Info("paired", "person", short(person))
 		return Peer{Person: person, Device: r.Device, Relation: Contact}, nil
 	case wire.OpJoin:
@@ -968,6 +969,7 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 		return nil, err
 	}
 	m.NoteEndpoints(res.Bundle.Endpoints)
+	m.relay(res.Bundle)
 	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic(), path, pk,
 		identity.AnonymousTransport(path.Transport))
 	if s == nil {

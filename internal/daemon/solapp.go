@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/apv022/sol/sdk/go/sol"
@@ -32,13 +33,17 @@ func solActions() ActionApp {
 		}
 		props[k] = s
 	}
-	name := &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
-		"name": {Type: "string", Enum: enumOf(KnownTransports)}}}
+	name := func(names []string) *sol.Schema {
+		return &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
+			"name": {Type: "string", Enum: enumOf(names)}}}
+	}
 	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance, transports and people's privacy", Actions: []sol.ActionSpec{
 		{Name: "sol.transports.list", Description: "List the transports, whether each is on and how it is doing", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "enabled", "state", "detail"}},
-		{Name: "sol.transports.enable", Description: "Turn a transport on (wg, direct, tor), now and after restarts", Effect: sol.EffectWrite, Input: name},
-		{Name: "sol.transports.disable", Description: "Turn a transport off; the last one stays on", Effect: sol.EffectWrite, Input: name},
+		{Name: "sol.transports.enable", Description: "Turn a transport on (wg, direct, tor), now and after restarts", Effect: sol.EffectWrite, Input: name(KnownTransports)},
+		// clearnet (tests, LAN experiments) can be turned off, never on from here.
+		{Name: "sol.transports.disable", Description: "Turn a transport off; the last one stays on", Effect: sol.EffectWrite,
+			Input: name(append(slices.Clone(KnownTransports), "clearnet"))},
 		{Name: "sol.people.set", Description: "Make a contact anonymous (Tor only both ways; they only learn your onion) or a buddy (every transport)",
 			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Required: []string{"person", "privacy"}, Properties: map[string]*sol.Schema{
 				"person":  {Type: "string"},

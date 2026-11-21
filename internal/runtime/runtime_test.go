@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,5 +218,64 @@ func TestRealBundledTor(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "Tor version 0.4.9.16") {
 		t.Fatalf("%s: %v", out, err)
+	}
+}
+
+// The platform's tor wins over a bundled and a native one: SOL_TOR_BIN first, then the
+// config's tor_bin. It runs without a checksum check, its version is logged, and a named file
+// that is missing is an error instead of a quiet fall-back.
+func TestPlatformTorPriority(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("uses shell scripts as tor")
+	}
+	script := func(dir, name, version string) string {
+		p := filepath.Join(dir, name)
+		body := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '" + version + "'; exit 0; fi\n: > \"$0.ran\"\n"
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	dir := t.TempDir()
+	fromEnv := script(dir, "libtor.so", "Tor version 0.4.9.16 (android).")
+	fromCfg := script(dir, "cfg-tor", "Tor version 0.4.9.15.")
+	pathDir := t.TempDir()
+	script(pathDir, "tor", "Tor version 0.0.0 (native).")
+	t.Setenv("PATH", pathDir)
+	fakeBundle(t, "#!/bin/sh\n", false, false) // a usable bundle, which must still lose
+
+	run := func(paths map[string]string) string {
+		t.Helper()
+		var logged strings.Builder
+		log := slog.New(slog.NewTextHandler(&logged, nil))
+		p, err := Select(TorProviders, "tor", Options{BinDir: t.TempDir(), Platform: paths, Log: log})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proc, err := p.Start(context.Background(), Program{Name: "tor", DataDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-proc.Done()
+		return p.Name() + "|" + logged.String()
+	}
+
+	t.Setenv(TorBinEnv, fromEnv)
+	if got := run(PlatformPaths(fromCfg)); !strings.HasPrefix(got, "platform|") || !strings.Contains(got, "0.4.9.16 (android)") {
+		t.Fatalf("SOL_TOR_BIN did not win: %s", got)
+	}
+	if _, err := os.Stat(fromEnv + ".ran"); err != nil {
+		t.Fatal("the SOL_TOR_BIN tor did not run")
+	}
+	t.Setenv(TorBinEnv, "")
+	if got := run(PlatformPaths(fromCfg)); !strings.HasPrefix(got, "platform|") || !strings.Contains(got, "0.4.9.15") {
+		t.Fatalf("tor_bin did not win: %s", got)
+	}
+	if got := run(PlatformPaths("")); !strings.HasPrefix(got, "bundled|") {
+		t.Fatalf("without a platform tor: %s", got)
+	}
+	t.Setenv(TorBinEnv, filepath.Join(dir, "missing"))
+	if _, err := Select(TorProviders, "tor", Options{BinDir: t.TempDir(), Platform: PlatformPaths("")}); err == nil || !strings.Contains(err.Error(), "not a program file") {
+		t.Fatalf("a missing SOL_TOR_BIN: %v", err)
 	}
 }

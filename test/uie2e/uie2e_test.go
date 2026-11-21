@@ -201,6 +201,12 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 	if !anyHas(sharing.Rows, "blog", "Port 8080") {
 		t.Errorf("Sharing rows %v lack the blog service", sharing.Rows)
 	}
+	// Settings → Advanced lists the default transports, each with its state (C10).
+	for _, want := range []string{"WireGuard", "Direct (TLS)", "Tor"} {
+		if !anyHas(rep.Screens["settings"].Rows, want) {
+			t.Errorf("Settings rows %v lack the %s transport", rep.Screens["settings"].Rows, want)
+		}
+	}
 	for _, e := range rep.Errors {
 		t.Errorf("page error: %s", e)
 	}

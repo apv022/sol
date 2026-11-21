@@ -91,6 +91,12 @@ a secret, since the record is relayed to all my devices and contacts: for an oni
 §Tor client authorization).
 Changes often; highest `seq` wins; pushed over sessions and to paired people.
 
+An **anonymous** contact (PROTOCOL.md §Anonymous contacts) gets a second form of the same record:
+the same device and `seq`, only the `tor` and `i2p` entries, signed by `D` too. Nobody receives
+both forms of one `seq`: making a contact anonymous or a buddy re-signs the record with a higher
+`seq` first. The flag is `anonymous` on the contact's entry in my contacts feed, so every device of
+mine applies it.
+
 ## The identity bundle
 
 What a device presents in a handshake, so the other side can check the whole chain in one go:

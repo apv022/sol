@@ -114,7 +114,7 @@ func recoverFrom(ctx context.Context, dir string, o RestoreOptions, r ed25519.Pr
 		tc.Listen, tc.Advertise = "127.0.0.1:0", nil
 		tcs[i] = tc
 	}
-	ts := newTransports(dir, tcs, dk, nil, o.Log)
+	ts := newTransports(dir, tcs, dk, nil, o.Config.TorBin, o.Log)
 	for _, t := range ts {
 		if err := t.Start(ctx); err != nil {
 			o.Log.Warn("transport did not start", "transport", t.Name(), "err", err)

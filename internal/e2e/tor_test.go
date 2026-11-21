@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,7 +30,30 @@ func startTorNode(t *testing.T, p solruntime.Provider, o sold.InitOptions) *sold
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
+	// Tor starts in the background (it never holds up Start): wait for the onion.
+	waitOnion(t, d, 5*time.Minute)
 	return d
+}
+
+// waitOnion waits until d's endpoint record lists its onion.
+func waitOnion(t *testing.T, d *sold.Daemon, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !hasOnion(d) {
+		if time.Now().After(deadline) {
+			t.Fatal("no onion in the endpoint record")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func hasOnion(d *sold.Daemon) bool {
+	for _, e := range d.Keyring.Endpoints().Endpoints {
+		if e.Transport == "tor" {
+			return true
+		}
+	}
+	return false
 }
 
 // redeem redeems link on d, retrying while d's tor is still bootstrapping (a failed dial
@@ -203,20 +225,23 @@ func TestTorClientAuthJoin(t *testing.T) {
 	eventually(t, "the laptop's key on the phone's onion", func() bool { return reaches(c, onionOf(t, phone)) })
 }
 
-// TestRealTorClientAuth runs the pairing over the real Tor network (SOL_TEST_TOR=1, a tor on
-// PATH; it takes minutes).
+// TestRealTorClientAuth runs an anonymous pairing over the real Tor network (SOL_TEST_TOR=1; it
+// takes minutes): client authorization, the onion-only link and a session over Tor. tor comes
+// from the daemon's own providers: the bundled one in a -tags bundled build (scripts/fetch-tor.sh
+// first), else SOL_TOR_BIN or a tor on PATH.
 func TestRealTorClientAuth(t *testing.T) {
 	if os.Getenv("SOL_TEST_TOR") != "1" {
 		t.Skip("set SOL_TEST_TOR=1 to run against the real Tor network")
 	}
-	path, err := exec.LookPath("tor")
+	p, err := solruntime.Select(solruntime.TorProviders, "tor", solruntime.Options{BinDir: t.TempDir(),
+		Platform: solruntime.PlatformPaths("")})
 	if err != nil {
-		t.Skip("no tor on PATH")
+		t.Skip(err)
 	}
-	p := &solruntime.Exec{Path: path}
+	t.Logf("tor from the %s provider", p.Name())
 	alice := startTorNode(t, p, sold.InitOptions{Name: "Alice", Device: "laptop"})
 	bob := startTorNode(t, p, sold.InitOptions{Name: "Bob", Device: "desktop"})
-	link, err := alice.Invite(false)
+	link, err := alice.InviteAnonymous()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +257,14 @@ func TestRealTorClientAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	ap, _ := identity.ParseID(alice.DeviceID())
+	bobID, _ := identity.ParseID(bob.PersonID())
+	if !alice.Contacts.Anonymous(bobID) {
+		t.Fatal("the anonymous link made a buddy")
+	}
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		if s, ok := bob.Sessions.Session(ap); ok && s.Alive() {
+			t.Logf("session over %q", s.Path().Transport)
 			break
 		}
 		if time.Now().After(deadline) {

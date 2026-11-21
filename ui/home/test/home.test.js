@@ -94,10 +94,25 @@ test('admin requests: method, path, cookie credentials, JSON body', async () => 
   ]);
   assert.ok(s.calls.every((c) => c.credentials === 'same-origin'));
   assert.deepEqual(s.calls[1].body, { petname: 'Bobby' });
-  assert.deepEqual(s.calls[4].body, { join: true });
+  assert.deepEqual(s.calls[4].body, { join: true, anonymous: false });
   assert.deepEqual(s.calls[5].body, { link: 'sol://pair?x' });
   assert.deepEqual(s.calls[7].body, { person: 'bob', service: 'jellyfin' });
   assert.equal(s.calls[0].body, undefined);
+});
+
+test('admin requests: transports and per-person privacy', async () => {
+  const s = stub();
+  const a = createAdmin({ fetch: s.fetch });
+  await a.transports();
+  await a.setTransport('wg', false);
+  await a.setAnonymous('bob 1', true);
+  await a.invite(false, true);
+  assert.deepEqual(s.calls.map((c) => `${c.method} ${c.url}`), [
+    'GET /admin/v1/transports', 'POST /admin/v1/transports/wg', 'PATCH /admin/v1/people/bob%201', 'POST /admin/v1/invite',
+  ]);
+  assert.deepEqual(s.calls[1].body, { enabled: false });
+  assert.deepEqual(s.calls[2].body, { anonymous: true });
+  assert.deepEqual(s.calls[3].body, { join: false, anonymous: true });
 });
 
 test('a 401 calls onUnauthorized and throws', async () => {

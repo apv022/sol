@@ -21,6 +21,39 @@ The handshake runs on any byte stream. Confidentiality comes from the transport:
 | Tor | onion service with client authorization | fallback, always available |
 | clearnet | none (tests only, refuses non-loopback unless forced) | the e2e tests |
 
+### Default transports and where tor comes from (built in C10)
+
+A new setup (`sol init`, or plain `sol` on a fresh machine) turns on **WireGuard direct, TLS
+direct and Tor** together: `wg` on a free UDP port, `direct` on the TCP port of the same number,
+and `tor`. Path ranking (§Liveness and healing) picks the best per peer, so nothing else needs
+choosing. `sol init --transport` is repeatable (or comma-separated) to pick a different set;
+existing setups change theirs with `sol transports list|enable|disable <name>`, `POST
+/admin/v1/transports/{name}` `{enabled}`, the `sol.transports.*` actions or the switches in the Sol
+app's Settings → Advanced (kept in `config.json`; the last transport stays on). Turning one off
+stops it and re-signs the endpoint record without its address.
+
+Tor never holds up startup: the daemon is usable on WireGuard and TLS while tor launches and
+bootstraps; the endpoint record keeps the last known onion meanwhile and gains it again when tor
+has registered it, and is pushed to every peer then. A machine without any tor runs without it
+(the transport shows `failed` with the reason).
+
+The tor program comes from the first of (`internal/runtime`):
+
+1. **the platform's**: `SOL_TOR_BIN`, else `tor_bin` in `config.json` (`sol init --tor-bin
+   <path>`). It runs without a checksum check, because the platform already verified it: Android
+   sets `SOL_TOR_BIN` to the signed APK's `lib/<abi>/libtor.so`. Its `--version` is logged. A
+   named file that is missing is an error, not a silent fallback.
+2. **bundled** (desktop release builds, `make build-bundled`): tor 0.4.9.16 from the Tor
+   Browser 16.0.1 expert bundles, fetched by `scripts/fetch-tor.sh`, which checks every signature
+   against the Tor Browser key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (fetched by WKD into a
+   throwaway `GNUPGHOME`) and every tarball against the signed `sha256sums-unsigned-build.txt`.
+   tor and its shared libraries (Linux: libcrypto, libssl, libevent; macOS: libevent) are
+   embedded, extracted to `<data dir>/bin/<os>-<arch>/`, each checked against the SHA-256 pinned
+   in `internal/runtime/bin/checksums.json` (an unpinned or changed file refuses the whole
+   bundle), and run with that folder on `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS). If it
+   can't run, the next provider does, and why is logged.
+3. **native**: a tor on `PATH` (development: `apt install tor`).
+
 ### Tor client authorization (built in C6b)
 
 A device's onion lists one ClientAuthV3 key per device allowed to reach it, and Tor serves its
@@ -278,6 +311,46 @@ by the same side, the newer wins (the older is likely dead).
   answered", "direct is stable again"), and each peer device's troubled paths (`backoff` or
   `probation`, failures, last error, next probe); the admin API's `peer_sessions` shows both for
   the Sol app's Advanced view.
+
+## Anonymous contacts (built in C10)
+
+Per person, I choose how much of my network a contact may see. **Buddies** (every contact by
+default) and my own devices get my full endpoint record and are dialed WireGuard first, then TLS
+direct, Tor last. An **anonymous** contact is Tor only, both ways, and never learns an address of
+mine that isn't an onion:
+
+- **Invites.** `sol invite --anonymous` (the Anonymous switch in Add a person, `POST invite`
+  `{anonymous: true}`) issues a pair link that carries only this device's onion (an error while it
+  has none; never a join link). Its secret is marked anonymous: redeeming it over anything but an
+  anonymous transport is refused without burning it, and whoever redeems it is added to my
+  contacts feed with `anonymous: true`.
+- **Records.** Every bundle of mine an anonymous contact receives (handshake, push, `GET
+  /p/bundle`, probe) carries the onion-only form of my endpoint record: the same person
+  certificate and device list, and an endpoint record with only the `tor` (and `i2p`) entries,
+  signed by the same device key with the same `seq` as the full one. A contact only ever gets one
+  of the two forms of a `seq`. My devices never relay their own or each other's bundles to
+  contacts (relays go to my own devices only), so each of my devices tells an anonymous contact
+  only its own onion, and only itself.
+- **Dialing.** I dial an anonymous contact over anonymous transports only (their record is
+  filtered before ranking), never tell WireGuard their key (so nothing punches towards them) and
+  never probe a direct path.
+- **Refusing.** The onion's target is a listener of its own; a session with an anonymous contact
+  is admitted only on it. Their dial on any other transport (they may know an old address) is
+  refused at the callee decision like every refusal: the connection closes unanswered, and no
+  bundle of mine is sent on it.
+- **Switching.** The flag lives in my contacts feed (`anonymous` on the contact's record), so
+  all my devices agree; `sol people set <name> --anonymous|--buddy`, `PATCH people/{id}`
+  `{anonymous}`, the `sol.people.set` action or the person page's switch change it. Each device
+  that sees a change (made there or replicated) closes that contact's sessions that no longer fit
+  (direct ones, when they become anonymous), updates WireGuard, and re-signs its own endpoint
+  record with a higher `seq`, which is pushed in the form each peer may see: the newest record an
+  anonymous contact holds is always onion-only. Switching to anonymous warns that any IP address
+  they already saw can't be taken back. The other side is not told; to them I am just a contact
+  who is reachable over Tor.
+
+The e2e test (`internal/e2e/transports_test.go`) records every byte an anonymous contact
+receives over (fake) Tor and asserts no non-onion address of any of my devices is in it, before
+and after my addresses change, and that its direct dial is refused.
 
 ## Versioning
 

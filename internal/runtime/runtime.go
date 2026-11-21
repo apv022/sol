@@ -2,12 +2,23 @@
 // child processes and manages their lifecycle.
 //
 // Tor and i2pd are C/C++ programs, so Sol runs them rather than linking them.
-// A Provider knows how to obtain and start a program. Providers are tried in
-// the order from config (runtime.provider_order):
+// A Provider knows how to obtain and start a program. The daemon tries them for tor in
+// this order (Select; the first that can run it wins):
 //
-//	bundled  binaries embedded at build time with -tags bundled (release builds: tor
-//	         0.4.9.16 and its shared libraries, extracted into the data dir, bundled.go)
-//	native   the program found on PATH (default for development: apt install tor)
+//	platform a file the platform ships and has already verified: SOL_TOR_BIN, else the
+//	         config's tor_bin (`sol init --tor-bin <path>`). Android sets SOL_TOR_BIN to
+//	         the APK's lib/<abi>/libtor.so (the APK is signed, so no checksum here); the
+//	         version (`--version`) is logged. Named but missing is an error, not a fallback.
+//	bundled  binaries embedded at build time with -tags bundled (desktop release builds,
+//	         `make build-bundled`: tor 0.4.9.16 from the Tor Browser 16.0.1 expert bundles
+//	         and its shared libraries, fetched and signature-checked by
+//	         scripts/fetch-tor.sh). Extracted into <data dir>/bin/<os>-<arch>/, every file
+//	         checked against its SHA-256 pinned in bin/checksums.json (an unpinned or
+//	         changed file refuses the whole bundle), and run with that folder on
+//	         LD_LIBRARY_PATH (DYLD_LIBRARY_PATH on macOS). If it can't run, the next
+//	         provider that can (native) runs instead, and the reason is logged.
+//	native   the program found on PATH (development: apt install tor), or the file named
+//	         by SOL_BIN_<NAME>
 //	docker   containers (stub; see docker.go)
 //
 // Every provider returns the same thing: a *Proc with a Done channel and a
@@ -18,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,7 +62,15 @@ type Provider interface {
 type Options struct {
 	BinDir           string // where bundled binaries are extracted (~/.sol/bin)
 	ContainerRuntime string // "docker" or "podman"
+	// Platform names program files the platform provides (PlatformPaths), for the
+	// "platform" provider.
+	Platform map[string]string
+	// Log is where providers log (nil: slog's default).
+	Log *slog.Logger
 }
+
+// TorProviders is the order the daemon tries for tor (see the package comment).
+var TorProviders = []string{"platform", "bundled", "native"}
 
 // Select returns the first provider in order that can run program. A bundled provider falls
 // back, at Start, to the next one in order that can run it (a tor on PATH).
@@ -62,6 +82,9 @@ func Select(order []string, program string, opts Options) (Provider, error) {
 			return nil, err
 		}
 		if !p.Available(program) {
+			if path := opts.Platform[program]; name == "platform" && path != "" {
+				return nil, fmt.Errorf("the platform's %s is set to %s (%s or tor_bin), which is not a program file", program, path, TorBinEnv)
+			}
 			tried = append(tried, name)
 			continue
 		}
@@ -80,6 +103,8 @@ func Select(order []string, program string, opts Options) (Provider, error) {
 
 func provider(name string, opts Options) (Provider, error) {
 	switch name {
+	case "platform":
+		return &Platform{Paths: opts.Platform, Log: opts.Log}, nil
 	case "bundled":
 		return &Bundled{BinDir: opts.BinDir}, nil
 	case "native":

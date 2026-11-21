@@ -92,6 +92,9 @@ type Config struct {
 	// request carries it, PROTOCOL.md "Settled in C3"). Unused once the device belongs to a
 	// person: the device list holds its name.
 	DeviceName string `json:"device_name,omitempty"`
+	// TorBin is a tor the platform provides (`sol init --tor-bin`), run without a checksum
+	// check; SOL_TOR_BIN overrides it (internal/runtime, provider "platform").
+	TorBin string `json:"tor_bin,omitempty"`
 }
 
 // InitOptions are the choices of a first run.
@@ -461,7 +464,7 @@ func (d *Daemon) anchor() bool {
 
 // newTransports constructs transports from tcs, hooked to this daemon (and wrapped, in tests).
 func (d *Daemon) newTransports(tcs []TransportConfig) []transport.Transport {
-	ts := newTransports(d.dir, tcs, d.Keyring.Signer(), d.opt.TorProvider, d.log)
+	ts := newTransports(d.dir, tcs, d.Keyring.Signer(), d.opt.TorProvider, d.cfg.TorBin, d.log)
 	for i, t := range ts {
 		d.hookTransport(t)
 		if d.opt.WrapTransport != nil {
@@ -472,8 +475,9 @@ func (d *Daemon) newTransports(tcs []TransportConfig) []transport.Transport {
 }
 
 // newTransports constructs transports from their configuration; signer is the device key the
-// direct transport's TLS certificate is made from, torp runs tor (nil: bundled or system).
-func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp solruntime.Provider, log *slog.Logger) []transport.Transport {
+// direct transport's TLS certificate is made from, torp runs tor (nil: the platform's, the
+// bundled or the system's, solruntime.TorProviders), torBin is the config's tor_bin.
+func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp solruntime.Provider, torBin string, log *slog.Logger) []transport.Transport {
 	var out []transport.Transport
 	for _, tc := range tcs {
 		adv := ""
@@ -490,8 +494,10 @@ func newTransports(dir string, tcs []TransportConfig, signer crypto.Signer, torp
 		case "tor":
 			p, err := torp, error(nil)
 			if p == nil {
-				// The tor embedded in release builds (-tags bundled) first, else the system's.
-				p, err = solruntime.Select([]string{"bundled", "native"}, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin")})
+				// The platform's tor (SOL_TOR_BIN, tor_bin) first, then the one embedded in
+				// release builds (-tags bundled), else the system's.
+				p, err = solruntime.Select(solruntime.TorProviders, "tor", solruntime.Options{BinDir: filepath.Join(dir, "bin"),
+					Platform: solruntime.PlatformPaths(torBin), Log: log})
 			}
 			if err != nil {
 				out = append(out, transport.NewUnavailable("tor", err))

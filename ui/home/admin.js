@@ -43,11 +43,13 @@ export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, Even
     status: () => get('status'),
     people: () => get('people'),
     renamePerson: (id, petname) => req('PATCH', `people/${enc(id)}`, { petname }),
+    /** Anonymous: Tor only both ways, they only learn my onion; false makes them a buddy. */
+    setAnonymous: (id, anonymous) => req('PATCH', `people/${enc(id)}`, { anonymous }),
     unpair: (id) => req('DELETE', `people/${enc(id)}`),
     devices: () => get('devices'),
     updateDevice: (id, patch) => req('PATCH', `devices/${enc(id)}`, patch),
     removeDevice: (id) => req('DELETE', `devices/${enc(id)}`),
-    invite: (join = false) => post('invite', { join }),
+    invite: (join = false, anonymous = false) => post('invite', { join, anonymous }),
     pair: (link) => post('pair', { link }),
     apps: () => get('apps'),
     installApp: (dir) => post('apps/install', { dir }),
@@ -75,6 +77,8 @@ export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, Even
     revokeSession: (id) => req('DELETE', `sessions/${enc(id)}`),
     logout: () => post('logout'),
     networkChanged: () => post('network-changed'),
+    transports: () => get('transports'),
+    setTransport: (name, enabled) => post(`transports/${enc(name)}`, { enabled }),
 
     /**
      * Opens the live event stream. `onEvent(type, data)` gets each event (status, person, device,
