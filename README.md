@@ -9,9 +9,14 @@ with no account and no server in the middle.
 
 ### Linux and macOS
 
+While Sol is in private testing, the installer lives in the private `apv022/sol-test` repo,
+so sign in to GitHub first (`gh auth login`) and run:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh
+gh api repos/apv022/sol-test/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
 ```
+
+(Once the repo is public this becomes a plain `curl -fsSL <url>/install.sh | sh`.)
 
 This downloads the `sol` binary for your machine (Tor is built in), checks its SHA-256, puts it
 in `~/.local/bin`, adds that folder to your `PATH` (in `~/.profile`, `~/.bashrc`, `~/.zshrc`
@@ -21,9 +26,8 @@ The first `sol` sets everything up: it names you after your OS account, creates 
 folder `~/SolDrive`, starts in the background and opens the Sol app in your browser, already
 signed in. Sol also appears in your app menu.
 
-While the releases are private test builds, sign in to GitHub first (`gh auth login`, or set
-`GITHUB_TOKEN`), and run the installer from a checkout instead of the URL:
-`sh install.sh`. Options: `SOL_VERSION=<tag>`, `SOL_BIN_DIR=<dir>`, `SOL_NO_PATH=1`,
+Instead of `gh`, a `GITHUB_TOKEN` that can read the repo works too, or run `sh install.sh`
+from a checkout. Options: `SOL_VERSION=<tag>`, `SOL_BIN_DIR=<dir>`, `SOL_NO_PATH=1`,
 `SOL_NO_START=1` (see the top of [install.sh](install.sh)).
 
 ### Windows

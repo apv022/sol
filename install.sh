@@ -1,7 +1,9 @@
 #!/bin/sh
 # Installs Sol on Linux or macOS:
 #
-#   curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh
+#   gh api repos/apv022/sol-test/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
+#
+# (while the repo is private; once public: curl -fsSL <raw URL of this file> | sh)
 #
 # It downloads the release binary for this OS and CPU (tor is built in), checks it against the
 # release's SHA256SUMS, installs it as ~/.local/bin/sol (or $SOL_BIN_DIR), and makes sure plain
