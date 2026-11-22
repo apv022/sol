@@ -1,9 +1,7 @@
 #!/bin/sh
 # Installs Sol on Linux or macOS:
 #
-#   gh api repos/apv022/sol-test/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
-#
-# (while the repo is private; once public: curl -fsSL <raw URL of this file> | sh)
+#   curl -fsSL https://raw.githubusercontent.com/apv022/sol-test/main/install.sh | sh
 #
 # It downloads the release binary for this OS and CPU (tor is built in), checks it against the
 # release's SHA256SUMS, installs it as ~/.local/bin/sol (or $SOL_BIN_DIR), and makes sure plain
@@ -16,8 +14,8 @@
 #   SOL_NO_PATH=1               leave your shell startup files alone
 #   SOL_NO_START=1              don't start Sol when the install is done
 #
-# While the repo is private, downloads need a GitHub login: either the gh CLI signed in
-# (`gh auth login`) or GITHUB_TOKEN set to a token that can read the repo.
+# No GitHub login is needed. If the GitHub API rate limit bites (60 requests an hour per IP),
+# a signed-in gh CLI or GITHUB_TOKEN is used when present.
 set -eu
 
 repo=${SOL_REPO:-apv022/sol-test}
@@ -62,7 +60,7 @@ if [ -z "$tag" ]; then
     # The newest release, pre-releases included (test builds are pre-releases).
     tag=$(api "/releases?per_page=1" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1) || tag=
   fi
-  [ -n "$tag" ] || die "can't find a release in $repo. If it's private, sign in with \`gh auth login\` or set GITHUB_TOKEN."
+  [ -n "$tag" ] || die "can't find a release in $repo (GitHub's API may be rate-limiting this IP: try again later, or set SOL_VERSION=<tag>)"
 fi
 
 fetch() {
@@ -70,7 +68,11 @@ fetch() {
     gh release download "$tag" -R "$repo" -p "$1" -D "$tmp" --clobber >/dev/null 2>&1 || die "no $1 in release $tag"
     return
   fi
-  # The asset's API URL works for public and private repos alike.
+  if [ -z "${GITHUB_TOKEN:-}" ]; then # public repo: the plain download URL, no API quota used
+    curl -fsSL -o "$tmp/$1" "https://github.com/$repo/releases/download/$tag/$1" || die "no $1 in release $tag"
+    return
+  fi
+  # With a token, the asset's API URL (works for private repos too).
   id=$(api "/releases/tags/$tag" | tr ',{' '\n\n' | awk -v n="\"$1\"" '
     /^[[:space:]]*"id":[[:space:]]*[0-9]+[[:space:]]*$/ { gsub(/[^0-9]/, "", $0); last = $0 }
     index($0, "\"name\":") && index($0, n) { print last; exit }') || id=
