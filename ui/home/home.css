@@ -182,3 +182,18 @@ code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2)
 .wraps { white-space: normal; }
 select.fit { width: auto; }
 [data-shot] *, [data-shot] *::before, [data-shot] *::after { animation: none !important; }
+
+/* ---- setup (setup.html) ---- */
+.setup { position: relative; z-index: 1; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: calc(var(--safe-top) + var(--space-4)) var(--space-4) calc(var(--safe-bottom) + var(--space-4)); }
+.setup-card { display: grid; gap: var(--space-3); width: min(440px, 100%); padding: var(--space-6) var(--space-5); border-radius: var(--radius-sheet); box-shadow: var(--shadow-float); text-align: center; justify-items: center; }
+.setup-card h1 { margin: 0; }
+.setup-card p { margin: 0; }
+.setup-card .form { width: 100%; text-align: left; display: grid; gap: var(--space-3); }
+.setup-card textarea { width: 100%; resize: vertical; font-family: var(--font-mono); }
+.setup-choices { display: grid; gap: var(--space-2); width: 100%; }
+.setup-choices button { width: 100%; justify-content: center; }
+.setup-foot { font-size: var(--fs-footnote); }
+.setup-card .err { color: var(--red); min-height: 1em; }
+.setup-card .err:empty { display: none; }
+.setup-card .hint { font-size: var(--fs-footnote); }
+.dlg-body .warn, sol-dialog .warn { color: var(--red); }

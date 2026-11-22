@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/apv022/sol/internal/autostart"
@@ -116,6 +118,12 @@ func rotate(path string) {
 // SIGTERM (a hard kill on Windows) if it does not.
 func stopCmd(dir string, quiet bool) error {
 	st, err := daemon.Running(dir)
+	if err != nil && stopSetup(dir) {
+		if !quiet {
+			fmt.Println("Sol stopped (it was waiting to be set up).")
+		}
+		return nil
+	}
 	if err != nil {
 		if !quiet {
 			fmt.Println("Sol is not running.")
@@ -346,4 +354,30 @@ func launcherCmd(dir string, args []string) error {
 		}
 	}
 	return nil
+}
+
+// stopSetup ends a setup server waiting on dir (no daemon runs there yet); false if none does.
+func stopSetup(dir string) bool {
+	url, ok := runningSetup(dir)
+	if !ok {
+		return false
+	}
+	base, q, _ := strings.Cut(url, "?setup=")
+	req, err := http.NewRequest("POST", strings.TrimSuffix(base, "/")+"/setup/v1/stop", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set(daemon.SetupHeader, q)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	for i := 0; i < 50; i++ { // the server is gone once setup.url is removed
+		if _, err := os.Stat(daemon.SetupURLFile(dir)); err != nil {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return resp.StatusCode == http.StatusOK
 }

@@ -923,6 +923,48 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> openNative(u.toString(), mime, name));
             return true;
         }
+
+        /**
+         * Settings, "Remove Sol from this phone": after a native confirmation, erases the node's
+         * data and SolDrive and returns to the welcome screen (Start new, Add to my Sol, Restore).
+         */
+        @android.webkit.JavascriptInterface
+        public void reset() {
+            if (local()) runOnUiThread(MainActivity.this::confirmRemove);
+        }
+    }
+
+    /** The native second step of "Remove Sol from this phone" (a page alone can never wipe Sol). */
+    private void confirmRemove() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Remove Sol from this phone?")
+                .setMessage("Sol's keys and the files stored on this phone are erased. Have your 24 backup words ready to restore.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Remove", (d, w) -> removeSol())
+                .show();
+    }
+
+    private void removeSol() {
+        if (web != null) {
+            root.removeView(web);
+            web.destroy();
+            web = null;
+        }
+        loaded = false;
+        pageUrl = null;
+        CookieManager.getInstance().removeAllCookies(null);
+        android.webkit.WebStorage.getInstance().deleteAllData(); // the pages' cached state
+        new Thread(() -> {
+            stopService(new Intent(this, NodeService.class));
+            for (int i = 0; i < 100 && NodeService.isAlive(); i++) {
+                try { Thread.sleep(100); } catch (InterruptedException e) { return; }
+            }
+            deleteTree(NodeService.dataDir(this));
+            deleteTree(NodeService.driveDir(this));
+            deleteTree(new File(getCacheDir(), "open"));
+            getSharedPreferences("sol", MODE_PRIVATE).edit().clear().apply();
+            runOnUiThread(this::showWelcome);
+        }, "sol-remove").start();
     }
 
     // ---- downloads ----

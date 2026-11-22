@@ -306,6 +306,41 @@ function addWallpaper() {
   input.click();
 }
 
+/** "Remove Sol from this device": warns, asks for the person's name, then the daemon stops and serves setup here. */
+function resetDialog() {
+  const bk = state.backup || {}, me = meName();
+  const warn = bk.confirmed ? '' : html`<p class="warn"><strong>You haven’t confirmed your backup words.</strong> Without them you can’t restore this identity on another device.</p>`;
+  if (isAndroidApp() && typeof window.SolAndroid?.reset === 'function') {
+    dialog('Remove Sol from this phone?', html`${warn}<p>Sol, its keys and the files stored on this phone are erased. Files your other devices have stay there and sync back if you add this phone again or restore.</p>
+      <div class="dlg-actions"><button type="button" data-no>Cancel</button><button type="button" class="primary danger" data-yes>Remove</button></div>`, (d, close) => {
+      d.querySelector('[data-no]').onclick = close;
+      d.querySelector('[data-yes]').onclick = () => { close(); window.SolAndroid.reset(); };
+    });
+    return;
+  }
+  dialog('Remove Sol from this device?', html`${warn}<p>Sol stops here and opens setup, where you can start new, add this computer to your Sol, or restore from your backup words. Your identity is moved aside, not deleted, and <code>${state.status?.files || 'your synced folder'}</code> is left as it is.</p>
+    <form class="form"><label>Type your name (${me}) to confirm<input name="c" autocomplete="off" required></label>
+    <div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="primary danger" type="submit">Remove</button></div></form>`, (d, close) => {
+    d.querySelector('[data-no]').onclick = close;
+    d.querySelector('form').onsubmit = async (ev) => {
+      ev.preventDefault();
+      try {
+        const r = await admin.reset(new FormData(ev.target).get('c'));
+        close();
+        stream?.close?.();
+        locked = false;
+        render(document.body, html`<main class="setup"><div class="setup-card glass"><img class="locked-logo" src="/icon.svg" alt=""><h1>Removing Sol…</h1><p class="muted">Setup opens in a moment.</p></div></main>`);
+        // The daemon stops and the setup server takes over this address: wait for it, then go.
+        for (let i = 0; i < 100; i++) {
+          await new Promise((x) => setTimeout(x, 300));
+          try { const s = await fetch('/admin/v1/status', { cache: 'no-store' }); if (s.status === 404) { location.replace(r.setup); return; } } catch { /* between servers */ }
+        }
+        location.replace(r.setup);
+      } catch (e) { fail(e); }
+    };
+  });
+}
+
 // ---------- views ----------
 
 function personRow(p) {
@@ -404,7 +439,8 @@ function settingsView() {
     <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
       <p class="group-footer"><button type="button" class="tinted" data-act="new-agent">${ic('plus')}New agent key</button></p>
       <p class="group-footer">Agents run <code class="inline">sol do</code> with a key you issued, limited to its scopes.</p></section>
-    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span>${inApp ? '' : html`<button type="button" data-act="logout">Sign out</button>`}` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
+    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span>${inApp ? '' : html`<button type="button" data-act="logout">Sign out of this browser</button>`}` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
+    <section class="section"><h3 class="group-title">This device</h3><div class="list"><div data-item><span class="grow">Remove Sol from this device<span class="row-sub">${inApp ? 'Erases Sol and its files on this phone. You can then start new, add it to your Sol again, or restore from your backup words.' : 'Your identity is moved aside (not deleted) and the synced folder stays. You can then start new, add this computer to your Sol, or restore from your backup words.'}</span></span><button type="button" class="danger" data-act="reset">Remove…</button></div></div></section>
     <section class="section"><details class="adv"><summary class="group-title">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
       <h3 class="group-title">Transports</h3><div class="list">${transportRows(list(st.transports))}</div>
@@ -529,6 +565,7 @@ const ACTIONS = {
   'revoke-agent': (el) => confirmDialog({ title: `Revoke ${el.dataset.id}?`, text: 'Its key stops working right away.', action: 'Revoke', run: async () => { await admin.revokeAgent(el.dataset.id); await load('agents'); toast('Revoked'); } }),
   'revoke-session': (el) => act(async () => { await admin.revokeSession(el.dataset.id); await load('status'); }, 'Revoked'),
   logout: () => act(async () => { await admin.logout(); locked = true; draw(); }),
+  reset: () => resetDialog(),
   network: () => act(() => admin.networkChanged(), 'Checking the network'),
   'new-agent': newAgentDialog,
   'add-wallpaper': addWallpaper,

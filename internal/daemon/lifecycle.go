@@ -126,3 +126,24 @@ func (d *Daemon) RequestShutdown() { d.shutdownOnce.Do(func() { close(d.shutdown
 
 // ShutdownRequested is closed once an admin client asked the daemon to stop (sol stop).
 func (d *Daemon) ShutdownRequested() <-chan struct{} { return d.shutdown }
+
+// requestReset records "Remove Sol from this device" and asks for a shutdown. It returns the
+// setup token the next setup server must use (the browser gets it in the reply).
+func (d *Daemon) requestReset() string {
+	d.mu.Lock()
+	if d.resetToken == "" {
+		d.resetToken = NewSetupToken()
+	}
+	t := d.resetToken
+	d.mu.Unlock()
+	d.RequestShutdown()
+	return t
+}
+
+// ResetRequested reports whether the shutdown was a "Remove Sol from this device": then the
+// owner of the process archives the identity (ArchiveIdentity) and runs setup with token.
+func (d *Daemon) ResetRequested() (token string, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.resetToken, d.resetToken != ""
+}

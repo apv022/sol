@@ -177,6 +177,9 @@ func TestInstallRunAndUI(t *testing.T) {
 	if n := tok.count("echo"); n != 0 {
 		t.Fatalf("%d tokens after remove", n)
 	}
+	if _, err := os.Stat(RemovedMarker(h.cfg.AppsDir, "echo")); err != nil {
+		t.Fatalf("removing a builtin left no marker: %v", err) // the daemon's start would add it back
+	}
 }
 
 func TestSameOrigin(t *testing.T) {

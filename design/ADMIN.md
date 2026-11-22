@@ -125,6 +125,30 @@ the page sets it through the CSSOM (`--wp-image`), as inline styles are forbidde
 any `#rrggbb`: Settings offers swatches and a colour picker. The UI root links the active
 theme's stylesheet (`/_sol/theme.css`) and swaps it live on the `theme` event.
 
+## Setup and removing Sol from a device
+
+A data directory with no identity runs in **setup mode** (internal/daemon/setup.go): `sol run`
+serves `ui/home/setup.html` on the UI address instead of the daemon, with three choices:
+**Start new** (name, device name), **Add to my Sol** (a `sol://join` link from another device's
+Devices, Add my device) and **Restore from backup words** (24 words, name, device name, and
+optionally a link from a device the person still has, so the restored identity is recognised
+again). Plain `sol` on a fresh desktop with a display prepares the config, starts setup mode
+and opens the page; over SSH or with `SOL_AUTO_INIT=1` it still sets up a new Sol with defaults.
+
+The setup API (`GET /setup/v1/state`, `POST /setup/v1/new|join|restore|stop`) answers only
+requests carrying the setup token (header `Sol-Setup`), a random secret in the URL `sol` opens
+and in `<dir>/setup.url` (0600, for `sol open`); POSTs from a browser must carry the UI origin's
+own `Origin`. After a successful choice the server stops and the same process starts the
+daemon on the same address; the page waits for `/admin/v1/status` to answer and opens the app.
+
+`POST /admin/v1/reset {"confirm": "<my name>"}` (Settings, This device, **Remove Sol from this
+device**; `sol reset --confirm NAME`) stops the daemon; the process moves everything in the data
+directory except `config.json`, the logs and earlier archives into `<dir>/removed-<UTC time>/`
+(moving it back undoes it; the synced folder is never touched) and enters setup mode with the
+token the reply carried (`{"setup": "/?setup=<token>"}`). On Android the Settings button calls
+`SolAndroid.reset()`; the shell confirms natively, erases the node's data and SolDrive, and
+shows its own welcome screen (Start new, Add to my Sol, Restore from backup words).
+
 ## Port sharing (services and tunnels)
 
 The PoC's proven feature, on the new wire: a service is a local TCP port (`127.0.0.1:<port>`)

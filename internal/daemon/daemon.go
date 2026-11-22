@@ -36,12 +36,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -163,12 +165,33 @@ func prepareDir(dir string, cfg *Config, builtins map[string]apphost.Builtin) er
 	if err := writeConfig(dir, *cfg); err != nil {
 		return err
 	}
+	return syncBuiltins(dir, builtins)
+}
+
+// syncBuiltins brings the builtin apps' manifests in <dir>/apps up to this binary's: a builtin
+// new in this version is added (unless the person removed it before: apphost.RemovedMarker), and
+// an installed builtin's app.json is replaced when it changed (new actions, scopes), so an
+// upgrade needs no re-init. Apps that aren't builtins are never touched.
+func syncBuiltins(dir string, builtins map[string]apphost.Builtin) error {
 	for name, bi := range builtins {
 		m, err := sol.ParseManifest(bi.Manifest)
 		if err != nil {
 			return fmt.Errorf("daemon: builtin %s: %w", name, err)
 		}
 		ad := filepath.Join(dir, "apps", m.ID)
+		cur, err := os.ReadFile(filepath.Join(ad, "app.json"))
+		switch {
+		case err == nil:
+			if old, perr := sol.ParseManifest(cur); perr != nil || old.Exec != "builtin:"+name || bytes.Equal(cur, bi.Manifest) {
+				continue // not ours (someone installed their own app under that id), or current
+			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return err
+		default:
+			if _, err := os.Stat(apphost.RemovedMarker(filepath.Join(dir, "apps"), m.ID)); err == nil {
+				continue // removed by the person: stays removed
+			}
+		}
 		if err := os.MkdirAll(ad, 0o700); err != nil {
 			return err
 		}
@@ -242,6 +265,7 @@ type Daemon struct {
 	cancel context.CancelFunc
 
 	shutdown     chan struct{} // closed by POST /admin/v1/shutdown (sol stop)
+	resetToken   string        // set by POST /admin/v1/reset; guarded by mu
 	shutdownOnce sync.Once
 
 	Keyring  *identity.Keyring
@@ -420,6 +444,10 @@ func Start(o Options) (_ *Daemon, err error) {
 		if err := os.MkdirAll(files, 0o755); err != nil {
 			return nil, err
 		}
+	}
+	// An upgraded binary may bring new builtin apps or changed manifests (new actions).
+	if err := syncBuiltins(o.Dir, o.Builtins); err != nil {
+		return nil, err
 	}
 	if d.Host, err = apphost.New(apphost.Config{AppsDir: filepath.Join(o.Dir, "apps"),
 		DataDir: filepath.Join(o.Dir, "appdata"), RunDir: filepath.Join(d.runDir, "apps"), Files: files,

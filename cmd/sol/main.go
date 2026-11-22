@@ -145,6 +145,7 @@ const usage = `usage: sol <command> [flags]
   inbox [--json] | inbox approve <id> | inbox deny <id> | inbox dismiss <id>
   theme list | theme set <name> | theme settings [--scheme S] [--accent #rrggbb] [--density D] [--radius R] [--glass on|off] [--font F]
   backup words | backup confirm
+  reset --confirm NAME              remove Sol from this device (identity archived, synced folder kept), then set up again
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
   network-changed [reason]
   open [--print]                    open the Sol app in the browser (prints the one-time login URL)
@@ -272,6 +273,7 @@ func run(args []string) error {
 	inviteAnon := fs.Bool("anonymous", false, "invite: an anonymous link (only the onion; they become an anonymous contact); people set: Tor only, both ways")
 	buddy := fs.Bool("buddy", false, "people set: every transport (the default for a contact)")
 	noBrowser := fs.Bool("print", false, "open: only print the login URL")
+	confirmName := fs.String("confirm", "", "reset: your name, to confirm removing Sol from this device")
 	svcHTTP := fs.Bool("http", false, "service add: it is a web service (contacts can open it in the browser)")
 	var people list
 	fs.Var(&people, "with", "service add: a person (ID or petname) to share with; repeatable")
@@ -287,6 +289,9 @@ func run(args []string) error {
 	}
 	if err := parseAnywhere(fs, rest); err != nil {
 		return err
+	}
+	if cmd == "open" && !daemon.Initialised(*dir) {
+		return firstRun(*dir) // not set up yet: open (or start) the setup page
 	}
 	if cmd == "open" {
 		if err := ensureRunning(*dir); err != nil {
@@ -551,6 +556,16 @@ func run(args []string) error {
 		}
 		fmt.Println("Confirmed. The words are gone from this device; keep the paper safe.")
 		return nil
+	case "reset":
+		var r struct {
+			Setup string `json:"setup"`
+		}
+		if err := c.Do(ctx, "POST", "/admin/v1/reset", map[string]string{"confirm": *confirmName}, &r); err != nil {
+			return err
+		}
+		fmt.Println("Removing Sol from this device. Your identity is moved aside into", filepath.Join(*dir, "removed-<time>"), "(move it back to undo); the synced folder is untouched.")
+		fmt.Println("Set Sol up again with `sol open` (start new, add this device to your Sol, or restore from your backup words).")
+		return nil
 	case "network-changed":
 		return c.Do(ctx, "POST", "/admin/v1/network-changed", map[string]string{"reason": strings.Join(fs.Args(), " ")}, nil)
 	case "open":
@@ -568,26 +583,59 @@ func run(args []string) error {
 // runDaemon is `sol run`: start, print where things are, wait for a signal, stop.
 func runDaemon(dir string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	d, err := daemon.Start(daemon.Options{Dir: dir, Builtins: builtins.All(), Log: log})
-	if errors.Is(err, daemon.ErrRunning) && os.Getenv("SOL_SUPERVISED") == "1" {
-		return nil // exit 0: the login entry must not restart a duplicate forever
-	}
-	if err != nil {
-		return err
-	}
-	st := d.Status()
-	var eps []string
-	for _, e := range st.Endpoints {
-		eps = append(eps, e.Kind+" "+e.Addr)
-	}
-	fmt.Printf("Sol is running for %s on %s.\n  open it:   sol open\n  endpoints: %s\nCtrl-C (or `sol stop`) to stop.\n", st.Me.Person.Name, st.Me.Device.Name, strings.Join(eps, ", "))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	select {
-	case <-ctx.Done():
-	case <-d.ShutdownRequested():
+	token := "" // the setup token a "Remove Sol from this device" handed the browser
+	for {
+		join := ""
+		if !daemon.Initialised(dir) {
+			// No identity: serve setup in the browser until the person picks (daemon/setup.go).
+			res, err := daemon.RunSetup(ctx, daemon.SetupOptions{Dir: dir, Builtins: builtins.All(), Token: token,
+				Name: accountName(), Device: hostname(), Log: log})
+			if ctx.Err() != nil || errors.Is(err, daemon.ErrSetupStopped) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			join = res.JoinLink
+		}
+		d, err := daemon.Start(daemon.Options{Dir: dir, Builtins: builtins.All(), Log: log})
+		if errors.Is(err, daemon.ErrRunning) && os.Getenv("SOL_SUPERVISED") == "1" {
+			return nil // exit 0: the login entry must not restart a duplicate forever
+		}
+		if err != nil {
+			return err
+		}
+		if join != "" {
+			go func() {
+				if _, _, err := d.Pair(ctx, join); err != nil {
+					log.Warn("joining with the link from setup failed; paste a new one in Devices or run `sol pair <link>`", "err", err)
+				}
+			}()
+		}
+		st := d.Status()
+		var eps []string
+		for _, e := range st.Endpoints {
+			eps = append(eps, e.Kind+" "+e.Addr)
+		}
+		fmt.Printf("Sol is running for %s on %s.\n  open it:   sol open\n  endpoints: %s\nCtrl-C (or `sol stop`) to stop.\n", st.Me.Person.Name, st.Me.Device.Name, strings.Join(eps, ", "))
+		select {
+		case <-ctx.Done():
+		case <-d.ShutdownRequested():
+		}
+		tok, reset := d.ResetRequested()
+		if err := d.Close(); err != nil || !reset {
+			return err
+		}
+		// "Remove Sol from this device": archive the identity, then serve setup on the same port.
+		archived, err := daemon.ArchiveIdentity(dir)
+		if err != nil {
+			return fmt.Errorf("removing Sol from this device: %w", err)
+		}
+		log.Info("removed Sol from this device; the old identity is archived (move it back to undo)", "path", archived)
+		token = tok
 	}
-	return d.Close()
 }
 
 func printJSON(v any) error {

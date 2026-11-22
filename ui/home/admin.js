@@ -85,6 +85,8 @@ export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, Even
     // Not in the endpoint table yet: revoking one browser session (Settings lists them).
     revokeSession: (id) => req('DELETE', `sessions/${enc(id)}`),
     logout: () => post('logout'),
+    /** "Remove Sol from this device": `confirm` is the person's name. Answers `{setup}`, the setup page's path with its token. */
+    reset: (confirm) => post('reset', { confirm }),
     /** The locked screen's Sign in: asks the daemon to start a session for the computer's own user (root path, not /admin/v1). */
     signIn: () => req('POST', '', undefined, undefined, '/_sol/signin'),
     wallpapers: () => get('wallpapers'),

@@ -645,8 +645,17 @@ func (h *Host) Remove(id string) error {
 	if a.attached {
 		return nil
 	}
+	if strings.HasPrefix(a.m.Exec, "builtin:") {
+		// Remember the person removed a first-party app, so the daemon's start, which adds
+		// builtins new in this version, doesn't put it back (RemovedMarker).
+		_ = os.WriteFile(RemovedMarker(h.cfg.AppsDir, id), nil, 0o600)
+	}
 	return os.RemoveAll(a.dir)
 }
+
+// RemovedMarker is the file that records that the person removed builtin app id: an empty
+// <apps>/<id>.removed next to the app directories (the scan only loads directories).
+func RemovedMarker(appsDir, id string) string { return filepath.Join(appsDir, id+".removed") }
 
 // Attach registers an app that is already running at addr (SOL_APP_LISTEN form), for
 // development and tests: the host routes its actions and UI but does not supervise it. It

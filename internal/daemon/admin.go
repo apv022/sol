@@ -285,6 +285,25 @@ func (d *Daemon) adminHandler() http.Handler {
 		return map[string]any{"code": c, "url": d.UIURL() + "login?code=" + c,
 			"expires": time.Now().Add(LoginCodeTTL).UTC()}, nil
 	})
+	// "Remove Sol from this device": the person types their name to confirm. The daemon stops;
+	// the process archives the identity and serves setup at the same address (setup.go).
+	j("POST /admin/v1/reset", "reset", func(r *http.Request) (any, error) {
+		var in struct {
+			Confirm string `json:"confirm"`
+		}
+		if err := body(r, &in); err != nil {
+			return nil, err
+		}
+		name := ""
+		if b, err := d.Keyring.Bundle(); err == nil {
+			name = b.Person.Name
+		}
+		if strings.TrimSpace(in.Confirm) == "" || !strings.EqualFold(strings.TrimSpace(in.Confirm), strings.TrimSpace(name)) {
+			return nil, sol.Errorf("bad_request", "type your name ("+name+") to confirm")
+		}
+		tok := d.requestReset()
+		return map[string]string{"setup": "/?setup=" + tok}, nil
+	})
 	mx.HandleFunc("POST /admin/v1/logout", func(w http.ResponseWriter, r *http.Request) {
 		id := browserSession(r.Context())
 		if id == "" {
