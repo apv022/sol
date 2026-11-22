@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<script type="importmap">{"imports": {"/sol.js": "/sdk/js/sol.js"}}</script>
+<link rel="stylesheet" href="/ui/kit/tokens.css">
+<link rel="stylesheet" href="/apps/files/ui/app.css">
+<body>
+<h1 id="summary">running</h1>
+<ul id="results"></ul>
+<script type="module">
+import { run } from '../../../ui/kit/testing.js';
+run(() => import('./viewer.test.js'));
+</script>

@@ -67,3 +67,12 @@
     radial-gradient(120% 38% at 25% 104%, var(--wp-hill-1) 0 62%, transparent 63%),
     radial-gradient(130% 34% at 85% 106%, var(--wp-hill-2) 0 62%, transparent 63%);
 }
+
+/* An uploaded image (Settings > Wallpaper > Add your own): the page and the picker tile set
+   --wp-image through the CSSOM. The image fills the surface; there is no sun or hills over it. */
+[data-wallpaper="custom"] {
+  --wp-ink: #fff; --wp-ink-2: rgba(255, 255, 255, .85); --wp-shadow: rgba(0, 0, 0, .55);
+}
+.wp[data-wallpaper="custom"] { background: var(--wp-image, none) center / cover no-repeat, var(--canvas); }
+.wp[data-wallpaper="custom"] .sun { display: none; }
+.wp[data-wallpaper="custom"]::after { background: linear-gradient(var(--wp-veil), var(--wp-veil)); }

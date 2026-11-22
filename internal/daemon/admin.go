@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -80,10 +81,15 @@ type SessionInfo struct {
 	Paths []session.PathState `json:"paths,omitempty"`
 }
 
-// Storage is the used and total bytes of the synced folder's disk.
+// Storage says what the Sol folder holds and how much room the device has. Used is the size
+// of the synced folder (SolDrive), measured in the background and refreshed at most once a
+// minute when status is asked (Measured is false until the first measurement finishes); Free
+// is what the device has available to this user and Total the size of its disk.
 type Storage struct {
-	Used  uint64 `json:"used"`
-	Total uint64 `json:"total"`
+	Used     uint64 `json:"used"`
+	Free     uint64 `json:"free"`
+	Total    uint64 `json:"total"`
+	Measured bool   `json:"measured"`
 }
 
 // AppInfo is one row of GET /admin/v1/apps (sol apps).
@@ -117,8 +123,9 @@ func (d *Daemon) status(browser string) Status {
 		st.PeerSessions = append(st.PeerSessions, d.liveSessionInfo(s))
 	}
 	if d.cfg.Files != "" {
-		if used, total, ok := diskUsage(d.cfg.Files); ok {
-			st.Storage = &Storage{Used: used, Total: total}
+		if free, total, ok := diskSpace(d.cfg.Files); ok {
+			used, measured := d.folder.get(d.cfg.Files, d.ctx, &d.wg)
+			st.Storage = &Storage{Used: used, Free: free, Total: total, Measured: measured}
 		}
 	}
 	return st
@@ -287,6 +294,7 @@ func (d *Daemon) adminHandler() http.Handler {
 		d.browser.revoke(id)
 		d.activity("sol.logout", map[string]string{"session": id}, nil)
 		setSessionCookie(w, "", -1)
+		setSignedOutCookie(w, true) // or the same-user auto-login would sign this browser straight back in
 		d.emitStatus()
 		sol.WriteJSON(w, http.StatusOK, struct{}{})
 	})
@@ -532,6 +540,60 @@ func (d *Daemon) adminHandler() http.Handler {
 	j("POST /admin/v1/agents/{name}/revoke", "agents.revoke", func(r *http.Request) (any, error) {
 		id, err := d.RevokeAgent(r.PathValue("name"))
 		return map[string]string{"id": id}, err
+	})
+
+	// A key made here, for the Sol app's "New agent key": the daemon makes the key pair (the
+	// browser cannot write a key file where the agent runs), signs the certificate, keeps the key
+	// file where `sol agent new` does (<dir>/agents/<name>.key, 0600) and returns the key file's
+	// text once so it can be copied to the machine the agent runs on. Nothing here is logged.
+	j("POST /admin/v1/agents/new", "agents.new", func(r *http.Request) (any, error) {
+		var b struct {
+			Name   string   `json:"name"`
+			Scopes []string `json:"scopes"`
+			Person string   `json:"person"`
+			Days   int      `json:"days"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		if !agentNameRe.MatchString(b.Name) {
+			return nil, sol.Errorf("bad_request", "an agent name is lowercase letters, digits, . _ - (up to 64)")
+		}
+		scopes := slices.Clone(b.Scopes)
+		if b.Person == "self" {
+			b.Person, _ = d.me()
+		}
+		if b.Person != "" {
+			scopes = append(scopes, "person:"+b.Person)
+		}
+		k, pub, err := NewAgentKey(b.Name)
+		if err != nil {
+			return nil, err
+		}
+		info, err := d.IssueAgent(b.Name, pub, scopes, time.Duration(b.Days)*24*time.Hour)
+		if err != nil {
+			return nil, err
+		}
+		k.Cert = info.Cert
+		file := filepath.Join(d.dir, "agents", b.Name+".key")
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			return nil, err
+		}
+		if err := k.Save(file); err != nil {
+			return nil, err
+		}
+		keyText, _ := json.MarshalIndent(k, "", "  ")
+		return map[string]any{"agent": info, "key_file": string(keyText), "path": file}, nil
+	})
+
+	// Wallpapers: the person's own images (wallpapers.go). The upload is the raw image with its
+	// Content-Type; the Sol app shows one when the wallpaper setting is custom:<id>.
+	j("GET /admin/v1/wallpapers", "", func(r *http.Request) (any, error) { return d.Wallpapers(), nil })
+	j("POST /admin/v1/wallpapers", "wallpapers.add", func(r *http.Request) (any, error) {
+		return d.AddWallpaper(r.Header.Get("Content-Type"), r.Body)
+	})
+	j("DELETE /admin/v1/wallpapers/{id}", "wallpapers.remove", func(r *http.Request) (any, error) {
+		return nil, d.DeleteWallpaper(r.PathValue("id"))
 	})
 
 	// Appearance.

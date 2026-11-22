@@ -161,7 +161,42 @@ func seed(root string) error {
 	if err := put("Photos/dusk.png", gradient(color.RGBA{179, 56, 47, 255}, color.RGBA{13, 18, 34, 255})); err != nil {
 		return err
 	}
+	if err := put("Photos/sea.png", gradient(color.RGBA{86, 180, 211, 255}, color.RGBA{18, 64, 99, 255})); err != nil {
+		return err
+	}
+	if err := put("Documents/Report.pdf", pdf("Quarterly report")); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Empty folder"), 0o755); err != nil {
+		return err
+	}
 	return put("Music/tone.wav", tone(440, 2))
+}
+
+// pdf makes a one-page PDF with a title, so the PDF preview has something real to show.
+func pdf(title string) []byte {
+	content := fmt.Sprintf("BT /F1 28 Tf 72 720 Td (%s) Tj ET\nBT /F1 12 Tf 72 690 Td (Made by files-dev.) Tj ET", title)
+	objs := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offs := make([]int, len(objs))
+	for i, o := range objs {
+		offs[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	x := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, o := range offs {
+		fmt.Fprintf(&b, "%010d 00000 n \n", o)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, x)
+	return b.Bytes()
 }
 
 func gradient(a, b color.RGBA) []byte {

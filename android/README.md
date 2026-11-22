@@ -54,8 +54,12 @@ release builds; switching means uninstalling first, which deletes the phone's So
    adb install -r android/build/sol-release.apk   # or build/sol.apk for a debug build
    ```
 
-Open Sol and choose **Start new** (a new person on this phone) or **Add to my Sol** (this phone
-becomes another device of the person you already are on your laptop).
+Open Sol and choose **Start new** (a new person on this phone), **Add to my Sol** (this phone
+becomes another device of the person you already are on your laptop) or **Restore from backup
+words** (the 24 words from `sol backup words` or Settings: your identity comes back under the same
+person ID, so contacts keep trusting you; files come back by syncing from your devices that are
+still online). The words go to `libsol.so restore` as an argument only; they are never stored or
+logged, and wrong words leave nothing behind.
 
 ### Join your laptop
 
@@ -98,7 +102,29 @@ debug). The node restarts with the app and keeps its identity, contacts and file
   netlink watch is denied to apps.
 - **Share**: Sol is a share target for text and files (one or many). They are copied into
   `SolDrive/Inbox-from-share` and Files opens.
-- **Downloads** from the WebView are saved to the Downloads folder under the file's own name.
+- **Edge to edge**: the WebView fills the screen under transparent status and navigation bars.
+  Android's WebView does not report the bars as `env(safe-area-inset-*)`, so the activity sets
+  `--sol-inset-top/-bottom/-left/-right` (CSS px) on `<html>` on every page commit, page load and
+  inset change, for every local origin; `ui/kit/tokens.css` folds them into `--safe-*`. Only the
+  keyboard pads the view natively. Bar icons are dark in light mode and light in dark mode.
+- **Downloads**: a download the user asked for (`download=1`, or `Content-Disposition:
+  attachment`) is saved to the Downloads folder under the file's own name. Anything else reached
+  the download listener only because the WebView cannot show it inline (a PDF preview in Files):
+  it is fetched once into `cache/open/` (keyed by URL, length, ETag and Last-Modified; reused when
+  unchanged, pruned after a day) and opened in the system viewer through `OpenProvider`
+  (`content://app.sol.open/...`, read-only, per-intent grant). The same URL opens once per 4 s.
+- **Page bridge** `window.SolAndroid` (answers only while the top page is a local Sol origin):
+  - `SolAndroid.isApp()` → `true` inside the Android app (`window.SolAndroid?.isApp` is truthy),
+    so a page can hide what makes no sense here, such as Sign out (the app signs itself in again).
+  - `SolAndroid.open(url, mime, name)` opens a file of this node in the system viewer as above;
+    `url` may be relative to the page and must resolve to a local Sol origin; `mime`/`name` may be
+    empty. Returns false when refused. Files can call it for PDFs instead of an `<iframe>`.
+- **User-Agent**: the WebView's default UA plus ` SolAndroid/<versionName>`, so the node can name
+  the session "Sol app on Android".
+- **Sol in the Files app**: `DriveProvider` (a `DocumentsProvider`, authority `app.sol.documents`)
+  shows `SolDrive` as "Sol" in the system Files app and every file picker: browse, open, create,
+  rename, delete and write. The node's `.sol` folder is hidden and unreachable. The node watches
+  the folder, so changes made there sync.
 
 ## Test on the emulator
 

@@ -90,6 +90,88 @@ export function appIconSpec(app, glyphs = null) {
 /** Parses the route from a location hash: "#/people/bob" -> {name: 'people', id: 'bob'}. */
 export function parseRoute(hash) {
   const parts = String(hash || '').replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-  const name = ['people', 'devices', 'inbox', 'sharing', 'settings'].includes(parts[0]) ? parts[0] : 'home';
+  const name = ['apps', 'people', 'devices', 'inbox', 'sharing', 'settings'].includes(parts[0]) ? parts[0] : 'home';
   return { name, id: name === 'home' ? null : parts[1] || null };
+}
+
+// ---- appearance ----
+
+/** The wallpapers drawn in CSS (wallpaper.css); the daemon's BuiltinWallpapers. */
+export const BUILTIN_WALLPAPERS = ['dusk', 'aurora', 'ember', 'slate'];
+/** What an uploaded wallpaper may be, and how big (the daemon enforces the same). */
+export const WALLPAPER_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+export const MAX_WALLPAPER_BYTES = 15 * 1024 * 1024;
+
+/**
+ * The wallpaper a setting value means: `{name, id}` where name is a built-in, or "custom" with
+ * the uploaded image's id. An unknown value, or a custom one whose image is not in `customs`
+ * (a list of {id}; null while it has not loaded yet, which trusts the setting), is dusk.
+ */
+export function wallpaperOf(setting, customs = null) {
+  const m = /^custom:([a-f0-9]{16})$/.exec(setting || '');
+  if (m && (customs === null || customs.some((c) => c.id === m[1]))) return { name: 'custom', id: m[1] };
+  return { name: BUILTIN_WALLPAPERS.includes(setting) ? setting : 'dusk', id: '' };
+}
+
+/** Why a file cannot be a wallpaper, or '' when it can. */
+export function wallpaperFileError(file) {
+  if (!file || !WALLPAPER_TYPES.includes(file.type)) return 'Choose a PNG, JPEG or WebP image';
+  if (file.size > MAX_WALLPAPER_BYTES) return 'That image is over 15 MB';
+  return '';
+}
+
+/**
+ * How the accent row shows `accent` (a saved value, '' for the theme's own): the swatch it
+ * equals (`kind` "swatch", the default one being ''), else "custom" with the colour for the picker.
+ * `swatches` are the colours offered, the first being the default.
+ */
+export function accentChoice(accent, swatches) {
+  const a = String(accent || '').toLowerCase();
+  if (!a) return { kind: 'swatch', value: '' };
+  const i = swatches.findIndex((c) => c.toLowerCase() === a);
+  if (i === 0) return { kind: 'swatch', value: '' };
+  if (i > 0) return { kind: 'swatch', value: swatches[i] };
+  return { kind: 'custom', value: /^#[0-9a-f]{6}$/.test(a) ? a : swatches[0] };
+}
+
+// ---- home widgets ----
+
+/**
+ * The Storage widget's text from status.storage: what the Sol folder holds, and the room the
+ * device has left. `used` is the folder, not the disk. Old or missing fields show nothing.
+ */
+export function storageView(st) {
+  if (!st) return null;
+  return { value: st.measured === false ? '…' : bytes(st.used), sub: Number.isFinite(st.free) ? `${bytes(st.free)} free on this device` : '' };
+}
+
+/** True inside the Android app (its shell exposes window.SolAndroid.isApp, a flag or a method). */
+export function isAndroidApp(win = globalThis) {
+  const a = win.SolAndroid;
+  if (!a) return false;
+  try { return typeof a.isApp === 'function' ? !!a.isApp() : !!a.isApp; } catch { return false; }
+}
+
+// ---- agent keys ----
+
+/** An agent's name as the daemon accepts it. */
+export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * The scope list for a new agent from the form's picks: `all` (everything, "*"), `apps` (the app
+ * ids picked whole, "<id>.*") and `actions` (single action names). A single action whose app
+ * was picked whole is left out, and the list is sorted and without repeats.
+ */
+export function agentScopes({ all = false, apps = [], actions = [] }) {
+  if (all) return ['*'];
+  const whole = new Set(apps);
+  const out = new Set(apps.map((a) => `${a}.*`));
+  for (const act of actions) if (!whole.has(act.split('.')[0])) out.add(act);
+  return [...out].sort();
+}
+
+/** The command that runs an action as the agent on the computer that holds the key file. */
+export function agentCommand(name, keyPath) {
+  const q = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
+  return { here: `sol do --as-agent ${q(name)} <app>.<action>`, elsewhere: `SOL_AGENT_KEY=${q(keyPath)} sol do <app>.<action>` };
 }

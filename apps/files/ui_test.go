@@ -35,24 +35,45 @@ func TestUIAndAssetsAreServed(t *testing.T) {
 }
 
 func TestUIEscapesEverythingAndUsesOnlyKitAndSolJS(t *testing.T) {
-	src, err := os.ReadFile("ui/app.js")
-	if err != nil {
-		t.Fatal(err)
+	fetches := 0
+	for _, f := range []string{"ui/app.js", "ui/viewer.js"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(src)
+		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "localStorage.setItem"} {
+			if strings.Contains(s, banned) && !(banned == "localStorage.setItem" && strings.Contains(s, "store.set")) {
+				t.Errorf("%s uses %s", f, banned)
+			}
+		}
+		for _, line := range strings.Split(s, "\n") {
+			if strings.HasPrefix(line, "import ") && !strings.Contains(line, "'/sol.js'") && !strings.Contains(line, "'/kit/kit.js'") && !strings.Contains(line, "'./viewer.js'") {
+				t.Errorf("%s: unexpected import: %s", f, line)
+			}
+		}
+		fetches += strings.Count(s, "fetch(")
 	}
+	// Every network call goes through sol.js, except reading /raw: the text preview (viewer.js)
+	// and the bytes handed to the system share sheet (app.js).
+	if fetches != 2 {
+		t.Errorf("fetch( used %d times", fetches)
+	}
+}
+
+// The viewer lives outside the re-rendered list and never frames a PDF on Android.
+func TestUIViewerRules(t *testing.T) {
+	src, _ := os.ReadFile("ui/viewer.js")
 	s := string(src)
-	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "localStorage.setItem"} {
-		if strings.Contains(s, banned) && !(banned == "localStorage.setItem" && strings.Contains(s, "store.set")) {
-			t.Errorf("ui/app.js uses %s", banned)
-		}
+	if !strings.Contains(s, "document.body.append(root)") {
+		t.Error("viewer must be appended to the body, outside <main>")
 	}
-	for _, line := range strings.Split(s, "\n") {
-		if strings.HasPrefix(line, "import ") && !strings.Contains(line, "'/sol.js'") && !strings.Contains(line, "'/kit/kit.js'") {
-			t.Errorf("unexpected import: %s", line)
-		}
+	if !strings.Contains(s, "k === 'pdf' && !opener") {
+		t.Error("PDF frame must be skipped when the Android opener exists")
 	}
-	// Every network call goes through sol.js: no direct fetch except the /raw preview of text.
-	if n := strings.Count(s, "fetch("); n != 1 {
-		t.Errorf("fetch( used %d times", n)
+	css, _ := os.ReadFile("ui/app.css")
+	if strings.Contains(string(css), "env(") {
+		t.Error("app.css must use var(--safe-*), not env()")
 	}
 }
 

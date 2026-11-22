@@ -2,5 +2,5 @@
 
 package daemon
 
-// diskUsage is unknown on this OS: the status leaves storage out.
-func diskUsage(string) (used, total uint64, ok bool) { return 0, 0, false }
+// diskSpace is unknown on this OS: the status leaves the device's numbers out.
+func diskSpace(string) (free, total uint64, ok bool) { return 0, 0, false }

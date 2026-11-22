@@ -89,7 +89,7 @@ Set by the Sol app (or `kit.js applySettings()` / `sol.js applyThemeSettings()`)
 | `data-density` | `compact`; absent = comfortable | smaller `--control-h`, `--row-h`, spacing |
 | `data-radius` | `square`; absent = rounded | `--radius-control/group/sheet` shrink to 2-4px |
 | `data-glass` | `off`; absent = on | `--glass` becomes `--surface`, no blur. `prefers-reduced-transparency` does the same |
-| `data-font` | `system`, `inter`, `mono` | `--font-ui` |
+| `data-font` | `inter`, `mono` (`system` sets nothing: the theme's own font) | `--font-ui` |
 | inline `--tint` | any colour | the accent setting |
 
 The `theme` event payload may carry them: `{"settings": {"scheme": "dark", "accent": "#b58900",
@@ -98,7 +98,7 @@ The `theme` event payload may carry them: `{"settings": {"scheme": "dark", "acce
 ## Class and data hooks (for deep theming)
 
 Elements: `<sol-app-shell>` (children `nav[slot=nav]`, `main`; generated `.shell-bar`
-with `.bar-title`, `.bar-actions`, `.sidebar-toggle`), `<sol-list>`, `<sol-dialog>`/`<sol-sheet>`
+with `.bar-title`, `.bar-actions`, `.sidebar-toggle`), `<sol-nav>` (the Sol home button; the shell adds one, plus a `.sol-group` of `.nav-sol` links atop the sidebar; `[data-nonav]` on the shell means no sidebar; `.nav-sheet-item` in the phone sheet), `<sol-list>`, `<sol-dialog>`/`<sol-sheet>`
 (`.grabber`, `.dlg-head`, `.dlg-body`, `.dlg-actions`), `<sol-toast>` (`.toast[data-kind]`),
 `<sol-avatar online>`, `<sol-app-icon glyph hue>`, `<sol-ring value>`, `<sol-icon name>`.
 

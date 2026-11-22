@@ -30,7 +30,8 @@ var (
 )
 
 // ThemeSettingValues are the allowed values of each appearance setting ("accent" is any
-// #rgb, #rgba, #rrggbb or #rrggbbaa colour, or "" for the theme's own).
+// #rgb, #rgba, #rrggbb or #rrggbbaa colour, or "" for the theme's own; "wallpaper" is one of
+// BuiltinWallpapers or "custom:<id>" for an uploaded image, wallpapers.go).
 var ThemeSettingValues = map[string][]string{
 	"scheme":  {"auto", "light", "dark"},
 	"density": {"comfortable", "compact"},
@@ -38,7 +39,12 @@ var ThemeSettingValues = map[string][]string{
 	"glass":   {"on", "off"},
 	"font":    {"system", "inter", "mono"},
 	"accent":  nil,
+	// wallpaper is checked by checkThemeSetting (built-ins or custom:<id>), so it has no fixed list.
+	"wallpaper": nil,
 }
+
+// BuiltinWallpapers are the wallpapers drawn in CSS (ui/home/wallpaper.css); "dusk" is the default.
+var BuiltinWallpapers = []string{"dusk", "aurora", "ember", "slate"}
 
 // ThemeInfo is one theme `sol theme list` shows.
 type ThemeInfo struct {
@@ -154,10 +160,17 @@ func checkThemeSetting(k, v string) error {
 	allowed, ok := ThemeSettingValues[k]
 	switch {
 	case !ok:
-		return sol.Errorf("bad_request", "unknown setting "+k+" (scheme, accent, density, radius, glass, font)")
+		return sol.Errorf("bad_request", "unknown setting "+k+" (scheme, accent, density, radius, glass, font, wallpaper)")
 	case k == "accent":
 		if v != "" && !accentRe.MatchString(v) {
 			return sol.Errorf("bad_request", "accent is a colour like #b58900")
+		}
+	case k == "wallpaper":
+		if v == "" || contains(BuiltinWallpapers, v) {
+			return nil
+		}
+		if id, ok := strings.CutPrefix(v, "custom:"); !ok || !wallpaperIDRe.MatchString(id) {
+			return sol.Errorf("bad_request", "wallpaper is one of "+strings.Join(BuiltinWallpapers, ", ")+" or custom:<id> of an uploaded image")
 		}
 	case v != "" && !contains(allowed, v):
 		return sol.Errorf("bad_request", k+" is one of "+strings.Join(allowed, ", "))
@@ -230,7 +243,7 @@ func (d *Daemon) writeSol(name string, b []byte) error {
 // the defaults spelled out so a UI can clear what was unset.
 func (d *Daemon) themePayload() []byte {
 	s := d.themeSettings()
-	full := map[string]string{"scheme": "auto", "accent": "", "density": "comfortable", "radius": "rounded", "glass": "on", "font": "system"}
+	full := map[string]string{"scheme": "auto", "accent": "", "density": "comfortable", "radius": "rounded", "glass": "on", "font": "system", "wallpaper": "dusk"}
 	for k, v := range s {
 		full[k] = v
 	}

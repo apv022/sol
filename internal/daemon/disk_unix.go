@@ -4,13 +4,13 @@ package daemon
 
 import "syscall"
 
-// diskUsage returns the used and total bytes of the filesystem holding path.
-func diskUsage(path string) (used, total uint64, ok bool) {
+// diskSpace returns the bytes available to this user (Bavail, not Bfree: the root-reserved
+// blocks are not ours to use) and the total bytes of the filesystem holding path.
+func diskSpace(path string) (free, total uint64, ok bool) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
 		return 0, 0, false
 	}
 	bs := uint64(st.Bsize)
-	total = uint64(st.Blocks) * bs
-	return total - uint64(st.Bfree)*bs, total, true
+	return uint64(st.Bavail) * bs, uint64(st.Blocks) * bs, true
 }

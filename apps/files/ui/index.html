@@ -16,12 +16,10 @@
     <a class="nav-item" href="#/Shared" data-id="shared"><sol-icon name="people"></sol-icon>Shared</a>
     <a class="nav-item" href="#!conflicts" data-id="conflicts"><sol-icon name="alert"></sol-icon>Conflicts<span class="badge tint" id="conflict-count" hidden></span></a>
     <a class="nav-item" href="#!sync" data-id="sync"><sol-icon name="refresh"></sol-icon>Sync</a>
-    <span class="spacer"></span>
-    <button class="nav-item" id="theme" type="button"><sol-icon name="moon"></sol-icon>Theme</button>
   </nav>
-  <main id="main" aria-live="polite"></main>
+  <main id="main"></main>
 </sol-app-shell>
-<input type="file" id="picker" multiple hidden>
+<input type="file" id="picker" multiple hidden aria-hidden="true">
 <div id="dropveil" hidden><div><sol-icon name="upload"></sol-icon><p>Drop to upload</p></div></div>
 <script type="module" src="/app.js"></script>
 </body>

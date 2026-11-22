@@ -82,6 +82,7 @@ func TestEveryActionHonoursDryRun(t *testing.T) {
 		{"files.keep", map[string]any{"path": "Docs", "keep": false}},
 		{"files.resolve", map[string]any{"path": "Docs/a.txt", "keep": "that"}},
 		{"files.resolve", map[string]any{"path": conflictCopy, "keep": "both"}},
+		{"files.sync", map[string]any{}},
 	}
 	for _, c := range calls {
 		before := snapshot(t, w, a, b)
@@ -250,7 +251,7 @@ func TestAgentDeleteNeedsApprovalThroughMemsol(t *testing.T) {
 		names = append(names, s.Name)
 	}
 	sort.Strings(names)
-	if len(names) != 16 {
+	if len(names) != 17 {
 		t.Fatalf("actions: %v", names)
 	}
 	for _, s := range specs {

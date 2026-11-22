@@ -184,9 +184,7 @@ func (a *browserAuth) start(client string) (string, *BrowserSession, bool) {
 func (a *browserAuth) startLocked(client string, now time.Time, sameUser bool) (string, *BrowserSession, bool) {
 	tok := randomHex(32)
 	th := hash32(tok)
-	if len(client) > 120 {
-		client = client[:120]
-	}
+	client = friendlyClient(client)
 	s := &storedSession{BrowserSession: BrowserSession{ID: randomHex(8), Client: client, Created: now.UTC(),
 		LastUsed: now.UTC(), Expires: now.Add(SessionTTL).UTC()}, Hash: hex.EncodeToString(th[:]), SameUser: sameUser}
 	a.sess[th] = s
@@ -243,6 +241,7 @@ func (a *browserAuth) list(current string) []BrowserSession {
 			continue
 		}
 		bs := s.BrowserSession
+		bs.Client = friendlyClient(bs.Client) // sessions stored before this kept the raw User-Agent
 		bs.Current = bs.ID == current
 		out = append(out, bs)
 	}
@@ -339,6 +338,37 @@ func browserSession(ctx context.Context) string {
 	return s
 }
 
+// SignedOutCookie marks a browser that signed out: it turns same-user auto-login off for that
+// browser until the person asks to sign in again. It holds no secret.
+const SignedOutCookie = "sol_signed_out"
+
+// setSignedOutCookie sets (on) or clears the signed-out marker, HttpOnly and SameSite=Strict
+// like the session cookie, and long-lived so it outlasts the browser session.
+func setSignedOutCookie(w http.ResponseWriter, on bool) {
+	c := &http.Cookie{Name: SignedOutCookie, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	if on {
+		c.Value, c.MaxAge = "1", 10*365*24*60*60
+	} else {
+		c.MaxAge = -1
+	}
+	http.SetCookie(w, c)
+}
+
+// signIn is POST /_sol/signin: the "Sign in" button of the locked screen. It starts a session
+// for a browser on the daemon's own OS user (same rules as autoLogin: Host pinned by the router,
+// Origin must be the UI root, the connection's owner must be this user) and clears the
+// signed-out marker. Any other browser still needs a login code.
+func (d *Daemon) signIn(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if _, ok := d.startSameUser(w, r); !ok {
+		sol.WriteError(w, sol.Errorf("forbidden", "Only the person who runs Sol on this computer can sign in this way. Run `sol open` for a login link."))
+		return
+	}
+	setSignedOutCookie(w, false)
+	d.emitStatus()
+	sol.WriteJSON(w, http.StatusOK, struct{}{})
+}
+
 func setSessionCookie(w http.ResponseWriter, tok string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: tok, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -374,7 +404,19 @@ var loginFailed = template.Must(template.New("login").Parse(`<!doctype html>
 // The Host was pinned by the router; the Origin / Sec-Fetch-Site check is repeated here so a
 // cross-site navigation cannot trigger it. It looks the owner up on every call and caches
 // nothing. On success the session cookie is set on w and the session ID returned.
+//
+// A browser that signed out holds the sol_signed_out cookie (logout sets it) and is not let in
+// again this way: signing out would otherwise undo itself on the next request. It signs back in
+// with the "Sign in" button on the locked screen (signIn), which clears the cookie.
 func (d *Daemon) autoLogin(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if c, err := r.Cookie(SignedOutCookie); err == nil && c.Value != "" {
+		return "", false
+	}
+	return d.startSameUser(w, r)
+}
+
+// startSameUser is autoLogin without the signed-out check.
+func (d *Daemon) startSameUser(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if !sameUIOrigin(r) || !d.sameUser(r) {
 		return "", false
 	}
@@ -546,6 +588,8 @@ func (d *Daemon) rootHandler() http.Handler {
 		})
 	}
 	mx.HandleFunc("GET /_sol/open", d.openApp)
+	mx.HandleFunc("POST /_sol/signin", d.signIn)
+	mx.HandleFunc("GET /wallpapers/{id}", d.serveWallpaper)
 	mx.HandleFunc("/admin/", d.browserAdmin)
 	files := http.FileServerFS(home.FS)
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -610,4 +654,58 @@ func (d *Daemon) browserAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(context.WithValue(r.Context(), browserKey{}, id))
 	d.admin.ServeHTTP(w, r)
+}
+
+// friendlyClient turns a User-Agent into the name Settings shows: "Sol app on Android" for the
+// Android app (its agent carries a SolAndroid/ token), else "<Browser> on <OS>" ("Firefox on
+// Linux"), and "Browser" when nothing is recognised. Brave and other Chromium forks say they
+// are Chrome, so they show as Chrome. A string that is not a User-Agent (already a friendly
+// name) comes back unchanged.
+func friendlyClient(ua string) string {
+	if strings.Contains(ua, "SolAndroid/") {
+		return "Sol app on Android"
+	}
+	if ua == "" {
+		return "Browser"
+	}
+	if !strings.Contains(ua, "/") && !strings.Contains(ua, "Mozilla") {
+		return truncate(ua, 60)
+	}
+	browser := ""
+	for _, b := range []struct{ token, name string }{
+		{"Edg/", "Edge"}, {"EdgA/", "Edge"}, {"EdgiOS/", "Edge"}, {"OPR/", "Opera"},
+		{"Firefox/", "Firefox"}, {"FxiOS/", "Firefox"}, {"CriOS/", "Chrome"}, {"Chrome/", "Chrome"},
+		{"Chromium/", "Chromium"}, {"Safari/", "Safari"},
+	} {
+		if strings.Contains(ua, b.token) {
+			browser = b.name
+			break
+		}
+	}
+	osName := ""
+	for _, o := range []struct{ token, name string }{
+		{"Android", "Android"}, {"iPhone", "iOS"}, {"iPad", "iOS"}, {"iPod", "iOS"}, {"Windows", "Windows"},
+		{"Macintosh", "macOS"}, {"Mac OS X", "macOS"}, {"CrOS", "ChromeOS"}, {"Linux", "Linux"}, {"X11", "Linux"},
+	} {
+		if strings.Contains(ua, o.token) {
+			osName = o.name
+			break
+		}
+	}
+	switch {
+	case browser != "" && osName != "":
+		return browser + " on " + osName
+	case browser != "":
+		return browser
+	case osName != "":
+		return "Browser on " + osName
+	}
+	return "Browser"
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

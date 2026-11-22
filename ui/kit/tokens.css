@@ -17,6 +17,14 @@
 :root {
   color-scheme: light dark;
 
+  /* ---- safe areas ---- Use these, never env(safe-area-inset-*) directly: Android's WebView
+     leaves env() at 0 under the system bars, so the Android shell draws edge to edge and sets
+     --sol-inset-* on <html> from the real window insets (CSSOM, allowed by the style CSP). */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--sol-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--sol-inset-bottom, 0px));
+  --safe-left: max(env(safe-area-inset-left, 0px), var(--sol-inset-left, 0px));
+  --safe-right: max(env(safe-area-inset-right, 0px), var(--sol-inset-right, 0px));
+
   /* ---- colour (light) ---- */
   --canvas: #F5F5F7;
   --surface: #FFFFFF;
@@ -164,7 +172,9 @@
 /* live derivation from --tint (and --label / --surface-2) where color-mix() exists (Chrome 111+,
    Safari 16.2+, Firefox 113+); elsewhere the solid values above stand */
 @supports (color: color-mix(in srgb, red, blue)) {
-  :root {
+  /* the same specificity as the dark blocks above (later wins), or a dark scheme would keep the
+     default gold's solid shades whatever --tint a theme or setting sets */
+  :root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
     --tint-hover: color-mix(in srgb, var(--tint), var(--tint-mix) 9%);
     --tint-pressed: color-mix(in srgb, var(--tint), var(--tint-mix) 18%);
     --tint-subtle: color-mix(in srgb, var(--tint) 16%, transparent);

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tasks</title>
+<link rel="stylesheet" href="/kit/tokens.css">
+<link rel="stylesheet" href="/kit/kit.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="tasks" data-screen="lists">
+  <aside id="side" class="glass" aria-label="Lists">
+    <div class="side-head"><sol-nav></sol-nav><input id="q" type="search" placeholder="Search" aria-label="Search tasks" autocomplete="off"></div>
+    <div class="side-scroll">
+      <div id="tiles" class="tiles" role="list"></div>
+      <h2 class="group-title">My Lists</h2>
+      <div id="lists" class="list lists" role="list"></div>
+    </div>
+    <footer class="side-foot"><button id="add-list" class="plain" type="button"><sol-icon name="plus"></sol-icon>Add List</button></footer>
+  </aside>
+  <main id="main" aria-label="Tasks">
+    <header id="bar" class="bar">
+      <button id="back" class="plain" type="button" aria-label="Back to lists"><sol-icon name="back"></sol-icon><span>Lists</span></button>
+      <div id="actions" class="bar-actions"></div>
+    </header>
+    <div id="scroll" class="scroll">
+      <div class="head"><h1 id="title"></h1><span id="count" class="count"></span></div>
+      <div id="banner" class="banner" hidden></div>
+      <div id="items"></div>
+    </div>
+    <form id="quick" class="quick glass" autocomplete="off">
+      <button class="add" type="submit" aria-label="Add task"><sol-icon name="plus"></sol-icon></button>
+      <div class="field"><input id="quick-in" name="t" placeholder="New task" aria-label="New task, with a date such as tomorrow 9am" enterkeyhint="done"><small id="hint" class="hint" aria-live="polite"></small></div>
+    </form>
+  </main>
+  <aside id="detail" class="detail glass" aria-label="Details" hidden></aside>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

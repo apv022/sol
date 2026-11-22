@@ -54,5 +54,24 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps this device's Sol node running so it stays reachable by the devices it is paired with" />
         </service>
+
+        <!-- The synced folder as "Sol" in the system Files app and file pickers (DriveProvider). -->
+        <provider
+            android:name=".DriveProvider"
+            android:authorities="app.sol.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <!-- Files handed to a viewer app (a PDF preview), read-only, by per-intent grant only. -->
+        <provider
+            android:name=".OpenProvider"
+            android:authorities="app.sol.open"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

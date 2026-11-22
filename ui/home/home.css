@@ -9,13 +9,20 @@ body { overflow: hidden; background: var(--canvas); }
 /* ---------- shell ---------- */
 .shell { position: relative; z-index: 1; display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: var(--space-3); height: 100vh; height: 100dvh; padding: var(--space-3); }
 .sidebar { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); border-radius: var(--radius-sheet); box-shadow: var(--shadow-float), inset 0 0 0 var(--hairline) var(--glass-edge); overflow-y: auto; }
-.brand { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-2) var(--space-4); font-size: var(--fs-title-2); line-height: var(--lh-title-2); font-weight: 700; letter-spacing: var(--tr-title-2); }
-.brand-sun { width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, var(--tint-hover), var(--tint) 60%, var(--tint-pressed)); box-shadow: 0 0 12px var(--tint-subtle-hover); }
+.brand { color: inherit; text-decoration: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-2) var(--space-4); font-size: var(--fs-title-2); line-height: var(--lh-title-2); font-weight: 700; letter-spacing: var(--tr-title-2); }
+.brand-sun { width: 28px; height: 28px; flex: none; }
 .side-item { display: flex; align-items: center; gap: var(--space-2); min-height: var(--row-h); padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--label); text-decoration: none; font-weight: 500; }
 .side-item sol-icon { color: var(--tint-text); }
 @media (hover: hover) { .side-item:hover { background: var(--surface-hover); } }
 .side-item[aria-current="page"] { background: var(--tint-subtle); }
 .side-item .badge { margin-left: auto; }
+.side-group { display: flex; flex-direction: column; gap: 2px; }
+.side-label { padding: var(--space-1) var(--space-2); font-size: var(--fs-footnote); font-weight: 600; color: var(--label-2); text-transform: uppercase; letter-spacing: .04em; }
+.side-app { min-height: 36px; }
+.side-app sol-app-icon, .side-app .app-img { --size: 24px; flex: none; }
+.side-app[data-off] { opacity: .6; }
+.side-none { padding: 0 var(--space-2); color: var(--label-2); font-size: var(--fs-subhead); }
+.side-sep { height: var(--hairline); margin: var(--space-2) var(--space-2); background: var(--separator); flex: none; }
 .spacer { flex: 1; }
 .me { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-control); }
 .me strong, .me small { display: block; line-height: 1.25; }
@@ -23,14 +30,14 @@ body { overflow: hidden; background: var(--canvas); }
 
 main { position: relative; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--label-3) transparent; overflow-y: auto; border-radius: var(--radius-sheet); outline: none; -webkit-overflow-scrolling: touch; }
 .shell:not([data-route="home"]) main { background: var(--canvas); box-shadow: var(--shadow-float); }
-.dock, .tabbar { display: none; }
+.tabbar { display: none; }
 
 /* ---------- Home ---------- */
-.home { position: relative; max-width: 1040px; margin: 0 auto; padding: var(--space-6) var(--space-6) 120px; color: var(--wp-ink); }
-.hero { padding: var(--space-5) 0 var(--space-6); text-shadow: 0 1px 18px var(--wp-shadow); }
-.hero .date { margin: 0; font-size: var(--fs-headline); font-weight: 500; color: var(--wp-ink-2); }
-.hero .clock { margin: 0; font-size: 88px; line-height: 1; font-weight: 700; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
-.hero .greet { margin: var(--space-2) 0 0; font-size: var(--fs-title-1); font-weight: 600; color: var(--wp-ink); }
+.home { position: relative; max-width: 1040px; margin: 0 auto; padding: var(--space-6) var(--space-6) var(--space-7); color: var(--wp-ink); }
+/* a calm greeting and the date: small, not a clock */
+.hero { padding: var(--space-2) 0 var(--space-5); text-shadow: 0 1px 18px var(--wp-shadow); }
+.hero .greet { margin: 0; font-size: var(--fs-large-title); line-height: var(--lh-large-title); font-weight: 700; letter-spacing: var(--tr-large-title); color: var(--wp-ink); }
+.hero .date { margin: var(--space-1) 0 0; font-size: var(--fs-headline); font-weight: 500; color: var(--wp-ink-2); }
 .widgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-6); }
 .widgets .widget { text-decoration: none; color: var(--label); min-height: 118px; position: relative; box-shadow: var(--shadow-float), inset 0 0 0 var(--hairline) var(--glass-edge); transition: transform var(--dur-press) var(--ease-spring); }
 .widgets .widget:active { transform: scale(var(--press-scale)); }
@@ -41,10 +48,11 @@ main { position: relative; min-width: 0; scrollbar-width: thin; scrollbar-color:
 .widget-body .widget-row { margin-top: var(--space-1); }
 .widget sol-ring { position: absolute; right: var(--space-4); top: var(--space-4); }
 .home-cols { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-5); align-items: start; }
-.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: var(--space-5) var(--space-3); }
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: var(--space-4) var(--space-3); }
+.app-grid.in-page .app { color: var(--label); text-shadow: none; }
 .app { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); color: var(--wp-ink); text-decoration: none; font-size: var(--fs-subhead); font-weight: 500; text-shadow: 0 1px 6px var(--wp-shadow); text-align: center; min-width: 0; }
 .app span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app sol-app-icon, .app .app-img { --size: 68px; transition: transform var(--dur-press) var(--ease-spring); }
+.app sol-app-icon, .app .app-img { --size: 56px; transition: transform var(--dur-press) var(--ease-spring); }
 .app:active sol-app-icon, .app:active .app-img { transform: scale(var(--press-scale)); }
 .app[data-off] { opacity: .6; }
 .app-img { display: inline-block; width: var(--size); height: var(--size); border-radius: var(--radius-icon); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-1); }
@@ -60,15 +68,6 @@ main { position: relative; min-width: 0; scrollbar-width: thin; scrollbar-color:
 .mini-actions button { min-height: 28px; }
 .empty-sm { padding: var(--space-4); text-align: center; color: var(--label-2); font-size: var(--fs-subhead); }
 
-.dock { position: fixed; left: 50%; bottom: var(--space-4); translate: -50% 0; z-index: 5; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: 26px; box-shadow: var(--shadow-float), inset 0 0 0 var(--hairline) var(--glass-edge); align-items: center; }
-.dock a { position: relative; display: block; text-decoration: none; transition: transform var(--dur-fade) var(--ease-spring); }
-@media (hover: hover) { .dock a:hover { transform: translateY(-6px) scale(1.12); } }
-.dock sol-app-icon { --size: 50px; }
-.dock .sep { width: var(--hairline); align-self: stretch; margin: var(--space-1) 0; background: var(--separator); }
-.dock .dot { position: absolute; left: 50%; bottom: -5px; width: 4px; height: 4px; translate: -50% 0; border-radius: 50%; background: var(--label-2); }
-@media (min-width: 761px) { .dock { display: flex; } }
-.dock-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: var(--on-tint); font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
-.shell:not([data-route="home"]) .dock { display: none; }
 
 /* orchestrated moment: the sun rises, icons settle (first load only, off for reduced motion) */
 .first .wallpaper .sun { animation: sun-rise 1.8s var(--ease-spring) both; }
@@ -101,9 +100,18 @@ main { position: relative; min-width: 0; scrollbar-width: thin; scrollbar-color:
 .swatches { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; }
 .swatch { width: 26px; min-width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; background: var(--sw); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
 .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sw); }
-.swatch-custom { width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; overflow: hidden; background: none; }
+/* the custom colour: a ring of the palette's colours until one is picked, then that colour; the native
+   colour input fills it, invisible, so a tap opens the browser's own picker */
+.swatch-pick { position: relative; display: inline-block; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; background: conic-gradient(var(--red), var(--orange), var(--green), var(--blue), var(--red)); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
+.swatch-pick[data-on="true"] { background: var(--sw); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sw); }
+.swatch-pick input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.swatch-pick:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
 .wps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); padding: var(--space-3) var(--row-pad); }
 .wps button { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); padding: 0; background: none; min-height: 0; font-size: var(--fs-footnote); color: var(--label-2); justify-items: center; }
+.wps-item { position: relative; min-width: 0; }
+.wps-item > button:first-child { width: 100%; }
+.wp-del { position: absolute; top: var(--space-1); right: var(--space-1); width: 24px; min-width: 24px; height: 24px; min-height: 24px; padding: 0; border-radius: 50%; background: var(--glass); color: var(--label); box-shadow: var(--shadow-1); }
+.wp-del sol-icon { --size: 14px; }
 .wps .wp { display: block; width: 100%; aspect-ratio: 4 / 3; border-radius: var(--radius-group); box-shadow: inset 0 0 0 var(--hairline) var(--separator); }
 .wps .wp .sun { width: 60%; height: 60%; min-width: 0; min-height: 0; }
 .wps button[aria-pressed="true"] .wp { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--tint); }
@@ -125,6 +133,7 @@ sol-qr svg { display: block; width: 100%; height: 100%; }
 details.adv > summary { list-style: none; cursor: pointer; }
 details.adv > summary::-webkit-details-marker { display: none; }
 details.adv[open] > summary [data-chevron]::before { rotate: 90deg; }
+.keybox { width: 100%; font-family: var(--font-mono); font-size: var(--fs-footnote); resize: vertical; }
 code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); }
 .inline-actions { display: flex; gap: var(--space-2); }
 
@@ -132,23 +141,26 @@ code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2)
 .locked { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: var(--space-4); background: var(--scrim); }
 .locked-card { display: grid; justify-items: center; text-align: center; gap: var(--space-2); max-width: 380px; padding: var(--space-6) var(--space-5); border-radius: var(--radius-sheet); box-shadow: var(--shadow-float); }
 .locked-card h1 { margin: var(--space-3) 0 0; }
+.locked-logo { width: 72px; height: 72px; }
+.locked-card button { margin-top: var(--space-3); }
 .locked-card p { margin: 0; color: var(--label-2); }
 
 /* ---------- phone ---------- */
 @media (max-width: 760px) {
   .shell { display: block; padding: 0; }
-  .sidebar, .dock { display: none !important; }
-  main { position: absolute; inset: 0; border-radius: 0; padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + var(--space-4)); box-shadow: none !important; }
+  .sidebar { display: none !important; }
+  main { position: absolute; inset: 0; border-radius: 0; padding-bottom: calc(var(--tab-h) + var(--safe-bottom) + var(--space-4)); box-shadow: none !important; }
   .shell:not([data-route="home"]) main { background: var(--canvas); }
-  .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; height: calc(var(--tab-h) + env(safe-area-inset-bottom)); padding: 0 var(--space-1) env(safe-area-inset-bottom); box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator); }
+  .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; height: calc(var(--tab-h) + var(--safe-bottom)); padding: 0 var(--space-1) var(--safe-bottom); box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator); }
   .tabbar a { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: var(--label-2); font-size: 10px; line-height: 12px; font-weight: 500; }
   .tabbar a sol-icon { --size: 24px; }
   .tabbar a[aria-current="page"] { color: var(--tint-text); }
   .tabbar .badge { position: absolute; top: 4px; left: 54%; background: var(--red); color: var(--on-tint); }
-  .home { padding: calc(var(--space-5) + env(safe-area-inset-top)) var(--space-4) var(--space-6); }
-  .hero { padding: var(--space-3) 0 var(--space-4); }
-  .hero .clock { font-size: 72px; }
-  .hero .greet { font-size: var(--fs-title-2); }
+  .home { padding: calc(var(--space-3) + var(--safe-top)) var(--space-4) var(--space-5); }
+  .hero { padding: var(--space-1) 0 var(--space-3); }
+  .hero .greet { font-size: var(--fs-title-1); line-height: var(--lh-title-1); }
+  .hero .date { font-size: var(--fs-subhead); }
+  .home-cols > section { display: none; }
   .widgets { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: var(--space-5); }  /* two columns, nothing cut off; the third widget spans both */
   .widgets .widget { min-height: 112px; }
   .widgets .widget:nth-child(3) { grid-column: 1 / -1; min-height: 96px; }
@@ -156,8 +168,9 @@ code.inline { padding: 1px 5px; border-radius: 4px; background: var(--surface-2)
   .home-cols .inbox-card { order: 2; width: 100%; }
   .app-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4) var(--space-2); }
   .app { font-size: var(--fs-footnote); }
-  .app sol-app-icon, .app .app-img { --size: 62px; }
-  .page { padding: calc(var(--space-4) + env(safe-area-inset-top)) var(--space-4) var(--space-6); }
+  .app sol-app-icon, .app .app-img { --size: 60px; }
+  .page { padding: calc(var(--space-3) + var(--safe-top)) var(--space-4) var(--space-6); }
+  .page-head h1 { font-size: var(--fs-title-1); line-height: var(--lh-title-1); letter-spacing: var(--tr-title-1); }
   .wps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .words { grid-template-columns: repeat(2, 1fr); }
 }

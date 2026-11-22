@@ -42,6 +42,8 @@
     {"name": "files.resolve", "description": "Settle a conflict: keep \"this\" (the version that has the name), \"that\" (the other one) or \"both\".",
      "input": {"type": "object", "required": ["path", "keep"], "properties": {"path": {"type": "string"}, "keep": {"type": "string", "enum": ["this", "that", "both"]}}}, "effect": "write"},
     {"name": "files.status", "description": "Sync state of this device and of my other devices.",
-     "input": {"type": "object"}, "effect": "read"}
+     "input": {"type": "object"}, "effect": "read"},
+    {"name": "files.sync", "description": "Rescan the folder and fetch every device's changes now; returns the sync state.",
+     "input": {"type": "object"}, "effect": "write"}
   ]
 }

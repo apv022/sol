@@ -97,8 +97,11 @@ type App struct {
 	rev        uint64
 	view       *view
 
-	index      map[string]idxEntry
-	keep       map[string]bool
+	index map[string]idxEntry
+	keep  map[string]bool
+	// dirsMade is the index of explicit (empty) folders: the ones this device has on disk in
+	// sync with a mkdir in the tree. Like index for files, it tells "removed here, publish the
+	// delete" apart from "new in the tree, create it".
 	dirsMade   map[string]bool
 	noticed    map[string]bool
 	mergeTried map[string]bool // conflicts already given a merge attempt (key: conflictKey)

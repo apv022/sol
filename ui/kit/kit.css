@@ -218,24 +218,40 @@ sol-app-shell[data-sidebar="hidden"] > [slot="nav"] { translate: -100% 0; }
 sol-app-shell[data-sidebar="hidden"] > main, sol-app-shell[data-sidebar="hidden"] > .shell-bar { left: 0; }
 .shell-bar .sidebar-toggle { margin-left: calc(var(--space-2) * -1); }
 
-/* phone: large title that collapses into a glass nav bar, and a glass tab bar */
+/* the way back to Sol (kit.js: /_sol/nav): a group at the top of the sidebar, or a home button in the bar */
+.nav-label { padding: var(--space-1) var(--space-2) 2px; font-size: var(--fs-footnote); font-weight: 600; color: var(--label-2); text-transform: uppercase; letter-spacing: .04em; }
+.sol-group { display: flex; flex-direction: column; gap: 2px; padding-bottom: var(--space-2); margin-bottom: var(--space-2); box-shadow: 0 var(--hairline) 0 var(--separator); }
+.sol-group[hidden], sol-nav[hidden] { display: none; }
+.nav-sol[aria-current="true"] { font-weight: 600; }
+.nav-sol[aria-current="true"] span::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: var(--space-2); border-radius: 50%; background: var(--tint); vertical-align: middle; }
+sol-nav { display: inline-flex; }
+sol-app-shell .shell-bar sol-nav { display: none; }
+sol-app-shell[data-nonav] .shell-bar sol-nav, sol-app-shell[data-sidebar="hidden"] .shell-bar sol-nav { display: inline-flex; margin-left: calc(var(--space-2) * -1); }
+sol-app-shell[data-nonav] .shell-bar sol-nav[hidden], sol-app-shell[data-sidebar="hidden"] .shell-bar sol-nav[hidden] { display: none; }
+.nav-sheet { display: grid; gap: 2px; }
+.nav-sheet-item { display: flex; align-items: center; gap: var(--space-3); min-height: 48px; padding: 0 var(--space-2); border-radius: var(--radius-control); color: var(--label); text-decoration: none; font-weight: 500; }
+.nav-sheet-item[aria-current="true"] { background: var(--tint-subtle); }
+@media (hover: hover) { .nav-sheet-item:hover { background: var(--surface-2); } }
+
+/* phone: a compact glass bar (home button, title, actions) over the page, and a glass tab bar.
+   The large title is hidden here: the bar title says where you are, so a page starts right under
+   the bar instead of under an empty band. */
 @media (max-width: 760px) {
   sol-app-shell > .shell-bar {
-    left: 0; height: calc(var(--bar-h) + env(safe-area-inset-top)); padding: env(safe-area-inset-top) var(--space-3) 0; justify-content: center;
-    background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; transition: background var(--dur-fade);
+    left: 0; height: calc(var(--bar-h) + var(--safe-top)); padding: var(--safe-top) var(--space-3) 0; justify-content: center;
   }
-  sol-app-shell[data-collapsed] > .shell-bar { background: var(--glass); backdrop-filter: var(--glass-filter); -webkit-backdrop-filter: var(--glass-filter); box-shadow: 0 var(--hairline) 0 var(--separator); }
-  .shell-bar .bar-title { font-size: var(--fs-headline); opacity: 0; transition: opacity var(--dur-fade); }
-  sol-app-shell[data-collapsed] .shell-bar .bar-title { opacity: 1; }
+  .shell-bar .bar-title { font-size: var(--fs-headline); }
   .shell-bar .sidebar-toggle { display: none; }
-  .shell-bar .bar-actions { position: absolute; right: var(--space-3); top: env(safe-area-inset-top); height: var(--bar-h); }
-  sol-app-shell main .large-title { display: block; font-size: var(--fs-large-title); line-height: var(--lh-large-title); font-weight: var(--fw-large-title); letter-spacing: var(--tr-large-title); margin: 0 0 var(--space-2); }
+  sol-app-shell .shell-bar sol-nav, sol-app-shell[data-nonav] .shell-bar sol-nav { display: inline-flex; position: absolute; left: var(--space-2); top: var(--safe-top); height: var(--bar-h); align-items: center; margin: 0; }
+  sol-app-shell .shell-bar sol-nav[hidden] { display: none; }
+  .sol-group { display: none; }
+  .shell-bar .bar-actions { position: absolute; right: var(--space-3); top: var(--safe-top); height: var(--bar-h); }
   sol-app-shell > main {
-    left: 0; padding: calc(var(--bar-h) + env(safe-area-inset-top) + var(--space-2)) var(--space-4) calc(var(--tab-h) + env(safe-area-inset-bottom) + var(--space-5));
+    left: 0; padding: calc(var(--bar-h) + var(--safe-top) + var(--space-3)) var(--space-4) calc(var(--tab-h) + var(--safe-bottom) + var(--space-5));
   }
   sol-app-shell > [slot="nav"] {
-    top: auto; width: auto; left: 0; right: 0; height: calc(var(--tab-h) + env(safe-area-inset-bottom)); translate: none !important;
-    flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; padding: 0 var(--space-1) env(safe-area-inset-bottom);
+    top: auto; width: auto; left: 0; right: 0; height: calc(var(--tab-h) + var(--safe-bottom)); translate: none !important;
+    flex-direction: row; justify-content: space-around; align-items: stretch; gap: 0; padding: 0 var(--space-1) var(--safe-bottom);
     box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator);
   }
   sol-app-shell > [slot="nav"] .brand, sol-app-shell > [slot="nav"] .spacer { display: none; }
@@ -284,8 +300,8 @@ sol-dialog .dlg-actions, sol-sheet .dlg-actions { display: flex; justify-content
 @keyframes sol-sheet-up { from { translate: 0 100%; } }
 @media (max-width: 760px) {
   sol-dialog > dialog, sol-sheet > dialog {
-    width: 100%; max-width: 100%; margin: auto 0 0; max-height: calc(100vh - env(safe-area-inset-top) - 12px); max-height: calc(100dvh - env(safe-area-inset-top) - 12px);
-    border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; padding-bottom: env(safe-area-inset-bottom);
+    width: 100%; max-width: 100%; margin: auto 0 0; max-height: calc(100vh - var(--safe-top) - 12px); max-height: calc(100dvh - var(--safe-top) - 12px);
+    border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; padding-bottom: var(--safe-bottom);
     background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none;
   }
   sol-dialog > dialog[open], sol-sheet > dialog[open] { animation: sol-sheet-up var(--dur-sheet) var(--ease-spring); }
@@ -296,7 +312,7 @@ sol-dialog .dlg-actions, sol-sheet .dlg-actions { display: flex; justify-content
 }
 
 /* toast: a banner that slides down from the top */
-sol-toast { position: fixed; z-index: 300; top: calc(env(safe-area-inset-top) + var(--space-3)); left: 50%; translate: -50% 0; display: grid; gap: var(--space-2); pointer-events: none; width: max-content; max-width: calc(100vw - 24px); }
+sol-toast { position: fixed; z-index: 300; top: calc(var(--safe-top) + var(--space-3)); left: 50%; translate: -50% 0; display: grid; gap: var(--space-2); pointer-events: none; width: max-content; max-width: calc(100vw - 24px); }
 sol-toast .toast {
   pointer-events: auto; display: flex; align-items: center; gap: var(--space-3); min-height: 44px; padding: var(--space-2) var(--space-4);
   background: var(--glass); backdrop-filter: var(--glass-filter); -webkit-backdrop-filter: var(--glass-filter); color: var(--label);

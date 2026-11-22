@@ -155,6 +155,12 @@ func TestInstallRunAndUI(t *testing.T) {
 	if w := get("echo.localhost:7777", "/_sol/theme.css", nil); w.Body.String() != ":root{--tint:red}" {
 		t.Fatal(w.Body.String())
 	}
+	// /_sol/nav names Home and the apps that have a UI, marking the one asked.
+	if w := get("echo.localhost:7777", "/_sol/nav", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"home":"http://localhost:7777/"`) ||
+		!strings.Contains(w.Body.String(), `"id":"echo"`) || !strings.Contains(w.Body.String(), `"current":true`) ||
+		!strings.Contains(w.Body.String(), `"url":"http://echo.localhost:7777/"`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
 	// The bridge adds the app's bridge token.
 	if w := get("echo.localhost:7777", "/_sol/v1/whoami", nil); w.Code != 204 {
 		t.Fatal(w.Code)

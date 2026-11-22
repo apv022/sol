@@ -1,4 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Sol logo (64x64 viewBox) on the 108dp adaptive canvas: the 64-unit square is scaled to the
+     central 66dp safe zone; the #0d1117 rounded square is the adaptive background. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#ff8c2b" android:pathData="M54,36a18,18 0 1,0 0.01,0z" />
+    <group android:translateX="21" android:translateY="21" android:scaleX="1.03125" android:scaleY="1.03125">
+        <group android:translateX="4.8" android:translateY="4.8" android:scaleX="0.85" android:scaleY="0.85">
+            <path android:fillColor="#ff8c2b" android:pathData="M24,32a8,8 0 1,0 16,0a8,8 0 1,0 -16,0z" />
+            <path android:strokeColor="#ff8c2b" android:strokeWidth="5" android:strokeLineCap="round"
+                android:fillColor="#00000000" android:pathData="M15.26,34.95A17,17 0 1,1 29.05,48.74" />
+            <path android:strokeColor="#ff8c2b" android:strokeWidth="5" android:strokeLineCap="round"
+                android:fillColor="#00000000" android:pathData="M57.61,27.49A26,26 0 1,1 36.51,6.39" />
+        </group>
+    </group>
 </vector>

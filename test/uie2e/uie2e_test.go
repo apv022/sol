@@ -1,6 +1,6 @@
 // Package uie2e runs the Sol app UI against two real daemons in headless Firefox and asserts
 // what it renders (ticket A5b). It builds sol into a temp dir, inits Alice (laptop; Files and
-// Notes come with every init) and Bob, pairs them, logs a fresh Firefox profile in with a
+// Notes and Tasks come with every init) and Bob, pairs them, logs a fresh Firefox profile in with a
 // one-time login code, and reads the page's self-test report (app.js, `?selftest=1`, honoured
 // only by a daemon started with SOL_UI_SELFTEST=1).
 //
@@ -181,10 +181,10 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 	if v, _ := widget("People online"); v != "1" {
 		t.Errorf("People online = %q, want 1", v)
 	}
-	if v, sub := widget("Storage"); v == "" || !strings.HasPrefix(sub, "of ") {
+	if v, sub := widget("Storage"); v == "" || !strings.HasSuffix(sub, " free on this device") {
 		t.Errorf("Storage widget %q %q", v, sub)
 	}
-	for _, want := range []string{"Files", "Notes"} {
+	for _, want := range []string{"Files", "Notes", "Tasks"} {
 		if !anyHas(home.Apps, want) {
 			t.Errorf("app grid %v lacks %s", home.Apps, want)
 		}
@@ -213,6 +213,8 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 
 	if dir := os.Getenv("SOL_UI_SHOTS"); dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
+		// One visit first, so the shots below paint from the cache the way a returning visitor sees it.
+		_ = ffRun("--screenshot", filepath.Join(tmp, "prime.png"), "--window-size", "1280,800", base+"/?shot=1").Run()
 		for _, sc := range []struct {
 			name string
 			w, h int
@@ -222,6 +224,24 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 				c := ffRun("--screenshot", out, "--window-size", fmt.Sprintf("%d,%d", sc.w, sc.h), base+"/?shot=1&theme="+th)
 				if o, err := c.CombinedOutput(); err != nil {
 					t.Errorf("screenshot %s: %v\n%s", out, err, o)
+				}
+			}
+		}
+		// The way back to Sol inside apps (/_sol/nav, drawn by ui/kit): the first visit signs the
+		// browser in on the app origin and caches the list, the second paints it at once.
+		port := base[strings.LastIndex(base, ":")+1:]
+		for _, id := range []string{"files", "notes", "tasks"} {
+			u := "http://" + id + ".localhost:" + port + "/"
+			_ = ffRun("--screenshot", filepath.Join(tmp, "prime.png"), "--window-size", "1280,800", u).Run()
+			for _, sc := range []struct {
+				name string
+				w, h int
+			}{{"desktop", 1280, 800}, {"phone", 390, 844}} {
+				for _, th := range []string{"light", "dark"} {
+					out := filepath.Join(dir, fmt.Sprintf("app-%s-%s-%s.png", id, sc.name, th))
+					if o, err := ffRun("--screenshot", out, "--window-size", fmt.Sprintf("%d,%d", sc.w, sc.h), u+"?theme="+th).CombinedOutput(); err != nil {
+						t.Errorf("screenshot %s: %v\n%s", out, err, o)
+					}
 				}
 			}
 		}

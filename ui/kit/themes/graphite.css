@@ -1,10 +1,29 @@
 /* @theme    Graphite
    @author   Sol
    @supports light dark
-   Neutral and quiet: the same shapes as Sol, with a graphite accent instead of gold. */
-:root { --tint: #5B6572; --canvas: #F2F2F3; --green: #2FA84F; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tint: #A9B2BE; --canvas: #000000; --green: #30D158; } }
-:root[data-theme="dark"] { --tint: #A9B2BE; --canvas: #000000; --green: #30D158; }
+   Neutral and quiet: the same shapes as Sol, in true greys with a graphite accent instead of gold. */
+/* Greys only: neutral canvas, panels and labels (Sol's own are tinted blue), flatter glass. */
+:root {
+  --tint: #5B6572; --green: #2FA84F;
+  --canvas: #E4E5E7; --surface: #F4F4F5; --surface-2: #D6D8DB;
+  --glass: rgba(244, 244, 245, .86);
+  --label: #1A1B1D; --label-2: rgba(26, 27, 29, .62); --label-3: rgba(26, 27, 29, .32);
+  --separator: rgba(26, 27, 29, .16);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --tint: #A9B2BE; --green: #30D158;
+  --canvas: #0C0C0D; --surface: #1B1C1E; --surface-2: #2A2C2F;
+  --glass: rgba(27, 28, 30, .86);
+  --label: #ECEDEE; --label-2: rgba(236, 237, 238, .62); --label-3: rgba(236, 237, 238, .32);
+  --separator: rgba(236, 237, 238, .16);
+} }
+:root[data-theme="dark"] {
+  --tint: #A9B2BE; --green: #30D158;
+  --canvas: #0C0C0D; --surface: #1B1C1E; --surface-2: #2A2C2F;
+  --glass: rgba(27, 28, 30, .86);
+  --label: #ECEDEE; --label-2: rgba(236, 237, 238, .62); --label-3: rgba(236, 237, 238, .32);
+  --separator: rgba(236, 237, 238, .16);
+}
 /* solid shades for browsers without color-mix(); elsewhere they derive from --tint */
 @supports not (color: color-mix(in srgb, red, blue)) {
   :root { --tint-hover: #535C68; --tint-pressed: #4B535D; --tint-subtle: rgba(91, 101, 114, .16); --tint-subtle-hover: rgba(91, 101, 114, .24); --tint-text: #434A52; --focus-ring: rgba(91, 101, 114, .7); }

@@ -2,6 +2,7 @@ package apphost
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net"
 	"net/http"
@@ -24,8 +25,10 @@ import (
 // origin's own stylesheets: no style attributes or <style> elements in markup, so injected
 // markup can't restyle a page either. UIs set computed values through the CSSOM
 // (element.style.setProperty, which the policy allows) or sol.js's data-var-* attributes.
+// frame-ancestors is 'self', not 'none': an origin may frame its own pages (Files shows a PDF in
+// the browser's viewer through an <iframe> of /raw), while no other origin, app or website can.
 const CSP = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; " +
-	"style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	"style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
 
 var themeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
@@ -118,6 +121,8 @@ func (h *Host) serveApp(w http.ResponseWriter, r *http.Request, a *app, origin s
 		return
 	}
 	switch p := r.URL.Path; {
+	case p == "/_sol/nav":
+		h.nav(w, r, a)
 	case strings.HasPrefix(p, "/_sol/v1/"):
 		h.bridge(w, r, a, origin)
 	case strings.HasPrefix(p, "/_sol/"):
@@ -186,6 +191,44 @@ func (h *Host) bridge(w http.ResponseWriter, r *http.Request, a *app, origin str
 		return
 	}
 	h.cfg.Bridge.ServeHTTP(w, r2)
+}
+
+// navApp is one entry of the /_sol/nav list.
+type navApp struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Icon    string `json:"icon,omitempty"`
+	URL     string `json:"url"`
+	Current bool   `json:"current"`
+}
+
+// nav serves GET /_sol/nav on an app origin: where Home is and which apps have a UI, so the
+// kit's app shell can offer a way back without any work in the app. It reveals nothing the
+// caller (already past the origin checks and the sign-in gate) could not get from the Sol app,
+// and it is read-only, so it never reaches the API bridge.
+func (h *Host) nav(w http.ResponseWriter, r *http.Request, a *app) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		sol.WriteError(w, sol.Errorf("invalid", "GET only"))
+		return
+	}
+	_, port, _ := net.SplitHostPort(r.Host)
+	p, _ := strconv.Atoi(port)
+	apps := []navApp{}
+	h.mu.Lock()
+	for _, s := range h.statusLocked() {
+		if !s.UI {
+			continue
+		}
+		icon := ""
+		if m := h.apps[s.ID]; m != nil {
+			icon = m.m.Icon
+		}
+		apps = append(apps, navApp{ID: s.ID, Name: s.Name, Icon: icon, URL: AppURL(s.ID, p), Current: s.ID == a.m.ID})
+	}
+	h.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	_ = json.NewEncoder(w).Encode(map[string]any{"home": "http://localhost:" + port + "/", "apps": apps})
 }
 
 // theme serves /_sol/theme.css: <files>/.sol/theme names the active theme; it is looked up in

@@ -115,7 +115,7 @@ func (s *server) status() m {
 		"transports":    []m{{"name": "clearnet", "state": "up"}, {"name": "relay", "state": "up"}, {"name": "tor", "state": "off"}},
 		"peer_sessions": []m{{"id": "s1", "peer": "Bob \u00b7 Bob's phone", "relation": "contact", "since": ago(20 * time.Minute)}},
 		"sessions":      []m{{"id": "b1", "client": "Firefox on Linux", "created": ago(24 * time.Hour), "last_used": now(), "expires": ago(-29 * 24 * time.Hour), "current": true}, {"id": "b2", "client": "Chrome on Android", "created": ago(9 * 24 * time.Hour), "last_used": ago(48 * time.Hour), "expires": ago(-21 * 24 * time.Hour)}},
-		"storage":       m{"used": 14_200_000_000, "total": 64_000_000_000},
+		"storage":       m{"used": 2_400_000_000, "free": 49_800_000_000, "total": 64_000_000_000, "measured": true},
 	}
 }
 
@@ -238,6 +238,12 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 		ok()
 	case p == "agents":
 		write(w, 200, s.agents)
+	case p == "wallpapers":
+		write(w, 200, []m{})
+	case p == "actions":
+		write(w, 200, []m{{"id": "files", "name": "Files", "actions": []m{{"name": "files.list", "effect": "read"}, {"name": "files.rename", "effect": "write"}}}})
+	case p == "agents/new":
+		write(w, 200, m{"agent": m{"name": body["name"], "scopes": body["scopes"]}, "key_file": "{\"name\": \"demo\", \"key\": \"(dev server: not a real key)\"}", "path": "/home/dev/.sol/agents/demo.key"})
 	case parts[0] == "agents" && len(parts) == 3:
 		i := s.find(s.agents, "name", parts[1])
 		if i >= 0 {
@@ -302,6 +308,16 @@ func main() {
 	mux.HandleFunc("/admin/v1/", s.admin)
 	mux.Handle("/kit/", http.StripPrefix("/kit/", http.FileServerFS(kit.FS)))
 	mux.Handle("/sol.js", http.FileServerFS(js.FS))
+	mux.HandleFunc("/_sol/theme.css", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		name, _ := s.theme["name"].(string)
+		s.mu.Unlock()
+		if _, err := fs.Stat(kit.FS, "themes/"+name+".css"); err != nil {
+			name = "sol"
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFileFS(w, r, kit.FS, "themes/"+name+".css")
+	})
 	var ui fs.FS = home.FS
 	if *dir != "" {
 		ui = os.DirFS(*dir)

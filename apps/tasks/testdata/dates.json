@@ -1,0 +1,446 @@
+{
+ "now": "2026-11-18T10:30",
+ "cases": [
+  {
+   "in": "buy milk",
+   "title": "buy milk",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "call mom tomorrow 9am",
+   "title": "call mom",
+   "due": "2026-11-19",
+   "time": "09:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "Call Mom Tomorrow 9AM",
+   "title": "Call Mom",
+   "due": "2026-11-19",
+   "time": "09:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "pay rent today",
+   "title": "pay rent",
+   "due": "2026-11-18",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "tomorrow",
+   "title": "tomorrow",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "dentist next fri",
+   "title": "dentist",
+   "due": "2026-11-20",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "dentist on friday at 3pm",
+   "title": "dentist",
+   "due": "2026-11-20",
+   "time": "15:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "gym on wed",
+   "title": "gym",
+   "due": "2026-11-25",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "gym this wed",
+   "title": "gym",
+   "due": "2026-11-18",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "sat morning",
+   "title": "sat morning",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "lunch with sam saturday noon",
+   "title": "lunch with sam",
+   "due": "2026-11-21",
+   "time": "12:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "in 3 days renew passport",
+   "title": "renew passport",
+   "due": "2026-11-21",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "renew passport in 2 weeks",
+   "title": "renew passport",
+   "due": "2026-12-02",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "review in 1 month",
+   "title": "review",
+   "due": "2026-12-18",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "stretch in 2 hours",
+   "title": "stretch",
+   "due": "2026-11-18",
+   "time": "12:30",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "tea in 45 min",
+   "title": "tea",
+   "due": "2026-11-18",
+   "time": "11:15",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "water plants every monday",
+   "title": "water plants",
+   "due": "2026-11-23",
+   "time": "",
+   "repeat": "weekly",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "standup every wed 9:15",
+   "title": "standup",
+   "due": "2026-11-18",
+   "time": "09:15",
+   "repeat": "weekly",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "take vitamins every day at 8am",
+   "title": "take vitamins",
+   "due": "2026-11-18",
+   "time": "08:00",
+   "repeat": "daily",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "backup every month",
+   "title": "backup",
+   "due": "2026-11-18",
+   "time": "",
+   "repeat": "monthly",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "insurance every year",
+   "title": "insurance",
+   "due": "2026-11-18",
+   "time": "",
+   "repeat": "yearly",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "plan trip next week",
+   "title": "plan trip",
+   "due": "2026-11-25",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "taxes next month",
+   "title": "taxes",
+   "due": "2026-12-18",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "party nov 25",
+   "title": "party",
+   "due": "2026-11-25",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "party on December 3rd at 7pm",
+   "title": "party",
+   "due": "2026-12-03",
+   "time": "19:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "25 dec gifts",
+   "title": "gifts",
+   "due": "2026-12-25",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "conference jan 9",
+   "title": "conference",
+   "due": "2027-01-09",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "old thing nov 3",
+   "title": "old thing",
+   "due": "2027-11-03",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "file 2026-12-01 at 14:30",
+   "title": "file",
+   "due": "2026-12-01",
+   "time": "14:30",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "holiday 12/24",
+   "title": "holiday",
+   "due": "2026-12-24",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "call at 5",
+   "title": "call",
+   "due": "2026-11-18",
+   "time": "17:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "breakfast at 8",
+   "title": "breakfast",
+   "due": "2026-11-19",
+   "time": "08:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "lunch at 12",
+   "title": "lunch",
+   "due": "2026-11-18",
+   "time": "12:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "read at 9am",
+   "title": "read",
+   "due": "2026-11-19",
+   "time": "09:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "read at 11:00pm",
+   "title": "read",
+   "due": "2026-11-18",
+   "time": "23:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "movie tonight",
+   "title": "movie",
+   "due": "2026-11-18",
+   "time": "20:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "movie tonight 9pm",
+   "title": "movie",
+   "due": "2026-11-18",
+   "time": "21:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "stretch this afternoon",
+   "title": "stretch",
+   "due": "2026-11-18",
+   "time": "15:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "milk #groceries",
+   "title": "milk",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": "groceries"
+  },
+  {
+   "in": "eggs tomorrow #Groceries !",
+   "title": "eggs",
+   "due": "2026-11-19",
+   "time": "",
+   "repeat": "",
+   "flag": true,
+   "list": "Groceries"
+  },
+  {
+   "in": "! urgent report",
+   "title": "urgent report",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": true,
+   "list": ""
+  },
+  {
+   "in": "wow!",
+   "title": "wow!",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "tmrw 7am",
+   "title": "tmrw 7am",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "workout tmrw 7am",
+   "title": "workout",
+   "due": "2026-11-19",
+   "time": "07:00",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "submit report by friday",
+   "title": "submit report",
+   "due": "2026-11-20",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "sun and moon",
+   "title": "sun and moon",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "may the force be with you",
+   "title": "may the force be with you",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "2 may",
+   "title": "2 may",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  },
+  {
+   "in": "pay bill 31 feb",
+   "title": "pay bill 31 feb",
+   "due": "",
+   "time": "",
+   "repeat": "",
+   "flag": false,
+   "list": ""
+  }
+ ]
+}

@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	sold "github.com/apv022/sol/internal/daemon"
@@ -153,5 +156,21 @@ func TestRestartRedials(t *testing.T) {
 	}
 	if ev := <-evs; ev.Entry == nil || string(ev.Entry.Body) != `"two"` {
 		t.Fatalf("%+v", ev)
+	}
+}
+
+// TestPairPersistsPeers: both sides of a pairing write the other's bundle to peers.json during
+// the pairing handshake itself, so a device restarted right after pairing (before any other
+// handshake) still knows where to redial. This once depended on a second handshake happening
+// to run first.
+func TestPairPersistsPeers(t *testing.T) {
+	alice := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, nil)
+	bob := startNode(t, sold.InitOptions{Name: "Bob", Device: "phone"}, nil)
+	pairNodes(t, alice, bob)
+	for _, c := range []struct{ d, peer *sold.Daemon }{{alice, bob}, {bob, alice}} {
+		b, err := os.ReadFile(filepath.Join(c.d.Dir(), "peers.json"))
+		if err != nil || !strings.Contains(string(b), c.peer.DeviceID()) {
+			t.Fatalf("%s peers.json lacks %s: %v", c.d.Dir(), c.peer.DeviceID(), err)
+		}
 	}
 }

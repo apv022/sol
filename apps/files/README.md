@@ -26,4 +26,5 @@ go test -race ./apps/files/
 ```
 
 They run against `memsol` with real temp folders, a real inotify watcher on Linux and the scan
-fallback elsewhere.
+fallback elsewhere. The viewer's browser tests are in `test/` (`make browser-test`). A link to a
+file, `http://127.0.0.1:8787/#/Photos/dusk.png`, opens it in the viewer.

@@ -294,8 +294,23 @@ func (a *App) localDir(ctx context.Context, p string) error {
 				}
 			}
 		}
+		if v = a.getView(); v.explicit[p] {
+			a.markDir(p, true)
+		}
 	}
 	return first
+}
+
+// markDir records (or forgets) that the explicit folder p exists on this device's disk.
+func (a *App) markDir(p string, on bool) {
+	a.mu.Lock()
+	if on {
+		a.dirsMade[p] = true
+	} else {
+		delete(a.dirsMade, p)
+	}
+	a.mu.Unlock()
+	a.markDirty()
 }
 
 // localGone publishes the deletion of a path (or a folder of paths) that vanished from disk.
@@ -327,12 +342,26 @@ func (a *App) localGone(ctx context.Context, p string) error {
 			}
 		}
 	}
-	if v.explicit[p] {
-		if _, _, err := v.route(p); err == nil && !under(p, sharedDir) {
-			if err := a.commit(ctx, body{Op: opDelete, Path: p}); err != nil && first == nil {
+	// Explicit folders at or below p (an empty folder carries no index entry, so without this a
+	// removed or renamed empty folder would stay in the tree and be put back on disk).
+	var dirs []string
+	for d := range v.explicit {
+		if under(d, p) && v.roots[d] == nil {
+			dirs = append(dirs, d)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, d := range dirs {
+		if _, _, err := v.route(d); err != nil {
+			continue
+		}
+		if err := a.commit(ctx, body{Op: opDelete, Path: d}); err != nil {
+			if first == nil {
 				first = err
 			}
+			continue
 		}
+		a.markDir(d, false)
 	}
 	return first
 }
@@ -383,6 +412,11 @@ func (a *App) scan(ctx context.Context) error {
 	for k := range a.index {
 		if !seen[k] {
 			missing = append(missing, k)
+		}
+	}
+	for d := range a.dirsMade {
+		if !seen[d] {
+			missing = append(missing, d)
 		}
 	}
 	a.mu.RUnlock()
@@ -477,13 +511,19 @@ func (a *App) reconcilePass(ctx context.Context) (bool, error) {
 		did = true
 	}
 	// Folders.
+	// Folders: create the explicit ones this device has not synced yet. One it already has
+	// (dirsMade) and that is missing from disk was removed or renamed here; the watcher or the
+	// next scan publishes that, and creating it again would undo the person's change.
 	for d := range v.explicit {
-		if a.isKept(d) && ValidatePath(d, false) == nil && !a.ign.ignored(d) {
-			if os.MkdirAll(a.disk(d), 0o755) == nil {
-				a.mu.Lock()
-				a.dirsMade[d] = true
-				a.mu.Unlock()
-			}
+		a.mu.RLock()
+		known := a.dirsMade[d]
+		a.mu.RUnlock()
+		if known || !a.isKept(d) || ValidatePath(d, false) != nil || a.ign.ignored(d) {
+			continue
+		}
+		if os.MkdirAll(a.disk(d), 0o755) == nil {
+			a.markDir(d, true)
+			did = true
 		}
 	}
 	// Folders I made for an explicit mkdir that has since been deleted go away when empty.

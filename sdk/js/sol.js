@@ -160,7 +160,7 @@ export function events({ feeds: fs = [], people: ppl = false, inbox: ib = false 
 // Themes (design/UI.md "Themes", API.md section 10).
 
 const THEME_ID = 'sol-theme';
-const SETTING_VALUES = { density: ['compact'], radius: ['square'], glass: ['off'], font: ['system', 'inter', 'mono'] };
+const SETTING_VALUES = { density: ['compact'], radius: ['square'], glass: ['off'], font: ['inter', 'mono'] };
 
 /**
  * Applies appearance settings to the root element as data- attributes (the kit's contract):

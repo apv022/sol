@@ -1,5 +1,6 @@
 // Browser tests for ui/kit modules (run: make browser-test).
 import { test, assert } from '../testing.js';
+import { setNav } from '../kit.js';
 import { qrMatrix, qrPath } from '../qr.js';
 
 test('qr encodes a long join link at medium error correction', async () => {
@@ -23,4 +24,22 @@ test('<sol-qr> renders an svg', async () => {
   for (let i = 0; i < 50 && !el.querySelector('svg'); i++) await new Promise((r) => setTimeout(r, 20));
   assert.ok(el.querySelector('svg path'), 'svg path drawn');
   el.remove();
+});
+
+test('the app shell shows Home and the apps from /_sol/nav, and drops unsafe URLs', async () => {
+  const shell = document.createElement('sol-app-shell');
+  shell.setAttribute('heading', 'Files');
+  shell.innerHTML = '<nav slot="nav"><a class="nav-item" href="#/">Mine</a></nav><main></main>';
+  document.body.append(shell);
+  assert.ok(setNav({ home: 'http://localhost:7777/', apps: [
+    { id: 'files', name: 'Files', icon: '', url: 'http://files.localhost:7777/', current: true },
+    { id: 'notes', name: '<b>Notes</b>', icon: '', url: 'http://notes.localhost:7777/', current: false },
+    { id: 'evil', name: 'Evil', icon: '', url: 'javascript:alert(1)', current: false }] }));
+  const links = [...shell.querySelectorAll('.sol-group a')];
+  assert.deepEqual(links.map((a) => a.textContent), ['Home', 'Files', '<b>Notes</b>'], 'escaped names, no unsafe app');
+  assert.equal(links[0].getAttribute('href'), 'http://localhost:7777/');
+  assert.equal(links[1].getAttribute('aria-current'), 'true');
+  assert.ok(shell.querySelector('.shell-bar sol-nav:not([hidden])'), 'the phone button is there');
+  assert.ok(!setNav({ home: 'javascript:1', apps: [] }), 'a bad home is refused');
+  shell.remove();
 });

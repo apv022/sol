@@ -48,9 +48,11 @@ import java.util.ArrayList;
  * The one screen: a first-run name form, then a WebView showing Sol's own UIs.
  *
  * The launcher is http://localhost:7777/ and each app is http://&lt;app&gt;.localhost:7777/ in the same
- * WebView (Chromium resolves *.localhost to loopback itself). The page draws under the system bars
- * and the activity pads it by the bar insets and the keyboard (WebView does not supply them to the
- * kit as env()). Shared files are copied into SolDrive/Inbox-from-share and Files is opened.
+ * WebView (Chromium resolves *.localhost to loopback itself). The page draws under transparent
+ * system bars and is told their size as --sol-inset-* CSS properties (WebView does not supply
+ * them to the kit as env()); only the keyboard pads it natively. Shared files are copied into
+ * SolDrive/Inbox-from-share and Files is opened. Pages can reach the shell through
+ * window.SolAndroid (SolBridge).
  */
 public class MainActivity extends Activity {
     private static final String ORIGIN_SUFFIX = "localhost";
@@ -283,6 +285,7 @@ public class MainActivity extends Activity {
         if (setup != null) root.removeView(setup);
         setup = v;
         root.addView(v, new FrameLayout.LayoutParams(-1, -1));
+        padSetup();
     }
 
     private LinearLayout column(String title, String sub) {
@@ -305,18 +308,136 @@ public class MainActivity extends Activity {
         return col;
     }
 
-    /** The two ways in: a new Sol, or this phone as another device of an existing person. */
+    /** The ways in: a new Sol, this phone as another device of an existing person, or a restore. */
     private void showWelcome() {
-        LinearLayout col = column("Welcome to Sol", "Start on your own, or add this phone to the Sol you already have.");
+        LinearLayout col = column("Welcome to Sol", "Start on your own, add this phone to the Sol you already have, or restore from your backup words.");
         Button fresh = new Button(this);
         fresh.setText("Start new");
         fresh.setOnClickListener(v -> showNewName());
         Button join = new Button(this);
         join.setText("Add to my Sol");
         join.setOnClickListener(v -> showJoin(null, false));
+        Button restore = new Button(this);
+        restore.setText("Restore from backup words");
+        restore.setOnClickListener(v -> showRestore());
         col.addView(fresh);
         col.addView(join);
+        col.addView(restore);
         show(col);
+    }
+
+    /**
+     * "Restore from backup words": `libsol.so restore --words ... --name ... --device ...` with
+     * init's --files and --ui, then the node starts as usual. The words go to the node as an
+     * argument only: never stored, logged or kept after the screen. A failed restore leaves no
+     * half-made data directory behind, so the welcome screen still offers every choice.
+     */
+    private void showRestore() {
+        LinearLayout col = column("Restore from backup words",
+                "Type the 24 backup words you wrote down. Restoring brings back who you are, so your contacts "
+                        + "keep trusting you. Your files come back by syncing from your other devices that are still online.");
+        EditText words = new EditText(this);
+        words.setHint("24 words, separated by spaces");
+        words.setMinLines(4);
+        words.setGravity(Gravity.TOP | Gravity.START);
+        // Secret words: no suggestions, no learning by the keyboard, no autofill, all lowercase.
+        words.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        words.setImeOptions(EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        words.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        words.setFilters(new android.text.InputFilter[]{(src, st, en, d, ds, de) -> {
+            String in = src.subSequence(st, en).toString(), low = in.toLowerCase(java.util.Locale.ROOT);
+            return in.equals(low) ? null : low;
+        }});
+        words.setTextColor(textColor());
+        EditText name = new EditText(this);
+        name.setHint("Your name (as your contacts know you)");
+        name.setSingleLine();
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        name.setTextColor(textColor());
+        EditText device = new EditText(this);
+        device.setHint("Device name");
+        device.setSingleLine();
+        device.setText(Build.MODEL);
+        device.setTextColor(textColor());
+        Button go = new Button(this);
+        go.setText("Restore");
+        TextView status = new TextView(this);
+        status.setTextSize(16);
+        status.setPadding(0, dp(16), 0, 0);
+        status.setTextColor(textColor());
+        android.widget.ProgressBar spin = new android.widget.ProgressBar(this);
+        spin.setVisibility(View.GONE);
+        Button back = new Button(this);
+        back.setText("Back");
+        back.setOnClickListener(v -> showWelcome());
+        go.setOnClickListener(v -> {
+            String[] ws = words.getText().toString().toLowerCase(java.util.Locale.ROOT).trim().split("[\\s,]+");
+            int n = ws.length == 1 && ws[0].isEmpty() ? 0 : ws.length;
+            if (n != 24) { words.setError("Enter all 24 words (" + n + " so far)"); return; }
+            String nm = name.getText().toString().trim();
+            if (nm.isEmpty()) { name.setError("Enter your name"); return; }
+            String dev = device.getText().toString().trim();
+            String w = String.join(" ", ws);
+            go.setEnabled(false);
+            back.setEnabled(false);
+            spin.setVisibility(View.VISIBLE);
+            status.setText("Restoring…");
+            new Thread(() -> {
+                String[] r;
+                if (NodeService.initialised(this)) r = new String[]{"1", "This phone already has a Sol."};
+                else {
+                    deleteTree(NodeService.dataDir(this)); // leftovers of an earlier failed attempt
+                    NodeService.driveDir(this).mkdirs();
+                    r = NodeService.cli(this, "restore", "--words", w, "--name", nm,
+                            "--device", dev.isEmpty() ? Build.MODEL : dev,
+                            "--files", NodeService.driveDir(this).getAbsolutePath(), "--ui", "127.0.0.1:" + NodeService.PORT);
+                    if (!r[0].equals("0") || !NodeService.initialised(this)) deleteTree(NodeService.dataDir(this));
+                }
+                boolean ok = r[0].equals("0") && NodeService.initialised(this);
+                String err = ok ? null : restoreFailure(r[1]);
+                runOnUiThread(() -> {
+                    spin.setVisibility(View.GONE);
+                    if (!ok) {
+                        status.setText(err);
+                        go.setEnabled(true);
+                        back.setEnabled(true);
+                        return;
+                    }
+                    words.setText("");
+                    root.removeView(setup);
+                    setup = null;
+                    startNode(null, null, null);
+                    buildWeb();
+                    handleShare(getIntent());
+                    if (pendingLink != null) {
+                        Uri l = Uri.parse(pendingLink);
+                        pendingLink = null;
+                        handleLink(l);
+                    }
+                });
+            }, "sol-restore").start();
+        });
+        col.addView(words);
+        col.addView(name);
+        col.addView(device);
+        col.addView(go);
+        col.addView(spin);
+        col.addView(status);
+        col.addView(back);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.setFillViewport(true);
+        sv.addView(col);
+        show(sv);
+        words.requestFocus();
+    }
+
+    /** What to tell the person when restore fails; the node's text never contains the words. */
+    private static String restoreFailure(String cli) {
+        String t = cli == null ? "" : cli.trim();
+        String low = t.toLowerCase(java.util.Locale.ROOT);
+        if (low.contains("word") || low.contains("checksum") || low.contains("mnemonic"))
+            return "These words are not right. Check each word and their order against your backup, then try again.";
+        return failure(t, "Restoring failed.");
     }
 
     private void showNewName() {
@@ -453,29 +574,104 @@ public class MainActivity extends Activity {
 
     // ---- window ----
 
+    /** The system bar insets (status, navigation, cutout) and the keyboard's, in physical px. */
+    private int insTop, insBottom, insLeft, insRight, insIme;
+
     /**
-     * Draws under transparent bars and pads the content by the bar insets (and the keyboard).
-     * Android's WebView does not fill the kit's env(safe-area-inset-*) with the system bars, so
-     * the padding is applied natively; the window background (the theme's page colour) shows
-     * in the padded strips.
+     * Draws the whole window under transparent status and navigation bars. Nothing is padded
+     * natively except by the keyboard (so a focused field stays above it): the WebView reaches the
+     * screen edges and the page is told the bar insets as the CSS custom properties
+     * --sol-inset-top/-bottom/-left/-right on &lt;html&gt; (pushInsets), which the kit folds into
+     * --safe-*. Android's WebView does not fill env(safe-area-inset-*) with the system bars.
+     * Native setup screens get the insets as margins (padSetup).
      */
     private void edgeToEdge() {
-        root.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        android.view.Window w = getWindow();
+        if (Build.VERSION.SDK_INT >= 30) w.setDecorFitsSystemWindows(false);
+        else root.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        if (Build.VERSION.SDK_INT >= 29) { // no grey scrim behind the bars: the page draws there
+            w.setNavigationBarContrastEnforced(false);
+            w.setStatusBarContrastEnforced(false);
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.view.WindowManager.LayoutParams a = w.getAttributes();
+            a.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            w.setAttributes(a);
+        }
+        barIcons();
         root.setOnApplyWindowInsetsListener((v, ins) -> {
-            int top, bottom;
+            int top, bottom, left, right, ime;
             if (Build.VERSION.SDK_INT >= 30) {
-                top = ins.getInsets(WindowInsets.Type.statusBars()).top;
-                bottom = Math.max(ins.getInsets(WindowInsets.Type.navigationBars()).bottom,
-                        ins.getInsets(WindowInsets.Type.ime()).bottom);
+                android.graphics.Insets b = ins.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                top = b.top; bottom = b.bottom; left = b.left; right = b.right;
+                ime = ins.getInsets(WindowInsets.Type.ime()).bottom;
             } else {
-                top = ins.getSystemWindowInsetTop();
-                bottom = ins.getSystemWindowInsetBottom();
+                top = ins.getStableInsetTop(); bottom = ins.getStableInsetBottom();
+                left = ins.getStableInsetLeft(); right = ins.getStableInsetRight();
+                // With adjustResize the system inset grows by the keyboard; the stable one does not.
+                ime = ins.getSystemWindowInsetBottom() > bottom ? ins.getSystemWindowInsetBottom() : 0;
             }
-            v.setPadding(0, top, 0, bottom);
+            insTop = top; insLeft = left; insRight = right; insIme = ime;
+            insBottom = ime > 0 ? 0 : bottom; // the keyboard covers the navigation bar
+            v.setPadding(0, 0, 0, ime);
+            padSetup();
+            pushInsets();
             return ins;
         });
-        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+    }
+
+    /** Dark bar icons on a light theme, light icons on a dark one (the system's day/night mode). */
+    private void barIcons() {
+        boolean night = (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController c = getWindow().getInsetsController();
+            int both = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            if (c != null) c.setSystemBarsAppearance(night ? 0 : both, both);
+        } else {
+            int f = root.getSystemUiVisibility() & ~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            if (!night) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            root.setSystemUiVisibility(f);
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration c) {
+        super.onConfigurationChanged(c);
+        root.setBackgroundResource(R.color.win_bg);
+        barIcons();
+    }
+
+    /** Keeps a native setup screen clear of the bars (the WebView is not padded; the page is). */
+    private void padSetup() {
+        if (setup == null) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) setup.getLayoutParams();
+        if (lp == null) return;
+        lp.setMargins(insLeft, insTop, insRight, insBottom);
+        setup.setLayoutParams(lp);
+    }
+
+    /**
+     * Tells the current page the bar insets in CSS px: --sol-inset-* on &lt;html&gt;, which
+     * ui/kit/tokens.css folds into --safe-* (max with env()). Run on every page commit and finish
+     * and whenever the insets change, on every local origin (the launcher and each app).
+     */
+    private void pushInsets() {
+        if (web == null) return;
+        String u = web.getUrl();
+        if (u == null || !isLocal(Uri.parse(u))) return;
+        float d = getResources().getDisplayMetrics().density;
+        String js = "(function(s){s.setProperty('--sol-inset-top','" + css(insTop, d) + "');"
+                + "s.setProperty('--sol-inset-bottom','" + css(insBottom, d) + "');"
+                + "s.setProperty('--sol-inset-left','" + css(insLeft, d) + "');"
+                + "s.setProperty('--sol-inset-right','" + css(insRight, d) + "');})(document.documentElement.style)";
+        web.evaluateJavascript(js, null);
+    }
+
+    private static String css(int px, float density) {
+        return String.format(java.util.Locale.ROOT, "%.1fpx", px / density);
     }
 
     // ---- the web view ----
@@ -491,6 +687,9 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
+        // " SolAndroid/<version>" lets the node name this session "Sol app on Android".
+        s.setUserAgentString(s.getUserAgentString() + " SolAndroid/" + versionName());
+        web.addJavascriptInterface(new SolBridge(), "SolAndroid");
         CookieManager.getInstance().setAcceptCookie(true);
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -506,7 +705,17 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) { pageUrl = url; }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView v, String url, boolean reload) { pageUrl = url; }
+
+            @Override
+            public void onPageCommitVisible(WebView v, String url) { pushInsets(); }
+
+            @Override
             public void onPageFinished(WebView v, String url) {
+                pushInsets();
                 // The login redirect has landed on /: now go where the user was headed (Files after a share).
                 if (afterLogin != null && HOME.equals(url)) { String t = afterLogin; afterLogin = null; v.loadUrl(t); }
             }
@@ -525,7 +734,10 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
-        web.setDownloadListener((url, ua, cd, mime, len) -> download(url, cd, mime));
+        web.setDownloadListener((url, ua, cd, mime, len) -> {
+            if (explicitDownload(url, cd)) download(url, cd, mime);
+            else openNative(url, mime, null); // an inline preview (a PDF in an iframe): view, do not save
+        });
         root.addView(web, 0, new FrameLayout.LayoutParams(-1, -1));
     }
 
@@ -666,6 +878,53 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ---- the page's bridge ----
+
+    /** The URL of the top-level page, kept for the bridge (which runs off the UI thread). */
+    private volatile String pageUrl;
+
+    private String versionName() {
+        try {
+            String v = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return v == null ? "0" : v;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return "0";
+        }
+    }
+
+    /**
+     * window.SolAndroid: what a Sol page may ask of the shell. Every method answers only while the
+     * top-level page is a local Sol origin (the launcher or an app on *.localhost:7777); the
+     * WebView never shows other sites itself, but an embedded frame could call it.
+     */
+    private final class SolBridge {
+        private boolean local() {
+            String u = pageUrl;
+            return u != null && isLocal(Uri.parse(u));
+        }
+
+        /** True inside the Android app: the page can hide what makes no sense here (Sign out). */
+        @android.webkit.JavascriptInterface
+        public boolean isApp() { return local(); }
+
+        /**
+         * Opens a file of this node in the system viewer (a PDF reader, a video player): fetched
+         * once into the app cache and handed over as a read-only content:// URI. url may be
+         * relative to the page; it must resolve to a local Sol origin. mime and name may be empty.
+         */
+        @android.webkit.JavascriptInterface
+        public boolean open(String url, String mime, String name) {
+            String page = pageUrl;
+            if (!local() || url == null) return false;
+            Uri u;
+            try { u = Uri.parse(new java.net.URL(new URL(page), url).toString()); }
+            catch (java.net.MalformedURLException e) { return false; }
+            if (!isLocal(u)) return false;
+            runOnUiThread(() -> openNative(u.toString(), mime, name));
+            return true;
+        }
+    }
+
     // ---- downloads ----
 
     /** Fetches a file from the node and saves it into Downloads. Done here, not by DownloadManager,
@@ -689,6 +948,77 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show());
             }
         }, "sol-download").start();
+    }
+
+    /**
+     * Whether the WebView's download is one the user asked to save: Files marks those with
+     * download=1 (and the node then sends Content-Disposition: attachment). Anything else reached
+     * the download listener only because the WebView cannot render it inline (a PDF preview).
+     */
+    static boolean explicitDownload(String url, String disposition) {
+        Uri u = Uri.parse(url);
+        if ("1".equals(u.getQueryParameter("download"))) return true;
+        return disposition != null && disposition.trim().toLowerCase(java.util.Locale.ROOT).startsWith("attachment");
+    }
+
+    /** The last native open per URL, so a preview that fires several times opens once. */
+    private final java.util.Map<String, Long> recentOpens = new java.util.HashMap<>();
+
+    /**
+     * Opens a file of the node in the system viewer instead of saving it to Downloads: fetched
+     * into cacheDir/open/ (reused when the URL, length and ETag match) and handed over by
+     * OpenProvider as a read-only content:// URI. The same URL within 4 seconds opens once.
+     */
+    private void openNative(String url, String mime, String name) {
+        Uri u = Uri.parse(url);
+        if (!isLocal(u)) return;
+        long now = System.currentTimeMillis();
+        Long last = recentOpens.get(url);
+        if (last != null && now - last < 4000) return;
+        recentOpens.put(url, now);
+        String cookie = CookieManager.getInstance().getCookie(url);
+        new Thread(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + NodeService.PORT
+                        + u.getEncodedPath() + (u.getEncodedQuery() != null ? "?" + u.getEncodedQuery() : "")).openConnection();
+                c.setRequestProperty("Host", u.getHost() + ":" + NodeService.PORT);
+                if (cookie != null) c.setRequestProperty("Cookie", cookie);
+                File f;
+                String type;
+                try {
+                    if (c.getResponseCode() != 200) throw new java.io.IOException("status " + c.getResponseCode());
+                    type = mime != null && !mime.isEmpty() && !mime.startsWith("application/octet-stream") ? mime
+                            : c.getContentType() != null ? c.getContentType().split(";")[0].trim() : "application/octet-stream";
+                    String n = name != null && !name.isEmpty() ? sanitize(name)
+                            : fileName(url, c.getHeaderField("Content-Disposition"), type);
+                    String key = OpenProvider.key(url + "|" + c.getContentLengthLong() + "|" + c.getHeaderField("ETag")
+                            + "|" + c.getHeaderField("Last-Modified"));
+                    f = OpenProvider.file(this, key, n);
+                    if (!f.exists() || (c.getContentLengthLong() >= 0 && f.length() != c.getContentLengthLong())) {
+                        OpenProvider.prune(this);
+                        f.getParentFile().mkdirs();
+                        File tmp = new File(f.getPath() + ".part");
+                        try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(tmp)) {
+                            in.transferTo(out);
+                        }
+                        if (!tmp.renameTo(f)) throw new java.io.IOException("cannot store");
+                    }
+                    f.setLastModified(System.currentTimeMillis()); // kept by prune while in use
+                    f.getParentFile().setLastModified(System.currentTimeMillis());
+                } finally {
+                    c.disconnect();
+                }
+                Uri content = OpenProvider.uri(f);
+                runOnUiThread(() -> {
+                    Intent v = new Intent(Intent.ACTION_VIEW).setDataAndType(content, type)
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    try { startActivity(v); }
+                    catch (android.content.ActivityNotFoundException e) { toast("No app on this phone can open this file"); }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Could not open the file", Toast.LENGTH_SHORT).show());
+            }
+        }, "sol-open").start();
     }
 
     /**

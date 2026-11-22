@@ -57,13 +57,19 @@ other users on the same computer can reach loopback. So the browser needs a sess
   only prints the URL over SSH or without a display). `sol autostart on` and that first run
   add a "Sol" app-menu entry on Linux (`~/.local/share/applications/sol.desktop` running
   `sol open`); `sol autostart off` or `sol launcher off` removes it.
-- `POST /admin/v1/logout` clears it. Sessions are listed and revocable in Settings.
+- `POST /admin/v1/logout` clears it and sets `sol_signed_out=1` (HttpOnly, SameSite=Strict, ten
+  years), which turns same-OS-user auto-login off for that browser: signing out must not undo
+  itself. The locked screen then offers **Sign in**: `POST /_sol/signin` (same Host and `Origin`
+  checks, and the connection must still belong to the daemon's OS user) starts a session and
+  clears the marker. Other browsers need a login code as before. The Android app has no Sign out.
+  Sessions are listed and revocable in Settings; a session's `client` is a friendly name made
+  from its User-Agent (`Firefox on Linux`, `Sol app on Android` for the `SolAndroid/` token).
 
 ## Endpoints (`/admin/v1/…`, JSON)
 
 | Endpoint | Does |
 |---|---|
-| `GET status` | me (person, device), endpoints, transports and their state, `sessions` (browser), `peer_sessions` (live device sessions), `storage` (`{used, total}` of the synced folder's disk) |
+| `GET status` | me (person, device), endpoints, transports and their state, `sessions` (browser), `peer_sessions` (live device sessions), `storage` (`{used, free, total, measured}`: `used` is what the synced folder (SolDrive) holds, measured in the background at start and refreshed at most once a minute when status is asked, `measured` false until the first measurement ends; `free` is what the device has left for this user (`Bavail`), `total` the disk) |
 | `GET people` | contacts: id, name, petname, `anonymous`, devices (online, anchor), what they share with me, what I share with them |
 | `PATCH people/{id}` `{petname?, anonymous?}` | rename locally; `anonymous` true makes them Tor-only both ways (PROTOCOL.md §Anonymous contacts), false a buddy |
 | `DELETE people/{id}` | unpair (both sides drop the contact; their copies of shared data stay with them) |
@@ -81,6 +87,8 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `GET theme` · `POST theme` `{name}` · `POST theme/settings` `{…}` · `GET themes` | appearance |
 | `GET backup` (pending words, if any) · `POST backup/confirm` | the 24 words |
 | `GET agents` · `POST agents/{name}/revoke` | agent keys issued on this device |
+| `POST agents/new` `{name, scopes, days, person?}` | makes an agent key for the Sol app (browser or CLI): the daemon makes the key pair, signs the certificate, saves the key file as `<dir>/agents/<name>.key` (0600, where `sol agent new` keeps it) and answers `{agent, key_file, path}`; `key_file` is the key file's text, returned this once only (never logged, never kept by the UI). `GET actions` lists the scopes to offer |
+| `GET wallpapers` · `POST wallpapers` (raw image body, `Content-Type` png, jpeg or webp, at most 15 MB) · `DELETE wallpapers/{id}` | the person's own wallpapers (below) |
 | `POST network-changed` | re-dial now |
 | `GET transports` · `POST transports/{name}` `{enabled}` | the transports (`wg`, `direct`, `tor`, and any other configured): `{name, enabled, state: up\|starting\|stopped\|failed, detail, listen}`; turning one on or off applies now and is kept in `config.json` (the last one stays on). Also `sol transports` and the `sol.transports.*` actions |
 | `GET sessions` · `DELETE sessions/{id}` | browser sessions (list, revoke) |
@@ -89,8 +97,8 @@ other users on the same computer can reach loopback. So the browser needs a sess
 Errors use the API.md error shape. Every change is written to the activity log as `sol.*`.
 
 Settled in C8: `POST login-code` (admin token only) answers `{code, url, expires}`; `POST
-apps/install` and `POST agents` (issuing a key) are CLI-only, since they name files on this
-computer. A browser GET without `Origin` (EventSource and same-origin fetch omit it) is accepted
+apps/install` and `POST agents` (issuing a key for a public key the CLI made) are CLI-only, since they name files on this
+computer; the browser makes keys with `POST agents/new`, where the daemon makes the pair itself. A browser GET without `Origin` (EventSource and same-origin fetch omit it) is accepted
 unless `Sec-Fetch-Site` names another site; anything else needs `Origin` equal to the UI root.
 `PATCH devices/{id}` with a changed `admin` answers `not_implemented` until handing over P
 exists. Event data is the same object the matching GET returns (`{"id"|"name": …, "removed":
@@ -105,6 +113,18 @@ session was reached and why; `transport` is empty and `inbound` true when the pe
 failures, last_error, failed_at, next_probe}` (C3b, for the Advanced view); `people[].last_seen` is optional (absent means unknown); `POST invite`
 answers `{link, expires}`.
 
+## Wallpapers
+
+Built-in wallpapers (`dusk`, `aurora`, `ember`, `slate`) are drawn in CSS. The person's own images
+are `<files>/.sol/wallpapers/<id>.<ext>` (png, jpeg or webp, at most 15 MB, written atomically,
+`0600`; the daemon checks the magic bytes, not just the header). `POST wallpapers` takes the raw
+image and answers `{id, type, size, added, url, setting}`; the setting `wallpaper` is
+`custom:<id>`; deleting the chosen one resets the setting. The UI root serves an image at
+`/wallpapers/<id>` to a session only, with its real type and `X-Content-Type-Options: nosniff`;
+the page sets it through the CSSOM (`--wp-image`), as inline styles are forbidden. `accent` is
+any `#rrggbb`: Settings offers swatches and a colour picker. The UI root links the active
+theme's stylesheet (`/_sol/theme.css`) and swaps it live on the `theme` event.
+
 ## Port sharing (services and tunnels)
 
 The PoC's proven feature, on the new wire: a service is a local TCP port (`127.0.0.1:<port>`)
@@ -117,11 +137,14 @@ tunnel status. HTTP services can also be opened in the browser as `http://<servi
 
 ## The Sol app (UI)
 
-Per design/UI.md: the home screen in the spirit of umbrelOS.
+Per design/UI.md: a plain sidebar app, not a desktop OS.
 
-- **Home:** dusk wallpaper, greeting and clock, glass widgets (people online, my devices,
-  storage), the app grid (squircle icons from each app's manifest), the Inbox preview, and a
-  dock on desktop. Tapping an app opens its origin.
+- **Layout:** a sidebar (the logo, the installed apps, then People, Devices, Inbox, Sharing,
+  Settings) on desktop; a tab bar (Home, Apps, People, Inbox, Settings) on phones. Every app's
+  shell gets a way back (Home and the other apps) from `GET /_sol/nav` (API.md §10).
+- **Home:** the wallpaper, a greeting and the date, widgets (people online, my devices, the
+  Sol folder's size and the device's free space), the apps, and the Inbox preview. Tapping an
+  app opens its origin.
 - **People:** contacts with presence; a person's page shows their devices, what they share with
   me (open it), what I share with them and an **Anonymous** switch (turning it on warns that an
   IP address they already saw can't be taken back); **Add a person** shows a QR code
@@ -132,7 +155,7 @@ Per design/UI.md: the home screen in the spirit of umbrelOS.
 - **Inbox:** notices and approvals with Approve / Deny.
 - **Sharing:** services I share (port sharing) and tunnels I opened; add a service.
 - **Settings:** appearance (theme, accent, density, corners, glass, font, wallpaper), backup words
-  (show once, confirm), agents (list, revoke), browser sessions, advanced (endpoints,
+  (show once, confirm), agents (list, revoke, **New agent key**: name, scopes picked from the installed apps' actions, expiry; the key is shown once with Copy and the exact `sol do` commands), browser sessions, advanced (endpoints,
   transports with on/off switches, sessions, network re-check).
 - Phone: tab bar Home · People · Inbox · Settings. Desktop: sidebar.
 - Everything updates live from `GET events`; everything a button does is also a `sol` CLI command.

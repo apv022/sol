@@ -40,6 +40,10 @@ uploads, downloads, shares subfolders with people, and shows folders people shar
   debounce per path.
 - **Remote change** → fetch blob (if the folder is kept on this device) → write to a temp file in
   the same directory → atomic rename. Set mtime from the entry. Suppress the watcher echo.
+- **Empty folders** (`mkdir` entries) have an index too: the set of explicit folders this device
+  has on disk in sync with the tree. A tree folder not in it is new and is created; one in it that
+  is missing from disk was removed or renamed here, so the watcher or the next scan publishes a
+  `delete` (for it and every explicit folder below it) instead of creating it again.
 - Ignored: `.sol/` (Files' own state lives in `SOL_APP_DATA`, not in the folder), editor temp
   files (`*.swp`, `~$*`, `.#*`), and patterns in `.solignore` at the folder root.
 
@@ -68,18 +72,39 @@ if kept), `files.write {path, blob | text}`, `files.mkdir {path}`, `files.move {
 `files.copy {from, to}`, `files.delete {paths}` (destructive, approval for agents), `files.search
 {query}` (names; content search is a later addition), `files.share {path, people, mode}`,
 `files.unshare {path, people}`, `files.shared` (with me and by me), `files.keep {path, keep}`,
-`files.conflicts`, `files.status` (sync state per device).
+`files.conflicts`, `files.resolve {path, keep}`, `files.status` (sync state per device),
+`files.sync` (rescan and fetch now; answers with the status). `files.list` also returns `here`
+(the folder itself) and an `items` count per folder, so the UI needs one call per folder.
 
 ## UI
 
-Fast list and grid views, breadcrumbs, drag and drop upload, multi-select, preview for images,
-audio, video, PDF (browser built-in) and text, a share sheet with people, a "Shared with me"
-section, sync status per device, and conflicts listed with "keep this / keep that / keep both".
-Phone layout first-class. Uses `ui/kit` and `sol.js` only.
+Fast list and grid views (painted from the last listing kept in the page, then the live one),
+breadcrumbs, upload (+ menu, drag and drop, the Android file chooser), multi-select with a
+selection bar and long-press/right-click menus, Move and Copy through a folder chooser, delete
+with an Undo toast for files (restored by blob hash; folders ask first), a share sheet with people,
+a "Shared" section, keep on device / online only per folder, sync status with "Sync now", and
+conflicts listed with "keep this / keep that / keep both". Phone layout first-class. Uses `ui/kit`
+and `sol.js` only.
+
+**The viewer** (`ui/viewer.js`) is one full-screen layer outside the re-rendered list (a live
+update never reloads it) that moves through the files of the folder or search it was opened from:
+swipe on touch (follows the finger; commits past a quarter of the width or on a flick), arrow keys
+and chevrons on desktop, Escape or Back closes. It shows name, size and "3 / 12", with Download,
+Share (the system share sheet, where the browser has one), Rename and Delete. Only the current file
+and its neighbours are in the page; neighbour images preload, heavier kinds load when shown.
+Images fit the screen (double-tap or pinch to zoom), video and audio use native controls, text and
+code show the first 200 KB (a Range request) in monospace. PDFs use the browser's own viewer in a
+frame on desktop; on Android (`SolAndroid.open`) a card with Open hands the file to the system
+viewer once, never a frame (the WebView would turn it into a download). Other kinds get a card
+with Download (and Open on Android). `#/<path to a file>` opens its folder with the file in the
+viewer. `/raw?path=…&v=<blob>` is cacheable for good, so thumbnails and previews come from the
+browser cache after the first view.
 
 ## Tests
 
 Against memsol: two devices of one person converge after concurrent edits (with a conflict copy),
 offline edits merge after reconnect, a share to Bob shows only that subtree and Bob's write-share
 edits come back, online-only files stream by hash with Range, invalid names are refused, watcher
-echo doesn't loop, and every action works from the CLI path with `--dry-run`.
+echo doesn't loop, empty and full folders renamed or removed on disk stay gone on both devices
+(watcher and scan), and every action works from the CLI path with `--dry-run`. The viewer's
+step, swipe and slide rules run in a browser: `apps/files/test/index.html` (`make browser-test`).

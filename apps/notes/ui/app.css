@@ -73,17 +73,17 @@
   .notes { grid-template-columns: 1fr; }
   #side, #editorpane { grid-area: 1 / 1; }
   .notes[data-view="list"] #editorpane, .notes[data-view="edit"] #side { display: none; }
-  #side { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; padding: env(safe-area-inset-top) var(--space-4) calc(var(--tab-h) + env(safe-area-inset-bottom) + var(--space-3)); gap: var(--space-2); }
+  #side { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; padding: var(--safe-top) var(--space-4) calc(var(--tab-h) + var(--safe-bottom) + var(--space-3)); gap: var(--space-2); }
   .side-head { min-height: var(--bar-h); align-items: flex-end; padding-top: var(--space-5); }
   .side-head h1 { font-size: var(--fs-large-title); line-height: var(--lh-large-title); letter-spacing: var(--tr-large-title); }
   .side-head [data-new] { display: none; }
   #list > [data-item] { --sep-inset: var(--row-pad); }
-  #listfoot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: center; min-height: calc(var(--tab-h) + env(safe-area-inset-bottom)); padding: 0 var(--space-4) env(safe-area-inset-bottom); box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator); }
+  #listfoot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: center; min-height: calc(var(--tab-h) + var(--safe-bottom)); padding: 0 var(--space-4) var(--safe-bottom); box-shadow: 0 calc(-1 * var(--hairline)) 0 var(--separator); }
   #listfoot .muted { font-size: var(--fs-footnote); }
   #listfoot [data-new] { position: absolute; right: var(--space-3); top: calc((var(--tab-h) - var(--control-h)) / 2); color: var(--tint-text); }
   #listfoot sol-icon { --size: 24px; }
   #back { display: inline-flex; }
-  .ed-head { padding-top: calc(var(--space-2) + env(safe-area-inset-top)); }
+  .ed-head { padding-top: calc(var(--space-2) + var(--safe-top)); }
   .ed-title { visibility: hidden; }
   .hl-wrap { padding: var(--space-4); }
 }

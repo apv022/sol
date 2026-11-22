@@ -75,7 +75,7 @@ content on `--canvas` or `--surface`. Optional right inspector.
 **Phone (iOS):**
 ```
 ┌────────────────────────┐
-│ Files            ⊕  ⋯ │  large title; collapses into a glass nav bar on scroll
+│ ⌂     Files       ⊕  ⋯ │  compact glass bar: Sol button, title, actions
 │ 🔍 Search              │
 │ ┌────────────────────┐ │
 │ │ Notes            › │ │  inset grouped list
@@ -89,11 +89,23 @@ content on `--canvas` or `--surface`. Optional right inspector.
 Bottom sheets with a grabber for share, details and pickers; swipe actions on list rows;
 context menus on long-press (desktop: right-click).
 
-**Sol app home (umbrelOS spirit):** the dusk wallpaper (a CSS gradient: deep blue sky into a
-warm gold horizon, a low sun; light mode is morning, dark mode is night), a large greeting and
-time, a row of glass widgets (people online, devices, storage), the app grid of squircle icons,
-and on desktop a glass dock. Apps open as full windows (desktop) or full screens (phone) with a
-spring transition from their icon.
+**Sol app (navigation).** A sidebar layout, not a launcher: the brand (logo and "Sol", which is
+Home), an **Apps** group listing the installed apps that have a UI (icon and name, each a link to
+its origin), then People, Devices, Inbox (badge), Sharing, Settings and the "me" footer. Home is a
+calm overview on the wallpaper: a small greeting and the date (no giant clock), glass widgets
+(people online, devices, storage), the apps as a compact grid and an Inbox preview. On a phone
+(760px and narrower) the sidebar is a bottom tab bar, Home / Apps / People / Inbox / Settings,
+where Apps is a page listing the apps; the header is compact (no large empty band; it respects
+`--safe-top` and `--safe-bottom`). Custom wallpapers (Settings) stay the page background.
+
+**The way back from an app.** Every app origin serves `GET /_sol/nav` (API.md section 10) and
+`<sol-app-shell>` uses it, so an app does nothing: on desktop a "Sol" group (Home and the apps,
+the current one marked) tops the app's sidebar; on a phone, or when the shell has no sidebar or
+it is hidden, a Sol button at the left of the bar opens a sheet (a menu on desktop) with Home and
+the apps. An app that lays out its own page (Notes, Tasks) puts `<sol-nav></sol-nav>` in its
+header. The list is cached in localStorage for the first paint and refreshed once per load.
+On a phone the shell bar shows the title always and the large title is hidden, so content starts
+right under the bar. Inside the Android WebView it is the same pages; links between origins stay in it.
 
 ## Components (in `ui/kit`)
 

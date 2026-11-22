@@ -7,7 +7,7 @@ import { applySettings, toast } from '/kit/kit.js';
 import { icons } from '/kit/icons.js';
 import '/kit/qr.js';
 import { createAdmin } from '/admin.js';
-import { greetingFor, clockText, dateText, msToNextMinute, relTime, minutesLeft, bytes, appIconSpec, parseRoute } from '/util.js';
+import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, appIconSpec, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand } from '/util.js';
 
 const $ = (id) => document.getElementById(id);
 // The UI root forbids inline styles (CSP style-src 'self'): markup uses classes and data-var-*
@@ -18,7 +18,7 @@ const phoneQ = matchMedia('(max-width: 760px)');
 
 // ---------- state ----------
 
-const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents'];
+const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents', 'wallpapers'];
 const state = Object.fromEntries(KEYS.map((k) => [k, null]));
 let locked = false;
 let route = parseRoute(location.hash);
@@ -32,17 +32,17 @@ const admin = createAdmin({ onUnauthorized: () => { locked = true; draw(); } });
 const fetchers = {
   status: () => admin.status(), people: () => admin.people(), devices: () => admin.devices(), apps: () => admin.apps(),
   services: () => admin.services(), tunnels: () => admin.tunnels(), inbox: () => admin.inbox(), theme: () => admin.theme(),
-  themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(),
+  themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(), wallpapers: () => admin.wallpapers(),
 };
 async function load(key) {
   try {
     state[key] = await fetchers[key]();
-    if (key === 'theme') applyTheme();
+    if (key === 'theme' || key === 'wallpapers') applyTheme();
     saveCache(); draw();
   } catch (e) { if (e.status !== 401) console.warn('load', key, e.message); }
 }
 const loadAll = () => Promise.all(KEYS.map(load));
-const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices'], session: ['status'], app: ['apps'], inbox: ['inbox'], service: ['services'], tunnel: ['tunnels'], theme: ['theme'] };
+const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices'], session: ['status'], app: ['apps'], inbox: ['inbox'], service: ['services'], tunnel: ['tunnels'], theme: ['theme', 'wallpapers'] };
 
 // ---------- helpers ----------
 
@@ -62,9 +62,27 @@ const FORCED_SCHEME = ['light', 'dark'].includes(new URLSearchParams(location.se
 function applyTheme() {
   const s = settings();
   applySettings({ ...(FORCED_SCHEME ? {} : { scheme: s.scheme || 'auto' }), accent: s.accent || '', density: s.density, radius: s.radius, glass: s.glass, font: s.font });
-  const wp = ['dusk', 'aurora', 'ember', 'slate'].includes(s.wallpaper) ? s.wallpaper : 'dusk';
-  document.documentElement.setAttribute('data-wallpaper', wp);
-  try { localStorage.setItem('sol-wallpaper', wp); } catch { /* optional */ }
+  const wp = wallpaperOf(s.wallpaper, state.wallpapers);
+  const el = $('wallpaper');
+  document.documentElement.setAttribute('data-wallpaper', wp.name);
+  el.setAttribute('data-wallpaper', wp.name);
+  // The image goes in through the CSSOM: the UI root's CSP forbids style attributes.
+  if (wp.id) el.style.setProperty('--wp-image', `url(/wallpapers/${wp.id})`); else el.style.removeProperty('--wp-image');
+  try { localStorage.setItem('sol-wallpaper', wp.name === 'custom' ? 'dusk' : wp.name); } catch { /* optional */ }
+}
+
+/**
+ * Loads the active theme's stylesheet again under a new URL and drops the old link once the new one
+ * is in, so a theme change shows at once without a flash. kit.js linked the first one.
+ */
+function swapThemeCss() {
+  const old = document.getElementById('sol-theme');
+  const next = document.createElement('link');
+  next.rel = 'stylesheet'; next.href = `/_sol/theme.css?v=${Date.now()}`;
+  const done = () => { if (old && old !== next) old.remove(); next.id = 'sol-theme'; };
+  next.addEventListener('load', done);
+  next.addEventListener('error', () => next.remove());
+  (old || document.head.lastElementChild).after(next);
 }
 try { const w = localStorage.getItem('sol-wallpaper'); if (w) document.documentElement.setAttribute('data-wallpaper', w); } catch { /* optional */ }
 
@@ -229,6 +247,65 @@ function confirmBackup(words) {
   });
 }
 
+/** New agent key: name, what it may do, how long; then the key, shown once. */
+async function newAgentDialog() {
+  let apps = [];
+  try { apps = await admin.actions(); } catch (e) { fail(e); return; }
+  const group = (a) => html`<fieldset><legend>${a.name || a.id}</legend>
+    <label class="check"><input type="checkbox" name="app" value="${a.id}"> All ${a.name || a.id} actions</label>
+    <details class="adv"><summary>Pick single actions</summary>${list(a.actions).map((x) => html`<label class="check"><input type="checkbox" name="act" value="${x.name}" data-of="${a.id}"> <span><code class="inline">${x.name}</code>${x.effect === 'read' ? ' (read only)' : ''}</span></label>`)}</details></fieldset>`;
+  dialog('New agent key', html`<form class="form"><label>Name<input name="name" placeholder="claude-laptop" required maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label>Expires<select name="days"><option value="7">in 7 days</option><option value="30" selected>in 30 days</option><option value="90">in 90 days</option></select></label>
+    <label class="check"><input type="checkbox" name="all"> Everything: every action of every app</label>
+    ${apps.map(group)}
+    <div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="primary" type="submit">Create key</button></div></form>`, (d, close) => {
+    d.querySelector('[data-no]').onclick = close;
+    d.querySelector('form').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const name = String(f.get('name')).trim();
+      const scopes = agentScopes({ all: f.has('all'), apps: f.getAll('app'), actions: f.getAll('act') });
+      if (!AGENT_NAME_RE.test(name)) { toast('A name is lowercase letters, digits, . _ -', { kind: 'error' }); return; }
+      if (!scopes.length) { toast('Pick what the agent may do', { kind: 'error' }); return; }
+      let res;
+      try { res = await admin.newAgent({ name, scopes, days: Number(f.get('days')) }); } catch (e) { fail(e); return; }
+      close(); load('agents');
+      agentKeyDialog(res); // shown once; never put into state or the cache
+    };
+  });
+}
+
+function agentKeyDialog(res) {
+  const name = res.agent?.name || 'agent', cmd = agentCommand(name, `./${name}.key`);
+  dialog('Your agent key', html`<div class="form"><p class="flush">Copy it now: Sol shows this key once. Anyone with it can run <strong>${list(res.agent?.scopes).join(', ')}</strong> until it expires.</p>
+    <textarea class="keybox" readonly rows="6" spellcheck="false" aria-label="Agent key">${res.key_file}</textarea>
+    <div class="dlg-actions"><button type="button" class="tinted" data-copy-key>${ic('copy')}Copy key</button></div>
+    <p class="flush"><strong>On this computer</strong> the key is already saved as <code class="inline">${res.path}</code>:</p>
+    <div class="link-line"><code>${cmd.here}</code><button type="button" class="tinted" data-copy-here>${ic('copy')}Copy</button></div>
+    <p class="flush"><strong>On another machine</strong> save the key as <code class="inline">${name}.key</code>, then:</p>
+    <div class="link-line"><code>${cmd.elsewhere}</code><button type="button" class="tinted" data-copy-else>${ic('copy')}Copy</button></div>
+    <div class="dlg-actions"><button type="button" class="primary" data-ok>Done</button></div></div>`, (d, close) => {
+    d.querySelector('[data-copy-key]').onclick = () => copy(res.key_file);
+    d.querySelector('[data-copy-here]').onclick = () => copy(cmd.here);
+    d.querySelector('[data-copy-else]').onclick = () => copy(cmd.elsewhere);
+    d.querySelector('[data-ok]').onclick = close;
+  });
+}
+
+/** Add your own wallpaper: pick an image, upload it, make it the wallpaper. */
+function addWallpaper() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const bad = wallpaperFileError(file);
+    if (bad) { toast(bad, { kind: 'error' }); return; }
+    act(async () => { const w = await admin.addWallpaper(file); await load('wallpapers'); await setSetting({ wallpaper: w.setting }); }, 'Wallpaper added');
+  };
+  input.click();
+}
+
 // ---------- views ----------
 
 function personRow(p) {
@@ -304,22 +381,30 @@ const WALLPAPERS = [['dusk', 'Dusk'], ['aurora', 'Aurora'], ['ember', 'Ember'], 
 function settingsView() {
   const s = settings(), st = state.status || {};
   const bk = state.backup || {};
+  const acc = accentChoice(s.accent, ACCENTS);
+  const wp = wallpaperOf(s.wallpaper, state.wallpapers);
+  const customs = list(state.wallpapers).filter((c) => /^[a-f0-9]{16}$/.test(c.id));
+  const inApp = isAndroidApp();
   return html`<div class="page">${pageHead('Settings')}
     ${phoneQ.matches ? html`<div class="list section"><a data-item data-chevron href="#/devices"><span class="row-icon">${ic('device')}</span><span class="grow">Devices</span></a><a data-item data-chevron href="#/sharing"><span class="row-icon">${ic('share')}</span><span class="grow">Sharing</span></a></div>` : ''}
     <section class="section"><h3 class="group-title">Appearance</h3><div class="list">
       <div data-item><span class="grow">Look</span>${seg('scheme', [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], s.scheme || 'auto')}</div>
-      <div data-item><span class="grow">Accent</span><span class="swatches">${ACCENTS.map((c) => html`<button type="button" class="swatch" data-var-sw="${c}" data-set="accent" data-v="${c === ACCENTS[0] ? '' : c}" aria-label="Accent ${c}" aria-pressed="${(s.accent || '').toLowerCase() === (c === ACCENTS[0] ? '' : c.toLowerCase())}"></button>`)}</span></div>
+      <div data-item><span class="grow">Accent</span><span class="swatches">${ACCENTS.map((c) => html`<button type="button" class="swatch" data-var-sw="${c}" data-set="accent" data-v="${c === ACCENTS[0] ? '' : c}" aria-label="Accent ${c}" aria-pressed="${acc.kind === 'swatch' && acc.value.toLowerCase() === (c === ACCENTS[0] ? '' : c.toLowerCase())}"></button>`)}
+        <label class="swatch-pick" data-on="${acc.kind === 'custom'}" data-var-sw="${acc.kind === 'custom' ? acc.value : ACCENTS[0]}" title="Pick any colour"><input type="color" data-accent-picker value="${acc.kind === 'custom' ? acc.value : ACCENTS[0].toLowerCase()}" aria-label="Custom accent colour"></label></span></div>
       <div data-item><span class="grow">Density</span>${seg('density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], s.density || 'comfortable')}</div>
       <div data-item><span class="grow">Corners</span>${seg('radius', [['rounded', 'Rounded'], ['square', 'Square']], s.radius || 'rounded')}</div>
       <div data-item><span class="grow">Glass<span class="row-sub">Translucent bars and panels</span></span><input type="checkbox" role="switch" data-toggle="glass" aria-label="Glass" ${s.glass === 'off' ? '' : raw('checked')}></div>
       <div data-item><span class="grow">Font</span><select data-select="font" class="fit" aria-label="Font">${[['system', 'System'], ['inter', 'Inter'], ['mono', 'Monospace']].map(([v, l]) => html`<option value="${v}" ${(s.font || 'system') === v ? raw('selected') : ''}>${l}</option>`)}</select></div>
       <div data-item><span class="grow">Theme</span><select data-select="theme" class="fit" aria-label="Theme">${list(state.themes?.themes).map((t) => html`<option value="${t.name}" ${t.name === (state.theme?.name || state.themes?.active) ? raw('selected') : ''}>${t.title || t.name}</option>`)}</select></div></div></section>
-    <section class="section"><h3 class="group-title">Wallpaper</h3><div class="list"><div class="wps">${WALLPAPERS.map(([v, l]) => html`<button type="button" data-set="wallpaper" data-v="${v}" aria-pressed="${(s.wallpaper || 'dusk') === v}"><span class="wp" data-wallpaper="${v}"><span class="sun"></span></span>${l}</button>`)}</div></div></section>
+    <section class="section"><h3 class="group-title">Wallpaper</h3><div class="list"><div class="wps">${WALLPAPERS.map(([v, l]) => html`<div class="wps-item"><button type="button" data-set="wallpaper" data-v="${v}" aria-pressed="${wp.name === v}"><span class="wp" data-wallpaper="${v}"><span class="sun"></span></span>${l}</button></div>`)}
+      ${customs.map((c, n) => html`<div class="wps-item"><button type="button" data-set="wallpaper" data-v="${c.setting}" aria-pressed="${wp.id === c.id}"><span class="wp" data-wallpaper="custom" data-var-wp-image="url(/wallpapers/${c.id})"></span>Mine ${n + 1}</button><button type="button" class="wp-del" data-act="del-wallpaper" data-id="${c.id}" aria-label="Delete this wallpaper">${ic('close')}</button></div>`)}</div>
+      <div data-item><span class="grow">Add your own<span class="row-sub">PNG, JPEG or WebP, up to 15 MB</span></span><button type="button" class="tinted" data-act="add-wallpaper">${ic('plus')}Choose image</button></div></div></section>
     <section class="section"><h3 class="group-title">Backup</h3><div class="list"><div data-item><span class="grow">Backup words<span class="row-sub">${bk.confirmed ? 'You confirmed your backup.' : 'Write down your 24 words so you can restore Sol.'}</span></span>${bk.confirmed ? html`<span class="badge ok">Backed up</span>` : list(bk.words).length ? html`<button class="primary" type="button" data-act="backup">Show words</button>` : ''}</div></div>
       <p class="group-footer">To restore on a new device, choose “Restore from backup words” when you set up Sol.</p></section>
     <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
+      <p class="group-footer"><button type="button" class="tinted" data-act="new-agent">${ic('plus')}New agent key</button></p>
       <p class="group-footer">Agents run <code class="inline">sol do</code> with a key you issued, limited to its scopes.</p></section>
-    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span><button type="button" data-act="logout">Sign out</button>` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
+    <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span>${inApp ? '' : html`<button type="button" data-act="logout">Sign out</button>`}` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
     <section class="section"><details class="adv"><summary class="group-title">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
       <h3 class="group-title">Transports</h3><div class="list">${transportRows(list(st.transports))}</div>
@@ -337,25 +422,31 @@ function transportRows(ts) {
   });
 }
 
-// Home: wallpaper, greeting and clock, glass widgets, app grid, Inbox preview, dock.
+// Home: a calm overview on the wallpaper: greeting and date, glass widgets, app grid, Inbox preview.
 let firstPaint = true;
-function appTile(a, i) {
+/** An app's icon: its manifest image, or a glyph on a gradient. */
+function appArt(a) {
   const spec = appIconSpec(a, icons);
-  const art = spec.kind === 'img' ? html`<span class="app-img"><img src="${spec.src}" alt=""></span>` : html`<sol-app-icon glyph="${spec.glyph}" hue="${spec.hue}"></sol-app-icon>`;
+  return spec.kind === 'img' ? html`<span class="app-img"><img src="${spec.src}" alt=""></span>` : html`<sol-app-icon glyph="${spec.glyph}" hue="${spec.hue}"></sol-app-icon>`;
+}
+/** The installed apps that have a UI to open. */
+const uiApps = () => list(state.apps).filter((a) => a.url);
+function appTile(a, i) {
+  const art = appArt(a);
   return html`<a class="app" data-var-i="${i}" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${art}<span>${a.name}</span></a>`;
 }
 function homeView() {
   const now = new Date();
   const ppl = list(state.people), online = ppl.filter(isOnline), ds = list(state.devices);
-  const st = state.status?.storage, pct = st ? Math.round((st.used / st.total) * 100) : 0;
-  const items = list(state.inbox), apps = list(state.apps);
+  const st = storageView(state.status?.storage);
+  const items = list(state.inbox), apps = uiApps();
   return html`<div class="home">
-    <header class="hero"><p class="date" id="date">${dateText(now)}</p><h1 class="clock" id="clock">${clockText(now)}</h1><p class="greet" id="greet">${greetingFor(meName(), now)}</p></header>
+    <header class="hero"><h1 class="greet" id="greet">${greetingFor(meName(), now)}</h1><p class="date" id="date">${dateText(now)}</p></header>
     <div class="widgets">
       <a class="widget" data-var-i="0" href="#/people"><span class="widget-title">${ic('people')}People online</span><span class="widget-body"><span class="widget-value">${online.length}</span>
         <span class="widget-row"><span class="faces">${online.slice(0, 4).map((p) => html`<sol-avatar name="${nameOf(p)}" id="${p.id}" size="24px"></sol-avatar>`)}</span><span class="widget-sub">${ppl.length ? `of ${ppl.length}` : 'No one yet'}</span></span></span></a>
       <a class="widget" data-var-i="1" href="#/devices"><span class="widget-title">${ic('device')}My devices</span><span class="widget-body"><span class="widget-value">${ds.length}</span><span class="widget-sub">${ds.filter((d) => d.online).length} online</span></span></a>
-      ${st ? html`<a class="widget" data-var-i="2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><sol-ring value="${pct}" size="40px">${pct}%</sol-ring><span class="widget-body"><span class="widget-value">${bytes(st.used)}</span><span class="widget-sub">of ${bytes(st.total)}</span></span></a>` : ''}
+      ${st ? html`<a class="widget" data-var-i="2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><span class="widget-body"><span class="widget-value">${st.value}</span><span class="widget-sub">${st.sub}</span></span></a>` : ''}
     </div>
     <div class="home-cols">
       <section aria-label="Apps">${apps.length ? html`<div class="app-grid">${apps.map(appTile)}</div>` : html`<p class="home-empty">No apps installed yet.</p>`}</section>
@@ -363,20 +454,26 @@ function homeView() {
     </div></div>`;
 }
 
+function appsView() {
+  const apps = uiApps();
+  return html`<div class="page">${pageHead('Apps')}${apps.length ? html`<div class="app-grid in-page">${apps.map(appTile)}</div>` : html`<div class="empty"><h3>No apps yet</h3><p>Apps you install show up here.</p></div>`}</div>`;
+}
+
 const NAV = [['home', 'Home', 'home', '#/'], ['people', 'People', 'people', '#/people'], ['devices', 'Devices', 'device', '#/devices'], ['inbox', 'Inbox', 'inbox', '#/inbox'], ['sharing', 'Sharing', 'share', '#/sharing'], ['settings', 'Settings', 'settings', '#/settings']];
-const TABS = ['home', 'people', 'inbox', 'settings'];
+// Sidebar: Apps group first, then these. Phone tab bar: Home, Apps (a page), People, Inbox, Settings.
+const SIDE = ['people', 'devices', 'inbox', 'sharing', 'settings'];
+const TABS = [['home', 'Home', 'home', '#/'], ['apps', 'Apps', 'grid', '#/apps'], ['people', 'People', 'people', '#/people'], ['inbox', 'Inbox', 'inbox', '#/inbox'], ['settings', 'Settings', 'settings', '#/settings']];
 const badge = (n, cls) => (n ? html`<span class="${cls}">${n}</span>` : '');
-const current = (name) => (route.name === name || (name === 'settings' && phoneQ.matches && ['devices', 'sharing'].includes(route.name)) ? 'page' : 'false');
+const current = (name) => (route.name === name || (name === 'settings' && ['devices', 'sharing'].includes(route.name)) ? 'page' : 'false');
 
 function chrome() {
-  render($('side'), html`<div class="brand"><span class="brand-sun"></span>Sol</div>${NAV.map(([n, l, i, h]) => html`<a class="side-item" href="${h}" aria-current="${n === route.name ? 'page' : 'false'}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge tint') : ''}</a>`)}<span class="spacer"></span>
+  const apps = uiApps();
+  render($('side'), html`<a class="brand" href="#/" aria-label="Sol home" aria-current="${route.name === 'home' ? 'page' : 'false'}"><img class="brand-sun" src="/icon.svg" alt="" width="28" height="28">Sol</a>
+    <div class="side-group" role="group" aria-label="Apps"><div class="side-label">Apps</div>${apps.length ? apps.map((a) => html`<a class="side-item side-app" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${appArt(a)}${a.name}</a>`) : html`<span class="side-none">None installed</span>`}</div>
+    <div class="side-sep"></div>
+    ${NAV.filter((n) => SIDE.includes(n[0])).map(([n, l, i, h]) => html`<a class="side-item" href="${h}" aria-current="${n === route.name ? 'page' : 'false'}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge tint') : ''}</a>`)}<span class="spacer"></span>
     <div class="me"><sol-avatar name="${meName() || '?'}" id="me"></sol-avatar><span><strong>${meName()}</strong><small class="muted">${state.status?.me?.device?.name || ''}</small></span></div>`);
-  render($('tabs'), html`${NAV.filter((n) => TABS.includes(n[0])).map(([n, l, i, h]) => html`<a href="${h}" aria-current="${current(n)}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge') : ''}</a>`)}`);
-  const dock = list(state.apps).slice(0, 4).map((a) => { const sp = appIconSpec(a, icons); return html`<a href="${a.url}" title="${a.name}" aria-label="${a.name}"><sol-app-icon glyph="${sp.glyph || 'grid'}" hue="${sp.hue}"></sol-app-icon>${a.running ? html`<span class="dot"></span>` : ''}</a>`; });
-  render($('dock'), html`${dock}<span class="sep"></span>
-    <a href="#/people" title="People" aria-label="People"><sol-app-icon glyph="people" hue="210"></sol-app-icon></a>
-    <a href="#/inbox" title="Inbox" aria-label="Inbox"><sol-app-icon glyph="inbox" hue="12"></sol-app-icon>${badge(inboxCount(), 'dock-badge')}</a>
-    <a href="#/settings" title="Settings" aria-label="Settings"><sol-app-icon glyph="settings" hue="250" data-dark-glyph></sol-app-icon></a>`);
+  render($('tabs'), html`${TABS.map(([n, l, i, h]) => html`<a href="${h}" aria-current="${current(n)}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge') : ''}</a>`)}`);
 }
 
 // ---------- render loop ----------
@@ -394,25 +491,26 @@ function draw() {
 
 function paint() {
   $('locked').hidden = !locked;
+  $('signin').hidden = isAndroidApp(); // the Android app signs in through its own flow
   $('shell').hidden = locked;
   $('wallpaper').hidden = false;
   const shell = $('shell'), main = $('main');
   shell.dataset.route = route.name;
   const top = main.scrollTop;
-  const views = { home: homeView, people: () => (route.id ? personView(route.id) : peopleView()), devices: devicesView, inbox: inboxView, sharing: sharingView, settings: settingsView };
+  const views = { home: homeView, people: () => (route.id ? personView(route.id) : peopleView()), apps: appsView, devices: devicesView, inbox: inboxView, sharing: sharingView, settings: settingsView };
   render(main, views[route.name]());
   chrome();
   main.scrollTop = top;
   if (firstPaint && route.name === 'home' && state.apps) { firstPaint = false; document.body.classList.add('first'); setTimeout(() => document.body.classList.remove('first'), 2600); }
-  const t = (NAV.find((n) => n[0] === route.name) || NAV[0])[1];
+  const t = route.name === 'apps' ? 'Apps' : (NAV.find((n) => n[0] === route.name) || NAV[0])[1];
   document.title = route.name === 'home' ? 'Sol' : `${t} · Sol`;
 }
 
-// The clock ticks on the minute, from a timer aligned to it (this is a clock, not polling).
+// The greeting and date change on the minute boundary, from a timer aligned to it (not polling).
 function tick() {
   const now = new Date();
   const set = (id, v) => { const e = $(id); if (e && e.textContent !== v) e.textContent = v; };
-  set('clock', clockText(now)); set('date', dateText(now)); set('greet', greetingFor(meName(), now));
+  set('date', dateText(now)); set('greet', greetingFor(meName(), now));
   setTimeout(tick, msToNextMinute() + 20);
 }
 
@@ -432,6 +530,10 @@ const ACTIONS = {
   'revoke-session': (el) => act(async () => { await admin.revokeSession(el.dataset.id); await load('status'); }, 'Revoked'),
   logout: () => act(async () => { await admin.logout(); locked = true; draw(); }),
   network: () => act(() => admin.networkChanged(), 'Checking the network'),
+  'new-agent': newAgentDialog,
+  'add-wallpaper': addWallpaper,
+  'del-wallpaper': (el) => confirmDialog({ title: 'Delete this wallpaper?', text: 'The image is removed from this device.', action: 'Delete', run: async () => { await admin.removeWallpaper(el.dataset.id); await load('wallpapers'); await load('theme'); toast('Deleted'); } }),
+  signin: () => act(async () => { await admin.signIn(); locked = false; stream?.close(); await loadAll(); connect(); draw(); }),
 };
 
 /** The person page's Anonymous switch: turning it on warns first (an IP already seen stays seen). */
@@ -465,7 +567,8 @@ document.addEventListener('change', (e) => {
   else if (t.dataset.transport) act(async () => { await admin.setTransport(t.dataset.transport, t.checked); await load('status'); }, t.checked ? 'Turned on' : 'Turned off').then(() => draw());
   else if (t.dataset.anon) setAnonymous(t);
   else if (t.dataset.select === 'font') setSetting({ font: t.value });
-  else if (t.dataset.select === 'theme') act(() => admin.setTheme(t.value), 'Theme changed');
+  else if (t.dataset.select === 'theme') act(async () => { await admin.setTheme(t.value); swapThemeCss(); }, 'Theme changed');
+  else if (t.dataset.accentPicker !== undefined) setSetting({ accent: t.value });
 });
 // Deep links that open a dialog: #/people/add, #/devices/add, #/settings/backup.
 const DEEP = { 'people/add': addPerson, 'devices/add': addDevice, 'settings/backup': backupFlow };
@@ -484,7 +587,7 @@ let stream = null, wasDown = false;
 function connect() {
   stream = admin.events((type) => {
     for (const k of EVENT_KEYS[type] || []) load(k);
-    if (type === 'theme') load('themes');
+    if (type === 'theme') { load('themes'); swapThemeCss(); }
     if (type === 'inbox' || type === 'person') { /* counts live in the same state */ }
   }, {
     onOpen: () => { if (wasDown) { wasDown = false; loadAll(); } },
@@ -514,11 +617,11 @@ async function selftest() {
   const settle = async (r) => { for (let i = 0; i < 40 && $('shell').dataset.route !== (r || 'home'); i++) await new Promise((x) => setTimeout(x, 50)); await new Promise((x) => setTimeout(x, 100)); };
   const out = { screens: {}, errors: [] };
   addEventListener('error', (e) => out.errors.push(String(e.message)));
-  for (const r of ['', 'people', 'devices', 'sharing', 'inbox', 'settings']) {
+  for (const r of ['', 'apps', 'people', 'devices', 'sharing', 'inbox', 'settings']) {
     location.hash = '#/' + r; await settle(r);
     const main = $('main');
     out.screens[r || 'home'] = {
-      title: txt(main.querySelector('h1.clock, .page-head h1')),
+      title: txt(main.querySelector('h1.greet, .page-head h1')),
       greet: txt($('greet')),
       widgets: all('.widget').map((w) => ({ title: txt(w.querySelector('.widget-title')), value: txt(w.querySelector('.widget-value')), sub: txt(w.querySelector('.widget-sub')) })),
       apps: all('.app-grid .app').map((a) => txt(a)),

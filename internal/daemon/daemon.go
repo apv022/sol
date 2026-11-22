@@ -275,7 +275,8 @@ type Daemon struct {
 	pets       *petnames
 	ports      *portShare
 	admin      http.Handler
-	wg         sync.WaitGroup // background goroutines (the theme watcher)
+	wg         sync.WaitGroup // background goroutines (the theme watcher, the folder measurement)
+	folder     folderSize     // cached size of the synced folder (foldersize.go)
 
 	mu       sync.Mutex
 	online   map[string]int       // person ID -> live sessions
@@ -437,6 +438,9 @@ func Start(o Options) (_ *Daemon, err error) {
 	}
 	d.notePrivacy()
 	d.watchThemes()
+	if d.cfg.Files != "" {
+		d.folder.get(d.cfg.Files, d.ctx, &d.wg) // measure once now; status refreshes it lazily
+	}
 	d.watchNetwork()
 	d.watchContacts()
 	d.watchAccess()

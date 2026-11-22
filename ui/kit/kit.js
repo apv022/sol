@@ -84,6 +84,99 @@ class SolRing extends HTMLElement {
   }
 }
 
+
+// ---- the way back to Sol: GET /_sol/nav (design/API.md section 10) ----
+const NAV_KEY = 'sol-nav';
+const NAV_GLYPHS = { files: 'folder', notes: 'edit', music: 'music', photos: 'image', video: 'video', tasks: 'check', calendar: 'clock', chat: 'send', browser: 'globe' };
+const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+/** Keeps only well-formed entries: URLs are http(s) and names are strings, whatever the cache or server held. */
+function cleanNav(d) {
+  if (!d || !isHttp(d.home) || !Array.isArray(d.apps)) return null;
+  return { home: d.home, apps: d.apps.filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string' && isHttp(a.url)).map((a) => ({ id: a.id, name: a.name, icon: typeof a.icon === 'string' ? a.icon : '', url: a.url, current: a.current === true })) };
+}
+let navState = null;
+try { navState = cleanNav(JSON.parse(store.get(NAV_KEY) || 'null')); } catch { /* the cache is optional */ }
+const navSubs = new Set();
+let navAsked = false;
+/** Fetches /_sol/nav once per page load (no polling); everything that shows it is told when it lands. */
+function askNav() {
+  if (navAsked) return;
+  navAsked = true;
+  fetch('/_sol/nav', { headers: { accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).then((d) => {
+    setNav(d);
+  }).catch(() => { /* offline or an origin without /_sol/nav: nothing to show */ });
+}
+/** Applies a nav list ({home, apps}): drops malformed entries, remembers it for the next first paint, and updates every shell and <sol-nav> showing it. Returns false if it was unusable. */
+export function setNav(d) {
+  const n = cleanNav(d);
+  if (!n) return false;
+  navState = n; store.set(NAV_KEY, JSON.stringify(n));
+  for (const f of navSubs) f();
+  return true;
+}
+const navGlyph = (a) => (a.icon && a.icon in icons ? a.icon : NAV_GLYPHS[a.id] || 'grid');
+const navHue = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
+
+/** Opens the "Sol" sheet (phone) or menu (desktop): Home and the apps, the current one marked. */
+function openNav(anchor) {
+  if (!navState) return;
+  const { home, apps } = navState;
+  if (!phone()) {
+    showMenu([{ label: 'Home', icon: 'home', onSelect: () => location.assign(home) }, { separator: true },
+      ...apps.map((a) => ({ label: a.name, icon: navGlyph(a), disabled: a.current, onSelect: () => location.assign(a.url) }))], { anchor });
+    return;
+  }
+  const d = el('sol-sheet'); d.setAttribute('heading', 'Sol');
+  const list = el('nav', 'nav-sheet'); list.setAttribute('aria-label', 'Sol');
+  const row = (href, glyph, hue, label, cur) => {
+    const a = el('a', 'nav-sheet-item'); a.href = href;
+    const ic = el('sol-app-icon'); ic.setAttribute('glyph', glyph); if (hue !== null) ic.setAttribute('hue', String(hue)); ic.setAttribute('size', '36px');
+    a.append(ic, el('span', '', label));
+    if (cur) a.setAttribute('aria-current', 'true');
+    return a;
+  };
+  list.append(row(home, 'home', null, 'Home', false), ...apps.map((a) => row(a.url, navGlyph(a), navHue(a.id), a.name, a.current)));
+  d.append(list);
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  queueMicrotask(() => d.show());
+}
+
+/**
+ * <sol-nav>: a button that opens Home and the other apps (design/API.md section 10, /_sol/nav).
+ * <sol-app-shell> adds one by itself; an app that lays out its own page puts one in its header.
+ * It stays hidden until the list is known (cached from the last visit, refreshed on load).
+ */
+class SolNav extends HTMLElement {
+  connectedCallback() {
+    if (this.btn) return;
+    this.btn = el('button', 'ghost icon-btn sol-nav-btn');
+    this.btn.type = 'button';
+    this.btn.setAttribute('aria-label', 'Sol: Home and apps');
+    const ic = el('sol-icon'); ic.setAttribute('name', 'home'); this.btn.append(ic);
+    this.btn.addEventListener('click', () => openNav(this.btn));
+    this.append(this.btn);
+    this.sync = () => { this.hidden = !navState; };
+    navSubs.add(this.sync); this.sync(); askNav();
+  }
+  disconnectedCallback() { navSubs.delete(this.sync); }
+}
+
+/** Fills `group` (the "Sol" block at the top of an app's sidebar) from the nav list. */
+function renderNavGroup(group) {
+  group.replaceChildren();
+  group.hidden = !navState;
+  if (!navState) return;
+  group.append(el('div', 'nav-label', 'Sol'));
+  const item = (href, glyph, label, cur) => {
+    const a = el('a', 'nav-item nav-sol'); a.href = href;
+    const ic = el('sol-icon'); ic.setAttribute('name', glyph); a.append(ic, el('span', '', label));
+    if (cur) a.setAttribute('aria-current', 'true');
+    return a;
+  };
+  group.append(item(navState.home, 'home', 'Home', false), ...navState.apps.map((a) => item(a.url, navGlyph(a), a.name, a.current)));
+}
+
 /**
  * <sol-app-shell heading="Files">: put <nav slot="nav"> and <main> inside.
  * Desktop: a glass source-list sidebar (collapsible) and a unified glass toolbar showing the page
@@ -91,6 +184,8 @@ class SolRing extends HTMLElement {
  * element in <main> collapses into the glass nav bar as you scroll.
  * The toolbar title follows the first `.large-title` in <main> (or the `heading` attribute, or
  * setHeading()). Elements with slot="actions" are moved into the toolbar.
+ * The way back to Sol is built in (/_sol/nav): a "Sol" group (Home and the apps) at the top of the
+ * sidebar on desktop, a home button at the left of the bar on a phone or when there is no sidebar.
  */
 class SolAppShell extends HTMLElement {
   connectedCallback() {
@@ -109,7 +204,16 @@ class SolAppShell extends HTMLElement {
     this.titleEl.setAttribute('role', 'heading'); this.titleEl.setAttribute('aria-level', '1');
     this.actions = el('div', 'bar-actions');
     for (const a of this.querySelectorAll(':scope > [slot="actions"]')) this.actions.append(a);
-    this.bar.append(this.toggle, this.titleEl, this.actions);
+    this.solNav = el('sol-nav', 'shell-nav');
+    this.bar.append(this.solNav, this.toggle, this.titleEl, this.actions);
+    if (!nav) this.setAttribute('data-nonav', '');
+    if (nav) {
+      this.group = el('div', 'sol-group');
+      this.group.setAttribute('role', 'group'); this.group.setAttribute('aria-label', 'Sol');
+      nav.prepend(this.group);
+      this.syncGroup = () => renderNavGroup(this.group);
+      navSubs.add(this.syncGroup); this.syncGroup(); askNav();
+    }
     this.insertBefore(this.bar, this.main);
     if (store.get('sol-sidebar') === 'hidden') this.setAttribute('data-sidebar', 'hidden');
     this.setHeading(this.getAttribute('heading') || '');
@@ -120,7 +224,7 @@ class SolAppShell extends HTMLElement {
       this.syncTitle();
     }
   }
-  disconnectedCallback() { this.mo?.disconnect(); }
+  disconnectedCallback() { this.mo?.disconnect(); if (this.syncGroup) navSubs.delete(this.syncGroup); }
   onScroll = () => this.toggleAttribute('data-collapsed', this.main.scrollTop > 36);
   syncTitle() {
     const t = this.main.querySelector('.large-title');
@@ -286,7 +390,7 @@ class SolToast extends HTMLElement {
   }
 }
 
-for (const [name, cls] of [['sol-icon', SolIcon], ['sol-avatar', SolAvatar], ['sol-app-icon', SolAppIcon], ['sol-ring', SolRing], ['sol-app-shell', SolAppShell], ['sol-list', SolList], ['sol-dialog', SolDialog], ['sol-sheet', SolSheet], ['sol-toast', SolToast]]) {
+for (const [name, cls] of [['sol-icon', SolIcon], ['sol-avatar', SolAvatar], ['sol-app-icon', SolAppIcon], ['sol-ring', SolRing], ['sol-app-shell', SolAppShell], ['sol-nav', SolNav], ['sol-list', SolList], ['sol-dialog', SolDialog], ['sol-sheet', SolSheet], ['sol-toast', SolToast]]) {
   if (!customElements.get(name)) customElements.define(name, cls);
 }
 
@@ -401,7 +505,7 @@ export const toast = SolToast.show;
 
 // ---- theme and settings ----
 const SETTING_KEY = 'sol-settings';
-const SETTINGS = { density: ['compact'], radius: ['square'], glass: ['off'], font: ['system', 'inter', 'mono'] };
+const SETTINGS = { density: ['compact'], radius: ['square'], glass: ['off'], font: ['inter', 'mono'] }; // "system" is the default and sets nothing: a theme's own font (Terminal's monospace) must show
 
 /**
  * Applies appearance settings to <html>: {scheme: 'auto'|'light'|'dark', accent: '#rrggbb' | '',
@@ -450,4 +554,4 @@ try { const q = new URLSearchParams(location.search).get('theme'); if (q === 'li
 try { if (location.hostname.endsWith('.localhost')) document.documentElement.setAttribute('data-app', location.hostname.split('.')[0]); } catch { /* not in a page */ }
 if (!document.querySelector('meta[name="sol-theme"][content="off"]')) loadTheme();
 
-export { SolIcon, SolAvatar, SolAppIcon, SolRing, SolAppShell, SolList, SolDialog, SolSheet, SolToast };
+export { SolNav, SolIcon, SolAvatar, SolAppIcon, SolRing, SolAppShell, SolList, SolDialog, SolSheet, SolToast };

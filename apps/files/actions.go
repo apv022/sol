@@ -64,6 +64,22 @@ func (a *App) registerActions(act *sol.Actions) {
 	h("files.conflicts", a.actConflicts)
 	h("files.resolve", a.actResolve)
 	h("files.status", a.actStatus)
+	h("files.sync", a.actSync)
+}
+
+// actSync rescans the folder and folds every feed now: the "sync now" of the UI and of agents
+// that just wrote into the folder with another program.
+func (a *App) actSync(ctx context.Context, c sol.Call) (any, error) {
+	if c.DryRun {
+		return plan(planItem{Op: "sync", Note: "rescan the folder and fetch every device's changes"}), nil
+	}
+	if err := a.Rescan(ctx); err != nil {
+		return nil, err
+	}
+	if err := a.Sync(ctx); err != nil {
+		return nil, err
+	}
+	return a.actStatus(ctx, c)
 }
 
 // fileInfo is how the UI and agents see one file or folder.
@@ -81,6 +97,9 @@ type fileInfo struct {
 	Shared   bool   `json:"shared"`   // I share this folder
 	ReadOnly bool   `json:"read_only"`
 	Virtual  bool   `json:"virtual"` // Shared/ and Shared/<person>: made up, not writable
+	// Items is how many entries a folder holds (folders only), so a listing can say "3 items"
+	// without one more call per folder.
+	Items *int `json:"items,omitempty"`
 }
 
 func (a *App) info(v *view, p string) (fileInfo, bool) {
@@ -97,6 +116,8 @@ func (a *App) info(v *view, p string) (fileInfo, bool) {
 		}
 	} else if v.dirs[p] {
 		fi.Type = "dir"
+		n := len(v.kids[p])
+		fi.Items = &n
 		for _, sh := range a.sharesSnapshot() {
 			if sh.Path == p {
 				fi.Shared = true
@@ -183,7 +204,12 @@ func (a *App) actList(ctx context.Context, c sol.Call) (any, error) {
 		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	return map[string]any{"path": p, "entries": out}, nil
+	here := fileInfo{Name: "", Path: "", Type: "dir", Kept: a.isKept("")}
+	if p != "" {
+		here, _ = a.info(v, p)
+	}
+	// here is the folder itself (what files.stat says), so a UI needs one call per folder.
+	return map[string]any{"path": p, "here": here, "entries": out}, nil
 }
 
 func (a *App) actStat(ctx context.Context, c sol.Call) (any, error) {
@@ -462,6 +488,16 @@ func (a *App) renameOnDisk(from, to string) {
 	for k, e := range moved {
 		delete(a.index, k)
 		a.index[to+strings.TrimPrefix(k, from)] = e
+	}
+	var dirs []string
+	for d := range a.dirsMade {
+		if under(d, from) {
+			dirs = append(dirs, d)
+		}
+	}
+	for _, d := range dirs {
+		delete(a.dirsMade, d)
+		a.dirsMade[to+strings.TrimPrefix(d, from)] = true
 	}
 	a.mu.Unlock()
 	a.markDirty()

@@ -4,24 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sol</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="stylesheet" href="/kit/tokens.css">
 <link rel="stylesheet" href="/kit/kit.css">
 <link rel="stylesheet" href="/wallpaper.css">
 <link rel="stylesheet" href="/home.css">
+<link rel="stylesheet" id="sol-theme" href="/_sol/theme.css">
 </head>
 <body>
 <div id="wallpaper" class="wp wallpaper" aria-hidden="true"><div class="sun"></div></div>
 <div id="shell" class="shell" data-route="home">
   <nav id="side" class="sidebar glass" aria-label="Sol"></nav>
   <main id="main" tabindex="-1"></main>
-  <nav id="dock" class="dock glass" aria-label="Dock"></nav>
   <nav id="tabs" class="tabbar glass" aria-label="Sections"></nav>
 </div>
 <section id="locked" class="locked" hidden>
   <div class="locked-card glass">
-    <sol-app-icon glyph="sun" size="72px"></sol-app-icon>
+    <img class="locked-logo" src="/icon.svg" alt="" width="72" height="72">
     <h1>This browser isn't signed in to Sol</h1>
     <p>Open Sol from your app menu, or run <code>sol open</code>.</p>
+    <button type="button" class="primary" id="signin" data-act="signin">Sign in</button>
+    <small class="muted">Signing in this way works for the person who runs Sol on this computer.</small>
   </div>
 </section>
 <script type="module" src="/app.js"></script>

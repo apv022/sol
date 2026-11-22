@@ -588,7 +588,8 @@ func (m *Manager) decide(r *wire.Request, anon bool) (Peer, error) {
 			return Peer{}, err
 		}
 		m.NoteEndpoints(r.Bundle.Endpoints)
-		m.relay(r.Bundle) // my other devices reach the new contact too (once the contacts feed says so)
+		m.noteBundle(r.Bundle) // persisted, so a restart before any other handshake still redials
+		m.relay(r.Bundle)      // my other devices reach the new contact too (once the contacts feed says so)
 		m.log.Info("paired", "person", short(person))
 		return Peer{Person: person, Device: r.Device, Relation: Contact}, nil
 	case wire.OpJoin:
@@ -993,6 +994,7 @@ func (m *Manager) Pair(ctx context.Context, l pairing.Link) (*Session, error) {
 		return nil, err
 	}
 	m.NoteEndpoints(res.Bundle.Endpoints)
+	m.noteBundle(res.Bundle) // persisted: a restart right after pairing must still redial the inviter
 	m.relay(res.Bundle)
 	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Contact}, m.kr.DevicePublic(), path, pk,
 		identity.AnonymousTransport(path.Transport))
@@ -1023,6 +1025,7 @@ func (m *Manager) Join(ctx context.Context, l pairing.Link, name string) (*Sessi
 	}
 	m.BundleChanged() // this device has a person now
 	m.NoteEndpoints(res.Bundle.Endpoints)
+	m.noteBundle(res.Bundle) // persisted: a restart right after joining must still redial the admin device
 	s := m.start(conn, true, Peer{Person: l.Person, Device: res.Device, Relation: Self}, m.kr.DevicePublic(), path, pk,
 		identity.AnonymousTransport(path.Transport))
 	if s == nil {

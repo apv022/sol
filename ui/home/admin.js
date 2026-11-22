@@ -19,11 +19,13 @@ const enc = encodeURIComponent;
  * (default /admin/v1), onUnauthorized (called once per 401), EventSource (for tests).
  */
 export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, EventSource: ES } = {}) {
-  async function req(method, path, json) {
+  // `raw` ({body, type}) sends the bytes as they are (an image upload) instead of JSON.
+  async function req(method, path, json, raw, url = base + '/' + path) {
     const init = { method, credentials: 'same-origin', headers: { Accept: 'application/json' } };
-    if (json !== undefined) { init.body = JSON.stringify(json); init.headers['Content-Type'] = 'application/json'; }
+    if (raw) { init.body = raw.body; init.headers['Content-Type'] = raw.type; }
+    else if (json !== undefined) { init.body = JSON.stringify(json); init.headers['Content-Type'] = 'application/json'; }
     let res;
-    try { res = await (f || globalThis.fetch.bind(globalThis))(base + '/' + path, init); } catch (e) {
+    try { res = await (f || globalThis.fetch.bind(globalThis))(url, init); } catch (e) {
       throw new AdminError('unavailable', 'Cannot reach Sol: ' + (e && e.message), 0);
     }
     const text = await res.text();
@@ -72,10 +74,23 @@ export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, Even
     backup: () => get('backup'),
     confirmBackup: () => post('backup/confirm'),
     agents: () => get('agents'),
+    /** The installed apps' actions (`[{id, name, actions: [{name, description, effect}]}]`), for picking an agent's scopes. */
+    actions: () => get('actions'),
+    /**
+     * Makes an agent key: `{name, scopes, days}`. The answer is `{agent, key_file, path}` and the
+     * key file's text is only ever returned here, once; the caller must not store it.
+     */
+    newAgent: (a) => post('agents/new', a),
     revokeAgent: (name) => post(`agents/${enc(name)}/revoke`),
     // Not in the endpoint table yet: revoking one browser session (Settings lists them).
     revokeSession: (id) => req('DELETE', `sessions/${enc(id)}`),
     logout: () => post('logout'),
+    /** The locked screen's Sign in: asks the daemon to start a session for the computer's own user (root path, not /admin/v1). */
+    signIn: () => req('POST', '', undefined, undefined, '/_sol/signin'),
+    wallpapers: () => get('wallpapers'),
+    /** Uploads an image (a File or Blob; png, jpeg or webp, at most 15 MB) as a wallpaper: `{id, url, setting}`. */
+    addWallpaper: (file) => req('POST', 'wallpapers', undefined, { body: file, type: file.type }),
+    removeWallpaper: (id) => req('DELETE', `wallpapers/${enc(id)}`),
     networkChanged: () => post('network-changed'),
     transports: () => get('transports'),
     setTransport: (name, enabled) => post(`transports/${enc(name)}`, { enabled }),

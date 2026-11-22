@@ -306,6 +306,14 @@ after the daemon checks the `Host` and `Origin` headers.
 tells open UIs to swap it live. `sol.js` and `kit.css` handle
 this, so apps do nothing.
 
+`GET /_sol/nav` on every app origin is the way back to Sol, so no app builds navigation of its own:
+`{"home": "http://localhost:<port>/", "apps": [{"id", "name", "icon", "url", "current"}]}`, the
+installed apps that have a UI (`current` marks the app asked). It is read-only, behind the same
+origin and sign-in checks as the rest of `/_sol/`, and never reaches the API. `ui/kit`'s
+`<sol-app-shell>` fetches it once per load (cached in localStorage for the first paint) and adds a
+"Sol" group (Home plus the apps) to the sidebar, or on a phone a home button in the bar that opens
+a sheet; `<sol-nav>` is the same button for apps that lay out their own page.
+
 A peer's app is opened locally the same way: `http://<app>.<petname>.localhost:<port>/` is
 proxied to that person's app over Sol.
 
