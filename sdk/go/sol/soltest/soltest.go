@@ -301,7 +301,9 @@ func ShareReadAndEvents(t *testing.T, w *World) {
 		t.Fatal(err)
 	}
 	fe := wait(t, bobEv)
-	for fe.Type == sol.EventEntry { // entries Bob's wide subscription got while shared
+	// Skip entries Bob's wide subscription got while shared, and presence news (a contact
+	// coming online can land in between on a slow machine): the feed event must follow.
+	for fe.Type == sol.EventEntry || fe.Type == sol.EventPerson {
 		fe = wait(t, bobEv)
 	}
 	if fe.Type != sol.EventFeed || fe.Feed.Readable {

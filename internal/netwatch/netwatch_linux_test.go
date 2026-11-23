@@ -85,8 +85,14 @@ func TestNetlinkUnavailable(t *testing.T) {
 	openNetlink = func() (int, error) { return -1, os.NewSyscallError("socket", syscall.EAFNOSUPPORT) }
 	interfaces = func() ([]net.Interface, error) { scans.Add(1); return nil, nil }
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go Watch(ctx, Options{PollEvery: 5 * time.Millisecond, Log: slog.New(slog.DiscardHandler)}, func(string) {})
+	stopped := make(chan struct{})
+	// Stop Watch and wait for it before the cleanup restores openNetlink and interfaces,
+	// which it reads (a race otherwise).
+	defer func() { cancel(); <-stopped }()
+	go func() {
+		defer close(stopped)
+		Watch(ctx, Options{PollEvery: 5 * time.Millisecond, Log: slog.New(slog.DiscardHandler)}, func(string) {})
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for scans.Load() < 3 {
 		if time.Now().After(deadline) {
