@@ -96,7 +96,7 @@ for abi in $ABIS; do
   # Programs must be named lib*.so to be unpacked where Android lets
   # an app execute them.
   (cd "$REPO" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-     -ldflags "-s -w" -o "$OUT/lib/$abi/libsol.so" ./cmd/sol)
+     -ldflags "-s -w -X github.com/apv022/sol/internal/daemon.Version=$VERSION_NAME" -o "$OUT/lib/$abi/libsol.so" ./cmd/sol)
   tor_for "$abi" "$OUT/lib/$abi/libtor.so"
 done
 

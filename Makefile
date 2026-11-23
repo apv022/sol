@@ -1,7 +1,7 @@
 .PHONY: build build-bundled fetch-tor check test fmt browser-test ui-e2e
 
 build:                ## bin/sol
-	go build -trimpath -o bin/sol ./cmd/sol
+	go build -trimpath -ldflags "-X github.com/apv022/sol/internal/daemon.Version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o bin/sol ./cmd/sol
 
 fetch-tor:            ## download + verify the bundled tor (Tor Browser expert bundles) into internal/runtime/bin
 	sh scripts/fetch-tor.sh

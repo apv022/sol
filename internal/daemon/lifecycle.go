@@ -44,6 +44,10 @@ func dirFor(goos string, env func(string) string, home string) string {
 	return filepath.Join(home, ".local", "share", "sol")
 }
 
+// Version is this build's version: release builds set it with
+// -ldflags "-X github.com/apv022/sol/internal/daemon.Version=0.2.0-test.6"; "dev" otherwise.
+var Version = "dev"
+
 // Initialised reports whether dir holds a Sol identity (Init or Restore ran there).
 func Initialised(dir string) bool {
 	_, err := identity.Open(keysDir(dir))

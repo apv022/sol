@@ -144,6 +144,7 @@ const usage = `usage: sol <command> [flags]
   agent new <name> --scope PATTERN... [--person ID|self] [--days N] [--out FILE] | agent list | agent revoke <name|id> | agent renew <name> [--days N]
   inbox [--json] | inbox approve <id> | inbox deny <id> | inbox dismiss <id>
   theme list | theme set <name> | theme settings [--scheme S] [--accent #rrggbb] [--density D] [--radius R] [--glass on|off] [--font F]
+  version                           this binary's version, and the running Sol's when it differs
   backup words | backup confirm
   reset --confirm NAME              remove Sol from this device (identity archived, synced folder kept), then set up again
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
@@ -158,6 +159,9 @@ Every command takes --dir DIR (default $SOL_DIR, else ~/.local/share/sol on Linu
 func run(args []string) error {
 	if len(args) == 0 {
 		return startCmd(daemon.DefaultDir())
+	}
+	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
+		return versionCmd(args[1:])
 	}
 	if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Println(usage)
@@ -312,6 +316,7 @@ func run(args []string) error {
 		if *asJSON {
 			return printJSON(st)
 		}
+		fmt.Printf("version  %s\n", st.Version)
 		fmt.Printf("person   %s (%s)\ndevice   %s (%s)\nui       %s\nfiles    %s\n", st.Me.Person.Name, st.Me.Person.ID, st.Me.Device.Name, st.Me.Device.ID, st.UI, st.Files)
 		for _, e := range st.Endpoints {
 			fmt.Printf("endpoint %s %s\n", e.Kind, e.Addr)
@@ -871,4 +876,23 @@ func resolvePeople(ctx context.Context, c *daemon.Client, in []string) ([]string
 		out = append(out, id)
 	}
 	return out, nil
+}
+
+// versionCmd is `sol version`: this binary's version and, when a daemon runs on the data
+// directory with another build, that one too (an upgrade that still needs `sol restart`).
+func versionCmd(rest []string) error {
+	fs := flag.NewFlagSet("sol version", flag.ContinueOnError)
+	dir := fs.String("dir", daemon.DefaultDir(), "data directory")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	fmt.Println("sol", daemon.Version)
+	if st, err := daemon.Running(*dir); err == nil && st.Version != daemon.Version {
+		v := st.Version
+		if v == "" {
+			v = "an older build"
+		}
+		fmt.Printf("the running Sol is %s: run `sol restart` to use this one\n", v)
+	}
+	return nil
 }

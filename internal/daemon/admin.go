@@ -36,6 +36,8 @@ import (
 
 // Status is the reply of GET /admin/v1/status (sol status).
 type Status struct {
+	// Version is the running daemon's build (Version), so an upgrade that wasn't restarted shows.
+	Version      string           `json:"version"`
 	Me           StatusMe         `json:"me"`
 	Endpoints    []EndpointInfo   `json:"endpoints"`
 	Transports   []TransportState `json:"transports"`
@@ -107,7 +109,7 @@ func (d *Daemon) Status() Status {
 }
 
 func (d *Daemon) status(browser string) Status {
-	st := Status{PID: os.Getpid(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
+	st := Status{Version: Version, PID: os.Getpid(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
 		Transports: d.Transports(), PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
 	st.Me.Person.ID, st.Me.Device.ID = d.me()
 	if b, err := d.Keyring.Bundle(); err == nil {

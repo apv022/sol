@@ -128,7 +128,12 @@ if [ -n "$added" ]; then
   say "Open a new terminal (or run: export PATH=\"$dir:\$PATH\") and \`sol\` works from anywhere."
 fi
 
-if [ -z "${SOL_NO_START:-}" ]; then
+# An upgrade: a Sol already running keeps the old code until it restarts (new apps, fixes).
+if "$dir/sol" status >/dev/null 2>&1; then
+  say "Restarting the running Sol on the new version..."
+  "$dir/sol" restart >/dev/null 2>&1 || say "Restart failed; run \`sol restart\` (\`sol logs\` shows why)."
+  say "$("$dir/sol" version)"
+elif [ -z "${SOL_NO_START:-}" ]; then
   say "Starting Sol (it sets itself up on first run and opens in your browser)..."
   "$dir/sol" || say "Sol didn't start; run \`sol\` to try again, \`sol logs\` to see why."
   "$dir/sol" launcher on >/dev/null 2>&1 || true
