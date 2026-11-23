@@ -25,7 +25,7 @@ can also be run from a script or an AI agent, with scoped keys and your approval
 ### Linux and macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/apv022/sol-test/main/install.sh | sh
 ```
 
 This downloads the `sol` binary for your machine (Tor is built in), checks it against the
@@ -43,12 +43,12 @@ Options: `SOL_VERSION=<tag>`, `SOL_BIN_DIR=<dir>`, `SOL_NO_PATH=1`, `SOL_NO_STAR
 
 ### Windows
 
-Download `sol-windows-amd64.exe` from the [releases page](https://github.com/apv022/sol/releases),
+Download `sol-windows-amd64.exe` from the [releases page](https://github.com/apv022/sol-test/releases),
 rename it `sol.exe`, put it in a folder on your `PATH`, and run `sol`.
 
 ### Android
 
-Download the APK from [apv022/sol-mobile releases](https://github.com/apv022/sol-mobile/releases)
+Download the APK from [apv022/solmob-test releases](https://github.com/apv022/solmob-test/releases)
 and open it (allow installs from your browser or file manager when Android asks). See the
 [sol-mobile README](https://github.com/apv022/sol-mobile#readme) for the first run.
 
