@@ -419,7 +419,7 @@ func TestNonSolClientGetsNothing(t *testing.T) {
 		got, err := io.ReadAll(c)
 		c.Close()
 		// A reset is fine (closing with unread input sends RST); data is not.
-		if len(got) != 0 || (err != nil && !errors.Is(err, syscall.ECONNRESET) && !strings.Contains(err.Error(), "reset")) {
+		if len(got) != 0 || (err != nil && !errors.Is(err, syscall.ECONNRESET) && !strings.Contains(err.Error(), "reset") && !strings.Contains(err.Error(), "forcibly closed")) {
 			t.Errorf("probe %q got %q, err %v", probe, got, err)
 		}
 	}

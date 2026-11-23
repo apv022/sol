@@ -1,6 +1,9 @@
 package daemon
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultDirPerOS(t *testing.T) {
 	for _, c := range []struct {
@@ -25,6 +28,7 @@ func TestDefaultDirPerOS(t *testing.T) {
 			}
 			continue
 		}
+		got = filepath.ToSlash(got) // a Windows host joins with backslashes whatever the target OS
 		if got != c.want {
 			t.Errorf("%s %v: %q, want %q", c.goos, c.env, got, c.want)
 		}
