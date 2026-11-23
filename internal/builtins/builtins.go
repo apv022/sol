@@ -8,6 +8,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"runtime"
 
 	"github.com/apv022/sol/apps/calendar"
 	"github.com/apv022/sol/apps/files"
@@ -39,7 +40,11 @@ func runFiles(ctx context.Context, env apphost.Env) error {
 	if err != nil {
 		return err
 	}
-	return files.New(api, files.Config{Root: env.Files, DataDir: env.Data, Listener: ln, Logf: logf}).Run(ctx)
+	role := files.RoleDesktop
+	if onAndroid() {
+		role = files.RoleAndroid // folders default to online only: a phone doesn't mirror everything
+	}
+	return files.New(api, files.Config{Root: env.Files, DataDir: env.Data, Listener: ln, Logf: logf, Role: role}).Run(ctx)
 }
 
 func runNotes(ctx context.Context, env apphost.Env) error {
@@ -77,3 +82,7 @@ func runCalendar(ctx context.Context, env apphost.Env) error {
 	}
 	return calendar.New(api, calendar.Config{DataDir: env.Data, Listener: ln, Logf: logf}).Run(ctx)
 }
+
+// onAndroid reports whether this sol runs inside the Android app (the node binary is built for
+// linux or android; the Android runtime always sets ANDROID_ROOT).
+func onAndroid() bool { return runtime.GOOS == "android" || os.Getenv("ANDROID_ROOT") != "" }

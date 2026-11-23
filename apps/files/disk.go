@@ -133,8 +133,22 @@ func (a *App) keptLocked(p string) bool {
 	if under(p, sharedDir) {
 		return false
 	}
-	return a.cfg.Role != RoleAndroid
+	if a.cfg.Role == RoleAndroid {
+		// A phone downloads on demand, except folders other apps read from disk (Notes keeps
+		// its Markdown files in Notes/), so they work offline.
+		for _, k := range androidKept {
+			if under(p, k) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
+
+// androidKept are the top-level folders kept on an Android device by default (the person can
+// still change each one): the ones another app reads from disk.
+var androidKept = []string{"Notes"}
 
 func (a *App) skip(p, why string) {
 	a.mu.Lock()

@@ -110,3 +110,33 @@ func TestDesktopKeepsByDefaultAndCanGoOnlineOnly(t *testing.T) {
 		t.Fatalf("list: %s", got)
 	}
 }
+
+// TestAndroidDefaults: on a phone every folder of mine is online only by default, except the
+// folders another app reads from disk (Notes); shared folders are online only everywhere.
+func TestAndroidDefaults(t *testing.T) {
+	phone := &App{cfg: Config{Role: RoleAndroid}, keep: map[string]bool{}}
+	desk := &App{cfg: Config{Role: RoleDesktop}, keep: map[string]bool{}}
+	for _, c := range []struct {
+		p           string
+		phone, desk bool
+	}{
+		{"Photos/beach.jpg", false, true},
+		{"Nextcloud/big.iso", false, true},
+		{"Notes/todo.md", true, true},
+		{"Notes", true, true},
+		{"Notesy/x", false, true}, // a prefix of the name is not the folder
+		{sharedDir + "/ben/Trip/a.jpg", false, false},
+	} {
+		if got := phone.isKept(c.p); got != c.phone {
+			t.Errorf("phone %s: kept %v, want %v", c.p, got, c.phone)
+		}
+		if got := desk.isKept(c.p); got != c.desk {
+			t.Errorf("desktop %s: kept %v, want %v", c.p, got, c.desk)
+		}
+	}
+	// A choice the person made wins over the default.
+	phone.keep["Photos"] = true
+	if !phone.isKept("Photos/beach.jpg") {
+		t.Error("a pinned folder is not kept on the phone")
+	}
+}

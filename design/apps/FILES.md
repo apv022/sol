@@ -51,8 +51,8 @@ uploads, downloads, shares subfolders with people, and shows folders people shar
 
 Each top-level folder (and any shared folder) is either **kept** (files on disk, synced) or
 **online only** (the tree is known, contents fetched when opened or streamed). Defaults: my own
-folders kept on desktop, online only on Android except ones I pin; folders shared with me online
-only. Music and Movies stream online-only files by blob hash without writing them to disk.
+folders kept on desktop, online only on Android except ones I pin and `Notes/` (Notes reads its
+files from disk); folders shared with me online only. Music and Movies stream online-only files by blob hash without writing them to disk.
 
 ## Sharing
 
