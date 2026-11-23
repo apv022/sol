@@ -211,7 +211,9 @@ func TestTorExitRestartsWithBackoff(t *testing.T) {
 			t.Errorf("retry %d: attempt %d waited %v, want attempt %d waiting %v", i, st.Attempt, st.RetryAt.Sub(st.PhaseSince), i+2, w)
 		}
 	}
-	if !s.noticed("exited") {
+	// The death is reported either as the process exiting or, when the closed control
+	// connection is noticed first (as on Windows), as tor no longer answering: both are right.
+	if !s.noticed("exited") && !s.noticed("stopped answering") {
 		t.Errorf("exits not reported: %q", s.notices)
 	}
 
