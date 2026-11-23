@@ -71,7 +71,7 @@ export function hueOf(key) {
   return h;
 }
 
-const GLYPHS = { files: 'folder', notes: 'edit', music: 'music', photos: 'image', video: 'video', tasks: 'check', calendar: 'clock', chat: 'send', browser: 'globe' };
+const GLYPHS = { files: 'folder', notes: 'edit', music: 'music', photos: 'image', video: 'video', tasks: 'check', calendar: 'calendar', chat: 'send', browser: 'globe' };
 
 /**
  * What to draw for an app: its manifest icon when it is a safe image (a data: image or a path on

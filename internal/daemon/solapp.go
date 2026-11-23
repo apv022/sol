@@ -54,6 +54,8 @@ func solActions() ActionApp {
 			Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.theme.settings", Description: "Show or change appearance settings (an empty value resets one; no arguments shows them)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: props}},
+		{Name: "sol.notifications", Description: "Show or set desktop notifications for Inbox items on this device (desktop: on|off; no arguments shows the state)", Effect: sol.EffectWrite,
+			Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"desktop": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
 	}}
 }
 
@@ -120,6 +122,17 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 				return nil, true, err
 			}
 			res = p
+		}
+	case "sol.notifications":
+		switch {
+		case args["desktop"] == "":
+			res = d.Notifications()
+		case c.DryRun:
+			res = map[string]any{"dry_run": true, "would_set": args["desktop"]}
+		default:
+			if res, err = d.SetNotifications(args["desktop"] == "on"); err != nil {
+				return nil, true, err
+			}
 		}
 	case "sol.theme.settings":
 		switch {

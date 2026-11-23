@@ -20,11 +20,13 @@
 //	sol do <app>.<action> ...    run an action (sol do --help); as an agent with SOL_AGENT_KEY or --as-agent
 //	sol agent new|list|revoke|renew   agent keys
 //	sol inbox [approve|deny <id>]     notices and approvals
+//	sol events [--json]               follow the admin event stream, one event per line
+//	sol notifications on|off|status   desktop notifications of Inbox items (this device)
 //	sol theme list|set|settings       the look of every app
 //	sol backup words|confirm          the 24 recovery words
 //	sol restore --words "..."         set up a fresh directory from the words
 //	sol network-changed [reason]      redial peers now (OS network callbacks)
-//	sol open [--print]                open the Sol app in the browser, logged in
+//	sol open [--print] [app]          open the Sol app (or one app, e.g. `sol open files`) in the browser, logged in
 //	sol service add|list|remove       share a local port with people (port sharing)
 //	sol tunnel open|list|close        open a contact's service on a local port
 //
@@ -143,13 +145,15 @@ const usage = `usage: sol <command> [flags]
   do <app>.<action> [--name value ...] [--args JSON|-] [--json] [--dry-run] [--person ID] [--as-agent NAME]
   agent new <name> --scope PATTERN... [--person ID|self] [--days N] [--out FILE] | agent list | agent revoke <name|id> | agent renew <name> [--days N]
   inbox [--json] | inbox approve <id> | inbox deny <id> | inbox dismiss <id>
+  events [--json]                   follow the admin events (inbox items, apps, ...) until interrupted
+  notifications on|off|status       desktop notifications for Inbox items on this device (SOL_NOTIFY=off|on overrides)
   theme list | theme set <name> | theme settings [--scheme S] [--accent #rrggbb] [--density D] [--radius R] [--glass on|off] [--font F]
   version                           this binary's version, and the running Sol's when it differs
   backup words | backup confirm
   reset --confirm NAME              remove Sol from this device (identity archived, synced folder kept), then set up again
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
   network-changed [reason]
-  open [--print]                    open the Sol app in the browser (prints the one-time login URL)
+  open [--print] [app]              open the Sol app, or one app (sol open files), in the browser; --print only prints the URL
   service add <name> <port> [--http] [--with PERSON]... | service list | service remove <name>
   tunnel open <person> <service> [--port N] | tunnel list | tunnel close <id>
 
@@ -169,7 +173,10 @@ func run(args []string) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "transports", "people":
+	case "transports", "people", "notifications":
+		if cmd == "notifications" && (len(rest) == 0 || strings.HasPrefix(rest[0], "-")) {
+			rest = append([]string{"status"}, rest...)
+		}
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			rest = append([]string{"list"}, rest...)
 		}
@@ -251,6 +258,11 @@ func run(args []string) error {
 		return restartCmd(*dir)
 	case "logs":
 		return logsCmd(*dir, rest)
+	case "events":
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		return eventsCmd(*dir, *asJSON)
 	case "launcher":
 		if err := parseAnywhere(fs, rest); err != nil {
 			return err
@@ -573,8 +585,10 @@ func run(args []string) error {
 		return nil
 	case "network-changed":
 		return c.Do(ctx, "POST", "/admin/v1/network-changed", map[string]string{"reason": strings.Join(fs.Args(), " ")}, nil)
+	case "notifications on", "notifications off", "notifications status":
+		return notificationsCmd(ctx, c, cmd, *asJSON)
 	case "open":
-		return openUI(ctx, c, *noBrowser)
+		return openUI(ctx, c, *noBrowser, fs.Args())
 	case "service add", "service list", "service remove", "tunnel open", "tunnel list", "tunnel close":
 		return portCmd(ctx, c, cmd, fs.Args(), *asJSON, *svcHTTP, people, *port)
 	case "transports list", "transports enable", "transports disable":
@@ -605,7 +619,8 @@ func runDaemon(dir string) error {
 			}
 			join = res.JoinLink
 		}
-		d, err := daemon.Start(daemon.Options{Dir: dir, Builtins: builtins.All(), Log: log})
+		d, err := daemon.Start(daemon.Options{Dir: dir, Builtins: builtins.All(), Log: log,
+			OnApps: func(apps []apphost.MenuApp) { syncLauncher(dir, apps) }})
 		if errors.Is(err, daemon.ErrRunning) && os.Getenv("SOL_SUPERVISED") == "1" {
 			return nil // exit 0: the login entry must not restart a duplicate forever
 		}
@@ -725,8 +740,43 @@ func parseAnywhere(fs *flag.FlagSet, args []string) error {
 	return fs.Parse(append([]string{"--"}, pos...))
 }
 
-// openUI is `sol open`: a one-time login code, then the browser at /login?code=.
-func openUI(ctx context.Context, c *daemon.Client, printOnly bool) error {
+// openApp is `sol open <app>`: the app's own origin in the browser. A browser of this OS user
+// is signed in there by the daemon (design/ADMIN.md "Who may use it"); any other is sent
+// through the Sol app's sign-in, which comes back to the app.
+func openApp(ctx context.Context, c *daemon.Client, id string, printOnly bool) error {
+	var apps []daemon.AppInfo
+	if err := c.Do(ctx, "GET", "/admin/v1/apps", nil, &apps); err != nil {
+		return err
+	}
+	var have []string
+	for _, a := range apps {
+		if a.URL == "" {
+			continue
+		}
+		if strings.EqualFold(a.ID, id) || strings.EqualFold(a.Name, id) {
+			fmt.Println(a.URL)
+			if !printOnly && !openBrowser(a.URL) {
+				fmt.Fprintln(os.Stderr, "Could not start a browser; open the link above.")
+			}
+			return nil
+		}
+		have = append(have, a.ID)
+	}
+	if len(have) == 0 {
+		return fmt.Errorf("no app %q: no installed app has a UI", id)
+	}
+	return fmt.Errorf("no app %q with a UI; installed: %s", id, strings.Join(have, ", "))
+}
+
+// openUI is `sol open [app]`: with an app, that app's origin (openApp); without, a one-time
+// login code and the browser at /login?code=.
+func openUI(ctx context.Context, c *daemon.Client, printOnly bool, args []string) error {
+	if len(args) > 1 {
+		return errors.New("usage: sol open [--print] [app]")
+	}
+	if len(args) == 1 {
+		return openApp(ctx, c, args[0], printOnly)
+	}
 	var lc struct {
 		URL string `json:"url"`
 	}

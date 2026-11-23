@@ -132,6 +132,12 @@ type App struct {
 	back    map[string]bool // feeds already shared with their reader
 	names   map[string]string
 
+	subMu    sync.Mutex // subscription files (subscribe.go)
+	subWrite sync.Mutex
+	subTimer *time.Timer
+	subStop  bool
+	subFiles []subFile
+
 	noteMu sync.Mutex
 	fired  map[string]int64  // alert key → when
 	asked  map[string]string // invite ref → inbox item id
@@ -253,6 +259,9 @@ func (a *App) Start(ctx context.Context) error {
 	a.primed = true
 	a.noteMu.Unlock()
 	a.started = true
+	a.subMu.Lock()
+	a.subStop = false
+	a.subMu.Unlock()
 	if ev != nil {
 		a.wg.Add(1)
 		go a.follow(ctx, ev)
@@ -266,6 +275,7 @@ func (a *App) Stop() {
 		return
 	}
 	a.cancel()
+	a.subClose()
 	a.noteMu.Lock()
 	if a.timer != nil {
 		a.timer()
@@ -364,6 +374,7 @@ func (a *App) afterChange(ctx context.Context) {
 	}
 	a.notifyInvites(ctx)
 	a.rearm()
+	a.subTouch()
 }
 
 // classify tells what a feed name is for, and whom it is about.

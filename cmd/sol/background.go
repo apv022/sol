@@ -7,17 +7,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/apv022/sol/internal/apphost"
 	"github.com/apv022/sol/internal/autostart"
+	"github.com/apv022/sol/internal/builtins"
 	"github.com/apv022/sol/internal/daemon"
+	"github.com/apv022/sol/sdk/go/sol"
 )
 
 // This file is the background-daemon part of the CLI: `sol` and `sol start` run `sol run`
@@ -312,7 +317,43 @@ func launcherOn(dir string) error {
 	if err != nil {
 		return err
 	}
+	// The built-in apps get their entries at once; a running Sol brings the rest (and keeps all
+	// in step) through daemon.Options.OnApps.
+	l.Apps = launcherApps(builtinMenuApps())
 	return l.Enable()
+}
+
+// builtinMenuApps are the first-party apps that have a UI, with their icons.
+func builtinMenuApps() []apphost.MenuApp {
+	var out []apphost.MenuApp
+	for _, b := range builtins.All() {
+		m, err := sol.ParseManifest(b.Manifest)
+		if err != nil || m.UI == "" {
+			continue
+		}
+		icon, _ := fs.ReadFile(b.Icons, "icon-512.png")
+		out = append(out, apphost.MenuApp{ID: m.ID, Name: m.Name, Icon: icon})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func launcherApps(in []apphost.MenuApp) []autostart.App {
+	out := make([]autostart.App, 0, len(in))
+	for _, a := range in {
+		out = append(out, autostart.App{ID: a.ID, Name: a.Name, Icon: a.Icon})
+	}
+	return out
+}
+
+// syncLauncher is daemon.Options.OnApps: when the app-menu entry is on, it makes the per-app
+// entries match the installed apps. Quiet on failure: the menu is a convenience.
+func syncLauncher(dir string, apps []apphost.MenuApp) {
+	l, err := autostart.LauncherForThisProcess(runtime.GOOS, dir)
+	if err != nil || runtime.GOOS != "linux" || !l.Enabled() {
+		return
+	}
+	_ = l.SyncApps(launcherApps(apps))
 }
 
 func launcherOff(dir string) error {

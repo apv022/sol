@@ -192,6 +192,7 @@ func (d *Daemon) appChanged(id string) {
 	if d.Host == nil {
 		return
 	}
+	defer d.menuChanged()
 	for _, s := range d.Host.Status() {
 		if s.ID == id {
 			d.emit(EvApp, d.appInfo(s))
@@ -637,6 +638,18 @@ func (d *Daemon) adminHandler() http.Handler {
 			return nil, err
 		}
 		return d.UpdateThemeSettings(b)
+	})
+
+	// Desktop notifications of Inbox items (notify.go); per device, not synced.
+	j("GET /admin/v1/notifications", "", func(r *http.Request) (any, error) { return d.Notifications(), nil })
+	j("POST /admin/v1/notifications", "notifications.set", func(r *http.Request) (any, error) {
+		var b struct {
+			Desktop bool `json:"desktop"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.SetNotifications(b.Desktop)
 	})
 
 	// Backup.

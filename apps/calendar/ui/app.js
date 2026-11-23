@@ -399,13 +399,33 @@ function importICS(cal) {
   });
 }
 
+// Subscription files only help a desktop calendar app on this computer; the Android shell has the
+// phone's calendars instead.
+const CAN_SUBSCRIBE = !window.SolAndroid;
+
+async function subscribeSheet() {
+  let r;
+  try { r = await call('calendar.subscription', {}); } catch (e) { fail(e); return; }
+  const rows = (r.files || []).map((f) => html`<div class="sub-row"><div class="sub-name">${f.name}<code class="sub-url">${f.url}</code></div>
+    <button type="button" class="plain" data-copy="${f.url}">Copy link</button><button type="button" class="plain" data-copy="${f.path}">Copy path</button></div>`);
+  const d = dialog('Subscribe from another app', html`<p>Thunderbird, GNOME Calendar and Evolution can subscribe to these read-only files on this computer. They update whenever a calendar changes.</p>${rows}`, true);
+  d.box.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied'); } catch { toast('Could not copy; select the text instead'); }
+  });
+}
+
 function fileMenu(anchor) {
   const items = [
     { label: 'Import .ics…', icon: 'upload', onSelect: () => importICS(null) },
     { label: 'Export all calendars', icon: 'download', onSelect: () => exportICS(null) },
   ];
+  if (CAN_SUBSCRIBE) items.push({ label: 'Subscribe from another app…', icon: 'link', onSelect: subscribeSheet });
+  const opts = [['import', 'Import .ics…'], ['export', 'Export all calendars']];
+  if (CAN_SUBSCRIBE) opts.push(['subscribe', 'Subscribe from another app…']);
   if (anchor) showMenu(items, { anchor });
-  else choose('Import or export', 'iCalendar (.ics) files work with every calendar app.', [['import', 'Import .ics…'], ['export', 'Export all calendars']]).then((v) => { if (v === 'import') importICS(null); if (v === 'export') exportICS(null); });
+  else choose('Import or export', 'iCalendar (.ics) files work with every calendar app.', opts).then((v) => { if (v === 'import') importICS(null); if (v === 'export') exportICS(null); if (v === 'subscribe') subscribeSheet(); });
 }
 
 function calMenu(anchor, c) {

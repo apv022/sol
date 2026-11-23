@@ -289,3 +289,22 @@ export function applyVars(root) {
     }
   }
 }
+
+// ---- installable web app (design/APPS_EVERYWHERE.md M1) ----
+// Every UI that loads sol.js gets the daemon's manifest, icon and service worker, so a browser
+// can install it ("Install Files") and it opens even while the daemon is starting. Failures are
+// ignored: a browser without service workers just keeps working as a page.
+(function installable() {
+  const d = globalThis.document;
+  if (!d || !/^https?:$/.test(globalThis.location?.protocol || '')) return;
+  const add = (rel, attrs) => {
+    if (d.head.querySelector(`link[rel="${rel}"]`)) return;
+    const l = d.createElement('link');
+    l.rel = rel;
+    for (const [k, v] of Object.entries(attrs)) l.setAttribute(k, v);
+    d.head.append(l);
+  };
+  add('manifest', { href: '/_sol/manifest.webmanifest' });
+  add('icon', { href: '/_sol/icon.svg', type: 'image/svg+xml' });
+  try { globalThis.navigator?.serviceWorker?.register('/_sol/sw.js', { scope: '/' }).catch(() => {}); } catch { /* ignore */ }
+})();

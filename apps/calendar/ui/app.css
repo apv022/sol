@@ -224,3 +224,8 @@
   .dt input[type="time"] { width: 7.3rem; }
   .frow { padding: 0 var(--space-2); gap: var(--space-1); }
 }
+
+/* Subscribe from another app */
+.sub-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; }
+.sub-name { flex: 1 1 100%; font-weight: 600; }
+.sub-url { display: block; font-weight: 400; font-size: 0.85em; overflow-wrap: anywhere; color: var(--label-2); }

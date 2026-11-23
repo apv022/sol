@@ -247,22 +247,33 @@ type Options struct {
 	Log        *slog.Logger
 	// SameUser decides browser auto-login (see peercred.go); nil means the OS lookup. Tests inject.
 	SameUser SameUserFunc
+	// Notifier posts desktop notifications for new Inbox items (nil: the OS's own, notify.go).
+	// Tests inject a fake.
+	Notifier Notifier
 	// TorProvider runs the tor program for the "tor" transport (nil: the bundled or system
 	// tor). Tests inject a fake tor.
 	TorProvider solruntime.Provider
 	// WrapTransport, if set, wraps every configured transport (tests: taking a device off the
 	// network while its daemon keeps running).
 	WrapTransport func(transport.Transport) transport.Transport
+	// OnApps, if set, is told the apps that have a UI (with their icons) once at start and
+	// whenever that set changes, so `sol run` can keep the app-menu entries in step
+	// (internal/autostart). Tests leave it nil: they must never touch the real desktop.
+	OnApps func([]apphost.MenuApp)
 }
 
 // Daemon is one running device.
 type Daemon struct {
-	dir    string
-	cfg    Config
-	opt    Options
-	log    *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
+	onApps  func([]apphost.MenuApp) // Options.OnApps
+	menuMu  sync.Mutex
+	menuKey string // the last app set OnApps was given
+	dir     string
+	cfg     Config
+	opt     Options
+	notes   notifyBook // inbox items already notified (notify.go)
+	log     *slog.Logger
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	shutdown     chan struct{} // closed by POST /admin/v1/shutdown (sol stop)
 	resetToken   string        // set by POST /admin/v1/reset; guarded by mu
@@ -449,6 +460,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if err := syncBuiltins(o.Dir, o.Builtins); err != nil {
 		return nil, err
 	}
+	d.onApps = o.OnApps
 	if d.Host, err = apphost.New(apphost.Config{AppsDir: filepath.Join(o.Dir, "apps"),
 		DataDir: filepath.Join(o.Dir, "appdata"), RunDir: filepath.Join(d.runDir, "apps"), Files: files,
 		API: d.apiURL, Tokens: d.API, Builtins: o.Builtins, InProcess: o.InProcessApps, Exe: o.Exe,
@@ -464,6 +476,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if kr.Person() != nil {
 		d.Host.Start(d.ctx)
 	}
+	d.menuChanged()
 	d.notePrivacy()
 	d.watchThemes()
 	if d.cfg.Files != "" {
@@ -781,6 +794,7 @@ func (d *Daemon) tap(kind, id string) {
 	case sol.EventInbox:
 		if it, ok := d.API.InboxItem(id); ok {
 			d.emit(EvInbox, it)
+			d.notifyInbox(it)
 		}
 	}
 }

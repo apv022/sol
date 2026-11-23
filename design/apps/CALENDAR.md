@@ -129,6 +129,13 @@ device zone. Export writes one calendar, or every calendar as one file (each `VE
 `X-SOL-CALENDAR`); a round trip keeps everything above. Import reuses events by UID (an import of
 the same file twice changes nothing).
 
+**Subscription files (desktop).** The app keeps a read-only `.ics` per calendar, plus `all.ics`,
+in `<app data dir>/subscribe/` (not the synced folder, so devices never write the same file), so
+Thunderbird, GNOME Calendar or Evolution can subscribe to a local `file://` URL. They are rewritten
+atomically, after a short settle timer, whenever a calendar changes (no polling) and use the
+export code above. `calendar.subscription` returns the paths and URLs; the UI shows them in
+"Subscribe from another app" with Copy buttons, hidden in the Android shell.
+
 ## Actions
 
 `calendar.list_calendars`, `create_calendar`, `update_calendar`, `delete_calendar` (destructive),
@@ -136,7 +143,7 @@ the same file twice changes nothing).
 `calendar.update` (`span`: `this`, `following`, `all`, with `at` = the occurrence),
 `calendar.move` (new start keeping the duration, and/or another calendar), `calendar.delete`
 (destructive, approval for agents), `calendar.search`, `calendar.invite`, `calendar.invitations`,
-`calendar.respond`, `calendar.share`, `calendar.export`, `calendar.import`, `calendar.snapshot`
+`calendar.respond`, `calendar.share`, `calendar.export`, `calendar.import`, `calendar.subscription`, `calendar.snapshot`
 (calendars, invitations and the occurrences of a range, for the UI). Every write takes a dry run;
 calendars are named by id or name; table output has `columns`.
 

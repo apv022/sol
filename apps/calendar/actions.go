@@ -43,6 +43,7 @@ func (a *App) registerActions(act *sol.Actions) {
 	h("calendar.share", a.actShare)
 	h("calendar.export", a.actExport)
 	h("calendar.import", a.actImport)
+	h("calendar.subscription", a.actSubscription)
 	h("calendar.snapshot", a.actSnapshot)
 }
 

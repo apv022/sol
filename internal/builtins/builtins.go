@@ -20,10 +20,10 @@ import (
 // All returns every builtin app by name.
 func All() map[string]apphost.Builtin {
 	return map[string]apphost.Builtin{
-		"files":    {Manifest: files.ManifestJSON, Run: runFiles},
-		"notes":    {Manifest: notes.ManifestJSON, Run: runNotes},
-		"tasks":    {Manifest: tasks.ManifestJSON, Run: runTasks},
-		"calendar": {Manifest: calendar.ManifestJSON, Run: runCalendar},
+		"files":    {Manifest: files.ManifestJSON, Icons: files.Icons(), Run: runFiles},
+		"notes":    {Manifest: notes.ManifestJSON, Icons: notes.Icons(), Run: runNotes},
+		"tasks":    {Manifest: tasks.ManifestJSON, Icons: tasks.Icons(), Run: runTasks},
+		"calendar": {Manifest: calendar.ManifestJSON, Icons: calendar.Icons(), Run: runCalendar},
 	}
 }
 

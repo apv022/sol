@@ -43,6 +43,8 @@
      "input": {"type": "object", "properties": {"calendar": {"type": "string"}}}, "effect": "read"},
     {"name": "calendar.import", "description": "Add the events of an .ics file to a calendar (calendar), to one named after the file (name), or, for a Sol export of every calendar, to the calendars it names. Events are matched by UID, so importing a file twice changes nothing.",
      "input": {"type": "object", "required": ["ics"], "properties": {"ics": {"type": "string"}, "calendar": {"type": "string"}, "name": {"type": "string"}}}, "effect": "write"},
+    {"name": "calendar.subscription", "description": "Read-only .ics files (one per calendar, plus all.ics) kept current on this device, with their paths and file:// URLs, for a desktop calendar app (Thunderbird, GNOME Calendar, Evolution) to subscribe to.",
+     "input": {"type": "object"}, "effect": "read"},
     {"name": "calendar.snapshot", "description": "Everything the UI shows in one call: calendars, invitations and the occurrences between from and to in zone.",
      "input": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "zone": {"type": "string"}}}, "effect": "read"}
   ]

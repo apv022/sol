@@ -193,8 +193,16 @@ func TestPeerAppUI(t *testing.T) {
 	if _, err := api.Append(ctx, "f", 1); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := ui(t, bob, "pui.alice", "GET", "/x", "", "", map[string]string{"Sol-Person": "forged"}); code != http.StatusForbidden {
-		t.Fatalf("before sharing: %d", code)
+	// Right after pairing both sides may dial; a request riding the duplicate session that the
+	// tie-break closes fails with 502 once (C11). Wait that out, then insist on Alice's 403.
+	var code int
+	var body string
+	eventually(t, "a settled session", func() bool {
+		code, body = ui(t, bob, "pui.alice", "GET", "/x", "", "", map[string]string{"Sol-Person": "forged"})
+		return code != http.StatusBadGateway
+	})
+	if code != http.StatusForbidden {
+		t.Fatalf("before sharing: %d %q", code, body)
 	}
 	if err := api.Share(ctx, sol.ShareRequest{Feed: "f", People: []string{bob.PersonID()}}); err != nil {
 		t.Fatal(err)

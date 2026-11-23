@@ -1,10 +1,12 @@
 package autostart
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/apv022/sol/internal/fsutil"
@@ -14,9 +16,12 @@ import (
 // person who never touches a terminal can start Sol and get the app already signed in.
 //
 // Linux writes ~/.local/share/applications/sol.desktop and ~/.local/share/icons/sol.svg
-// (honouring $XDG_DATA_HOME). macOS and Windows say not_implemented for now. Like the
+// (honouring $XDG_DATA_HOME), plus one entry per app with a UI, sol-app-<id>.desktop with the
+// app's 512 px PNG as sol-app-<id>.png ("Sol Files", running `sol open files`), kept in step
+// with the installed apps by SyncApps. macOS and Windows say not_implemented for now. Like the
 // autostart entry it is per-user and removed by `sol autostart off` / `sol launcher off`;
-// removing it never touches anything the user put there other than these two files.
+// removing it never touches anything the user put there other than files named sol.* and
+// sol-app-*.
 
 // LauncherName is the launcher's file stem (sol.desktop, sol.svg).
 const LauncherName = "sol"
@@ -31,7 +36,20 @@ type Launcher struct {
 	DataHome string // $XDG_DATA_HOME ("" means ~/.local/share)
 	Exe      string // absolute path of the sol binary
 	Dir      string // the data directory `sol open` should use
+	// Apps are the apps with a UI that Enable gives an entry of their own (see SyncApps).
+	Apps []App
 }
+
+// App is an app with a UI that gets its own app-menu entry.
+type App struct {
+	ID, Name string
+	Icon     []byte // the 512 px PNG
+}
+
+// appPrefix starts the file stem of every per-app entry (sol-app-files.desktop).
+const appPrefix = LauncherName + "-app-"
+
+var safeAppID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 func (l Launcher) dataHome() string {
 	if l.DataHome != "" {
@@ -95,10 +113,102 @@ func (l Launcher) Enable() error {
 	if err := fsutil.WriteFileAtomic(l.IconPath(), []byte(IconSVG), 0o644); err != nil {
 		return err
 	}
-	return fsutil.WriteFileAtomic(l.DesktopPath(), []byte(DesktopEntry(l.Exe, l.Dir, l.IconPath())), 0o644)
+	if err := fsutil.WriteFileAtomic(l.DesktopPath(), []byte(DesktopEntry(l.Exe, l.Dir, l.IconPath())), 0o644); err != nil {
+		return err
+	}
+	return l.SyncApps(l.Apps)
 }
 
-// Disable removes both files; missing files are fine.
+func (l Launcher) appDesktop(id string) string {
+	return filepath.Join(l.dataHome(), "applications", appPrefix+id+".desktop")
+}
+
+func (l Launcher) appIcon(id string) string {
+	return filepath.Join(l.dataHome(), "icons", appPrefix+id+".png")
+}
+
+// AppEntry is the .desktop text of one app's entry: "Sol <name>", running `sol open <id>`.
+func AppEntry(exe, dir string, a App, icon string) string {
+	// A manifest name is data: no line break may start a new key.
+	name := strings.Map(func(r rune) rune {
+		if r < ' ' || r == 0x7f {
+			return -1
+		}
+		return r
+	}, a.Name)
+	return `# Written by "sol launcher on". Removed with "sol launcher off" or when the app is removed.
+[Desktop Entry]
+Type=Application
+Name=Sol ` + name + `
+Comment=Open ` + name + ` in Sol
+Exec=` + desktopQuote(exe) + ` open --dir ` + desktopQuote(dir) + ` ` + desktopQuote(a.ID) + `
+Icon=` + icon + `
+Terminal=false
+Categories=Network;
+StartupNotify=false
+`
+}
+
+// SyncApps makes the per-app entries exactly those of apps: it writes (only when changed) an
+// entry and icon for each, and removes entries of apps no longer listed. It never touches the
+// "Sol" entry. An app whose id is not a plain slug is skipped, as it would not be a safe file name.
+func (l Launcher) SyncApps(apps []App) error {
+	if l.GOOS != "linux" {
+		return ErrLauncherNotImplemented
+	}
+	for _, d := range []string{filepath.Dir(l.IconPath()), filepath.Dir(l.DesktopPath())} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+	keep := map[string]bool{}
+	for _, a := range apps {
+		if !safeAppID.MatchString(a.ID) {
+			continue
+		}
+		keep[l.appDesktop(a.ID)], keep[l.appIcon(a.ID)] = true, true
+		icon := l.appIcon(a.ID)
+		if len(a.Icon) > 0 {
+			if err := writeIfChanged(icon, a.Icon); err != nil {
+				return err
+			}
+		} else {
+			icon = LauncherName // the Sol mark, from the icon theme path
+			keep[l.appIcon(a.ID)] = false
+		}
+		if err := writeIfChanged(l.appDesktop(a.ID), []byte(AppEntry(l.Exe, l.Dir, a, icon))); err != nil {
+			return err
+		}
+	}
+	return l.removeApps(keep)
+}
+
+// removeApps deletes every sol-app-* entry and icon not in keep.
+func (l Launcher) removeApps(keep map[string]bool) error {
+	for _, g := range []string{
+		filepath.Join(l.dataHome(), "applications", appPrefix+"*.desktop"),
+		filepath.Join(l.dataHome(), "icons", appPrefix+"*.png"),
+	} {
+		old, _ := filepath.Glob(g)
+		for _, p := range old {
+			if !keep[p] {
+				if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("removing %s: %w", p, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func writeIfChanged(p string, b []byte) error {
+	if old, err := os.ReadFile(p); err == nil && bytes.Equal(old, b) {
+		return nil
+	}
+	return fsutil.WriteFileAtomic(p, b, 0o644)
+}
+
+// Disable removes the entry, its icon and every per-app entry; missing files are fine.
 func (l Launcher) Disable() error {
 	if l.GOOS != "linux" {
 		return ErrLauncherNotImplemented
@@ -108,7 +218,7 @@ func (l Launcher) Disable() error {
 			return fmt.Errorf("removing %s: %w", p, err)
 		}
 	}
-	return nil
+	return l.removeApps(nil)
 }
 
 // Enabled reports whether the .desktop file exists.

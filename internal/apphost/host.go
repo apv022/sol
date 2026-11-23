@@ -104,6 +104,9 @@ func Listen(addr string) (net.Listener, error) {
 type Builtin struct {
 	// Manifest is the app's embedded app.json.
 	Manifest []byte
+	// Icons holds the app's pre-rendered icon.svg, icon-192.png and icon-512.png at its root
+	// (made by `make icons`); the host serves them as /_sol/icon*. nil means a generated one.
+	Icons fs.FS
 	// Run runs the app until ctx ends, serving on env.Listen.
 	Run func(ctx context.Context, env Env) error
 }

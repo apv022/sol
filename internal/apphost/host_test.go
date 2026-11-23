@@ -2,6 +2,8 @@ package apphost
 
 import (
 	"context"
+	"encoding/json"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -237,5 +239,71 @@ func TestSupervisorRestarts(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("not restarted")
 		}
+	}
+}
+
+// TestInstallablePaths: the manifest, icons and worker load without the sign-in gate on an app
+// origin, nothing else does, and the icons are real PNGs (a built-in's, or a generated one).
+func TestInstallablePaths(t *testing.T) {
+	h, _, _ := newHost(t, nil)
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "app.json"), []byte(echoManifest), 0o600)
+	if _, err := h.Install(src); err != nil {
+		t.Fatal(err)
+	}
+	gated := 0
+	h.cfg.Gate = func(w http.ResponseWriter, r *http.Request, origin string) bool {
+		gated++
+		http.Error(w, "sign in", http.StatusUnauthorized)
+		return false
+	}
+	srv := h.UI(7777)
+	get := func(host, path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = host
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		return w
+	}
+	w := get("echo.localhost:7777", "/_sol/manifest.webmanifest")
+	var m struct {
+		Name, ID, StartURL, Scope, Display string `json:"-"`
+		Icons                              []struct{ Src, Sizes, Type, Purpose string }
+	}
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/manifest+json" || json.Unmarshal(w.Body.Bytes(), &m) != nil ||
+		!strings.Contains(w.Body.String(), `"name":"Echo"`) || !strings.Contains(w.Body.String(), `"start_url":"/"`) || len(m.Icons) != 4 {
+		t.Fatalf("manifest: %d %v %s", w.Code, w.Header(), w.Body)
+	}
+	for _, p := range []string{"/_sol/icon-192.png", "/_sol/icon-512.png"} {
+		w := get("echo.localhost:7777", p)
+		cfg, err := png.DecodeConfig(w.Body)
+		if w.Code != 200 || err != nil || cfg.Width != map[string]int{"/_sol/icon-192.png": 192, "/_sol/icon-512.png": 512}[p] {
+			t.Fatalf("%s: %d %v", p, w.Code, err)
+		}
+	}
+	if w := get("echo.localhost:7777", "/_sol/icon.svg"); w.Code != 200 || w.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("icon.svg: %d %v", w.Code, w.Header())
+	}
+	if w := get("echo.localhost:7777", "/_sol/sw.js"); w.Code != 200 || w.Header().Get("Service-Worker-Allowed") != "/" ||
+		!strings.HasPrefix(w.Header().Get("Content-Type"), "text/javascript") || !strings.Contains(w.Body.String(), "isn\\'t running") {
+		t.Fatalf("sw.js: %d %v", w.Code, w.Header())
+	}
+	if gated != 0 {
+		t.Fatalf("the gate ran %d times for installability paths", gated)
+	}
+	// Everything else, and these paths on a peer origin, is still gated.
+	for _, c := range [][2]string{{"echo.localhost:7777", "/"}, {"echo.localhost:7777", "/_sol/nav"}, {"echo.localhost:7777", "/_sol/v1/whoami"},
+		{"echo.localhost:7777", "/_sol/theme.css"}, {"echo.localhost:7777", "/_sol/manifest.webmanifest/x"}, {"echo.bob.localhost:7777", "/_sol/sw.js"}} {
+		before := gated
+		if w := get(c[0], c[1]); w.Code != http.StatusUnauthorized || gated != before+1 {
+			t.Errorf("%s%s: %d, gate ran %d times; want gated", c[0], c[1], w.Code, gated-before)
+		}
+	}
+	// POST to an exempt path is not exempt.
+	r := httptest.NewRequest("POST", "/_sol/sw.js", nil)
+	r.Host = "echo.localhost:7777"
+	r.Header.Set("Origin", "http://echo.localhost:7777")
+	if w := httptest.NewRecorder(); func() int { srv.ServeHTTP(w, r); return w.Code }() != http.StatusUnauthorized {
+		t.Error("POST of sw.js bypassed the gate")
 	}
 }

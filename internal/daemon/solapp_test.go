@@ -16,7 +16,7 @@ func TestSolThemeActions(t *testing.T) {
 	c := adminClient(t, d)
 	ctx := context.Background()
 	var apps []ActionApp
-	if err := c.Do(ctx, "GET", "/admin/v1/actions?app=sol", nil, &apps); err != nil || len(apps) != 1 || len(apps[0].Actions) != 7 {
+	if err := c.Do(ctx, "GET", "/admin/v1/actions?app=sol", nil, &apps); err != nil || len(apps) != 1 || len(apps[0].Actions) != 8 {
 		t.Fatalf("%v %+v", err, apps)
 	}
 	call := func(action, args string, dry bool) (json.RawMessage, error) {

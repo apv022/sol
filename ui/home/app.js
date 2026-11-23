@@ -18,7 +18,7 @@ const phoneQ = matchMedia('(max-width: 760px)');
 
 // ---------- state ----------
 
-const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents', 'wallpapers'];
+const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents', 'wallpapers', 'notifications'];
 const state = Object.fromEntries(KEYS.map((k) => [k, null]));
 let locked = false;
 let route = parseRoute(location.hash);
@@ -32,7 +32,7 @@ const admin = createAdmin({ onUnauthorized: () => { locked = true; draw(); } });
 const fetchers = {
   status: () => admin.status(), people: () => admin.people(), devices: () => admin.devices(), apps: () => admin.apps(),
   services: () => admin.services(), tunnels: () => admin.tunnels(), inbox: () => admin.inbox(), theme: () => admin.theme(),
-  themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(), wallpapers: () => admin.wallpapers(),
+  themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(), wallpapers: () => admin.wallpapers(), notifications: () => admin.notifications(),
 };
 async function load(key) {
   try {
@@ -434,6 +434,7 @@ function settingsView() {
     <section class="section"><h3 class="group-title">Wallpaper</h3><div class="list"><div class="wps">${WALLPAPERS.map(([v, l]) => html`<div class="wps-item"><button type="button" data-set="wallpaper" data-v="${v}" aria-pressed="${wp.name === v}"><span class="wp" data-wallpaper="${v}"><span class="sun"></span></span>${l}</button></div>`)}
       ${customs.map((c, n) => html`<div class="wps-item"><button type="button" data-set="wallpaper" data-v="${c.setting}" aria-pressed="${wp.id === c.id}"><span class="wp" data-wallpaper="custom" data-var-wp-image="url(/wallpapers/${c.id})"></span>Mine ${n + 1}</button><button type="button" class="wp-del" data-act="del-wallpaper" data-id="${c.id}" aria-label="Delete this wallpaper">${ic('close')}</button></div>`)}</div>
       <div data-item><span class="grow">Add your own<span class="row-sub">PNG, JPEG or WebP, up to 15 MB</span></span><button type="button" class="tinted" data-act="add-wallpaper">${ic('plus')}Choose image</button></div></div></section>
+    ${state.notifications?.supported ? html`<section class="section"><h3 class="group-title">Notifications</h3><div class="list"><div data-item><span class="grow">Desktop notifications<span class="row-sub">${state.notifications.override ? 'SOL_NOTIFY=' + state.notifications.override + ' overrides this on this device.' : 'Approvals and notices from your apps, on this device'}</span></span><input type="checkbox" role="switch" data-notify aria-label="Desktop notifications" ${state.notifications.desktop ? raw('checked') : ''}></div></div></section>` : ''}
     <section class="section"><h3 class="group-title">Backup</h3><div class="list"><div data-item><span class="grow">Backup words<span class="row-sub">${bk.confirmed ? 'You confirmed your backup.' : 'Write down your 24 words so you can restore Sol.'}</span></span>${bk.confirmed ? html`<span class="badge ok">Backed up</span>` : list(bk.words).length ? html`<button class="primary" type="button" data-act="backup">Show words</button>` : ''}</div></div>
       <p class="group-footer">To restore on a new device, choose “Restore from backup words” when you set up Sol.</p></section>
     <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
@@ -493,7 +494,9 @@ function homeView() {
 
 function appsView() {
   const apps = uiApps();
-  return html`<div class="page">${pageHead('Apps')}${apps.length ? html`<div class="app-grid in-page">${apps.map(appTile)}</div>` : html`<div class="empty"><h3>No apps yet</h3><p>Apps you install show up here.</p></div>`}</div>`;
+  // Android app only: pin an app to the phone's home screen (window.SolAndroid, android/README.md).
+  const pin = window.SolAndroid?.addToHomeScreen && apps.length ? html`<section class="section"><div class="list">${apps.map((a) => html`<button type="button" data-item data-act="pin-app" data-id="${a.id}" data-name="${a.name}">${ic('plus')}Add ${a.name} to home screen</button>`)}</div></section>` : '';
+  return html`<div class="page">${pageHead('Apps')}${apps.length ? html`<div class="app-grid in-page">${apps.map(appTile)}</div>` : html`<div class="empty"><h3>No apps yet</h3><p>Apps you install show up here.</p></div>`}${pin}</div>`;
 }
 
 const NAV = [['home', 'Home', 'home', '#/'], ['people', 'People', 'people', '#/people'], ['devices', 'Devices', 'device', '#/devices'], ['inbox', 'Inbox', 'inbox', '#/inbox'], ['sharing', 'Sharing', 'share', '#/sharing'], ['settings', 'Settings', 'settings', '#/settings']];
@@ -597,11 +600,13 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-set]');
   if (!t) return;
   if (t.dataset.set) { setSetting({ [t.dataset.set]: t.dataset.v }); return; }
+  if (t.dataset.act === 'pin-app') { window.SolAndroid?.addToHomeScreen?.(t.dataset.id, t.dataset.name); return; }
   ACTIONS[t.dataset.act]?.(t);
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.dataset.toggle) setSetting({ [t.dataset.toggle]: t.checked ? 'on' : 'off' });
+  if (t.dataset.notify !== undefined) act(async () => { state.notifications = await admin.setNotifications(t.checked); draw(); }, t.checked ? 'Notifications on' : 'Notifications off');
+  else if (t.dataset.toggle) setSetting({ [t.dataset.toggle]: t.checked ? 'on' : 'off' });
   else if (t.dataset.transport) act(async () => { await admin.setTransport(t.dataset.transport, t.checked); await load('status'); }, t.checked ? 'Turned on' : 'Turned off').then(() => draw());
   else if (t.dataset.anon) setAnonymous(t);
   else if (t.dataset.select === 'font') setSetting({ font: t.value });

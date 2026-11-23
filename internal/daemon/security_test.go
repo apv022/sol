@@ -1,13 +1,18 @@
 package daemon
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/apv022/sol/internal/builtins"
 )
 
 // TestAppOriginGate (security review F2): app and peer origins serve nothing to a browser that
@@ -179,5 +184,45 @@ func TestSameUserSessionBound(t *testing.T) {
 	code := login(t, d)
 	if r := uiReq(t, d, "GET", root, "/admin/v1/status", origin, code, "", nil); r.StatusCode != 200 {
 		t.Fatalf("login-code session: %d", r.StatusCode)
+	}
+}
+
+// TestInstallablePathsUngated: a browser fetches an app's manifest, icons and service worker
+// without cookies, so exactly those GET paths are served to an unsigned browser (with the real
+// built-in icons); everything else on the origin stays behind the gate.
+func TestInstallablePathsUngated(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{UI: "127.0.0.1:0", Files: filepath.Join(dir, "files"), Transports: []TransportConfig{{Name: "clearnet", Listen: "127.0.0.1:0"}}}
+	if err := Init(dir, InitOptions{Name: "A", Device: "d", Config: cfg, Builtins: builtins.All()}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Start(Options{Dir: dir, Builtins: builtins.All(), InProcessApps: true, APIOverTCP: true, Log: slog.New(slog.DiscardHandler),
+		SameUser: func(_, _ netip.AddrPort) (bool, error) { return false, nil }}) // another OS user's browser
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	port := strconv.Itoa(d.UIPort())
+	app, root := "files.localhost:"+port, "localhost:"+port
+	for _, p := range []string{"/_sol/manifest.webmanifest", "/_sol/icon.svg", "/_sol/icon-192.png", "/_sol/icon-512.png", "/_sol/sw.js"} {
+		for _, host := range []string{app, root} {
+			if r := uiReq(t, d, "GET", host, p, "", "", "", map[string]string{"Sec-Fetch-Mode": "same-origin"}); r.StatusCode != http.StatusOK {
+				t.Errorf("%s%s unsigned: %d", host, p, r.StatusCode)
+			}
+		}
+	}
+	r := uiReq(t, d, "GET", app, "/_sol/manifest.webmanifest", "", "", "", nil)
+	b, _ := io.ReadAll(r.Body)
+	if !strings.Contains(string(b), `"name":"Files"`) {
+		t.Errorf("manifest: %s", b)
+	}
+	r = uiReq(t, d, "GET", app, "/_sol/icon-512.png", "", "", "", nil)
+	if b, _ := io.ReadAll(r.Body); len(b) < 5000 {
+		t.Errorf("the built-in icon is not served (%d bytes)", len(b))
+	}
+	for _, p := range []string{"/", "/_sol/nav", "/_sol/theme.css", "/sol.js", "/_sol/v1/whoami"} {
+		if r := uiReq(t, d, "GET", app, p, "", "", "", map[string]string{"Sec-Fetch-Mode": "cors"}); r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s unsigned: %d, want 401", p, r.StatusCode)
+		}
 	}
 }

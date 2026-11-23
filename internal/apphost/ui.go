@@ -52,6 +52,9 @@ func (h *Host) UI(port int) http.Handler {
 				return
 			}
 			SecurityHeaders(w.Header())
+			if h.servePWA(w, r, nil) {
+				return
+			}
 			h.cfg.Root.ServeHTTP(w, r)
 			return
 		}
@@ -67,6 +70,17 @@ func (h *Host) UI(port int) http.Handler {
 			h.log.Info("refused a cross-site request to an app origin", "host", host, "method", r.Method)
 			sol.WriteError(w, sol.Errorf("forbidden", "cross-site request"))
 			return
+		}
+		// The manifest, icons and worker of an app are public and fetched without cookies, so they
+		// precede the gate (and only these); a peer origin keeps the gate for everything.
+		if peer == "" && IsStaticPWA(r) {
+			h.mu.Lock()
+			a := h.apps[id]
+			h.mu.Unlock()
+			if a != nil {
+				h.serveApp(w, r, a, origin)
+				return
+			}
 		}
 		if h.cfg.Gate != nil && !h.cfg.Gate(w, r, origin) {
 			return
@@ -103,6 +117,11 @@ func SecurityHeaders(hd http.Header) {
 // /kit/...) and reports whether r was one of them.
 func (h *Host) ServeShared(w http.ResponseWriter, r *http.Request) bool {
 	switch p := r.URL.Path; {
+	case p == "/_sol/sw.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Service-Worker-Allowed", "/")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(swJS)
 	case p == "/_sol/theme.css":
 		h.theme(w, r)
 	case p == "/sol.js":
@@ -117,7 +136,7 @@ func (h *Host) ServeShared(w http.ResponseWriter, r *http.Request) bool {
 
 // serveApp serves one request on an app's origin.
 func (h *Host) serveApp(w http.ResponseWriter, r *http.Request, a *app, origin string) {
-	if h.ServeShared(w, r) {
+	if h.servePWA(w, r, a) || h.ServeShared(w, r) {
 		return
 	}
 	switch p := r.URL.Path; {

@@ -84,6 +84,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `POST services` `{name, port, http, people}` · `PATCH services/{name}` · `DELETE services/{name}` | share a local port with people |
 | `GET tunnels` · `POST tunnels` `{person, service, port?}` · `DELETE tunnels/{id}` | open a contact's service on a local port (`127.0.0.1:<port>`) |
 | `GET inbox` · `POST inbox/{id}/approve` · `POST inbox/{id}/deny` · `POST inbox/{id}/dismiss` | the Inbox for all apps (dismiss is for notices) |
+| `GET notifications` · `POST notifications` `{desktop}` | desktop notifications of Inbox items (below) |
 | `GET theme` · `POST theme` `{name}` · `POST theme/settings` `{…}` · `GET themes` | appearance |
 | `GET backup` (pending words, if any) · `POST backup/confirm` | the 24 words |
 | `GET agents` · `POST agents/{name}/revoke` | agent keys issued on this device |
@@ -178,8 +179,22 @@ Per design/UI.md: a plain sidebar app, not a desktop OS.
   camera"), rename, mark as anchor, remove.
 - **Inbox:** notices and approvals with Approve / Deny.
 - **Sharing:** services I share (port sharing) and tunnels I opened; add a service.
-- **Settings:** appearance (theme, accent, density, corners, glass, font, wallpaper), backup words
+- **Settings:** appearance (theme, accent, density, corners, glass, font, wallpaper), **Notifications** (Desktop notifications on/off; hidden where unsupported), backup words
   (show once, confirm), agents (list, revoke, **New agent key**: name, scopes picked from the installed apps' actions, expiry; the key is shown once with Copy and the exact `sol do` commands), browser sessions, advanced (endpoints,
   transports with on/off switches, sessions, network re-check).
 - Phone: tab bar Home · People · Inbox · Settings. Desktop: sidebar.
 - Everything updates live from `GET events`; everything a button does is also a `sol` CLI command.
+
+## Desktop notifications
+
+A new Inbox item on this device (an app's notice or approval, including ones from my other
+devices once they reach the inbox) makes the daemon post a local notification through the OS's
+own notifier: `notify-send` on Linux (with an Open button when it supports `--action`, which opens
+the app's origin signed in, as `sol open <app>` does), `osascript` on macOS, a PowerShell toast on
+Windows; no tool, no notification (one debug log). No push service is ever used. Each desktop notifies for
+itself; an item is notified once per device (bounded id set), never when already answered or older
+than a day, and only its capped title and body are shown. The switch is per device
+(`<dir>/notify.json`, default on): Settings > Notifications, `sol notifications on|off|status`,
+`GET/POST /admin/v1/notifications`, action `sol.notifications`. `SOL_NOTIFY=off|on` overrides the
+setting; the Android shell sets `off` (it posts its own), and Android is also detected from
+`GOOS=android` or `ANDROID_ROOT`.

@@ -157,3 +157,43 @@ func TestLauncherEnableDisable(t *testing.T) {
 		t.Fatalf("darwin: %v", err)
 	}
 }
+
+func TestLauncherAppEntries(t *testing.T) {
+	home := t.TempDir()
+	l := Launcher{GOOS: "linux", Home: home, Exe: "/bin/sol", Dir: "/d", Apps: []App{
+		{ID: "files", Name: "Files", Icon: []byte("PNG1")}, {ID: "notes", Name: "No\ntes", Icon: []byte("PNG2")}, {ID: "../evil", Name: "x"}}}
+	if err := l.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".local/share/applications/sol-app-files.desktop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"Name=Sol Files\n", `Exec="/bin/sol" open --dir "/d" "files"`, "Icon=" + filepath.Join(home, ".local/share/icons/sol-app-files.png")} {
+		if !strings.Contains(string(b), w) {
+			t.Errorf("entry lacks %q:\n%s", w, b)
+		}
+	}
+	if n, _ := os.ReadFile(filepath.Join(home, ".local/share/applications/sol-app-notes.desktop")); !strings.Contains(string(n), "Name=Sol Notes\n") {
+		t.Errorf("a line break in a name started a new key:\n%s", n)
+	}
+	if g, _ := filepath.Glob(filepath.Join(home, ".local/share/applications/*")); len(g) != 3 { // sol, files, notes
+		t.Fatalf("entries: %v", g)
+	}
+	// An app removed drops its entry and icon; the Sol entry stays.
+	if err := l.SyncApps(l.Apps[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local/share/icons/sol-app-notes.png")); err == nil {
+		t.Fatal("removed app's icon left behind")
+	}
+	if g, _ := filepath.Glob(filepath.Join(home, ".local/share/applications/*")); len(g) != 2 || !l.Enabled() {
+		t.Fatalf("entries after removal: %v", g)
+	}
+	if err := l.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := filepath.Glob(filepath.Join(home, ".local/share/*/sol*")); len(g) != 0 {
+		t.Fatalf("left behind: %v", g)
+	}
+}

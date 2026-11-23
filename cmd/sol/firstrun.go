@@ -101,7 +101,7 @@ func firstRun(dir string) error {
 	} else {
 		fmt.Println("  No display here; open this link in a browser within a minute:")
 	}
-	if err := openUI(context.Background(), c, !canOpenBrowser()); err != nil {
+	if err := openUI(context.Background(), c, !canOpenBrowser(), nil); err != nil {
 		return err
 	}
 	fmt.Println("  Open it again: `sol open`")

@@ -184,7 +184,20 @@ func TestFirstRun(t *testing.T) {
 	if out := run("status"); !strings.Contains(out, "device") {
 		t.Fatalf("status: %s", out)
 	}
+	// `sol open <app>` prints that app's origin; an unknown app lists the ones with a UI.
+	if out := run("open", "--print", "files"); !strings.HasPrefix(out, "http://files.localhost:") {
+		t.Fatalf("open files: %s", out)
+	}
+	cmd := exec.Command(bin, "open", "--print", "nope")
+	cmd.Env = append(os.Environ(), "SOL_DIR="+dir, "HOME="+home, "XDG_DATA_HOME=", "SSH_CONNECTION=1 2 3 4", "USER=tester")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "installed: calendar, files") {
+		t.Fatalf("open nope: %v %s", err, out)
+	}
 	if runtime.GOOS == "linux" {
+		b, err := os.ReadFile(filepath.Join(home, ".local", "share", "applications", "sol-app-files.desktop"))
+		if err != nil || !strings.Contains(string(b), "Name=Sol Files") || !strings.Contains(string(b), `open --dir`) {
+			t.Fatalf("no per-app entry: %v\n%s", err, b)
+		}
 		if out := run("launcher", "off"); !strings.Contains(out, "no longer") {
 			t.Fatalf("launcher off: %s", out)
 		}

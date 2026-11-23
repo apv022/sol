@@ -314,6 +314,17 @@ origin and sign-in checks as the rest of `/_sol/`, and never reaches the API. `u
 "Sol" group (Home plus the apps) to the sidebar, or on a phone a home button in the bar that opens
 a sheet; `<sol-nav>` is the same button for apps that lay out their own page.
 
+Every app origin and the UI root also serve what makes it an installable web app (design/APPS_EVERYWHERE.md M1),
+all `GET`, with no sign-in (a browser fetches a manifest without cookies; nothing else is exempt, and these hold
+only the app's public name and icon): `/_sol/manifest.webmanifest` (`name`, `short_name`, `description` from
+app.json, `id`/`start_url`/`scope` `/`, `display: standalone`, icons), `/_sol/icon.svg`, `/_sol/icon-192.png`
+and `/_sol/icon-512.png` (a built-in app's icon rendered from the kit by `make icons`; a third-party app's own
+PNG/SVG `icon` file, else a generated coloured square; the UI root serves the Sol logo), and `/_sol/sw.js`
+(`Service-Worker-Allowed: /`): the service worker that caches the app shell and shows "Sol isn't running" when
+the daemon is down, and never caches API data. `sol.js` adds the `<link rel="manifest">` and icon and registers
+the worker, so apps do nothing. `sol open <app>` opens an app's origin; `sol launcher on` adds an app-menu
+entry per app.
+
 A peer's app is opened locally the same way: `http://<app>.<petname>.localhost:<port>/` is
 proxied to that person's app over Sol.
 

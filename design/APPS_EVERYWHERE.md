@@ -26,6 +26,9 @@ how people and other programs *reach* the apps.
 
 ### M1. Every app installable as a web app (PWA)
 
+Status: done. Icons are pre-rendered once at dev time (`make icons`, cmd/iconrender, headless Firefox) and
+embedded, not rendered by the daemon; the manifest uses fixed theme colours, not the active theme.
+
 Each app origin serves, from the daemon (so apps do nothing, like `/_sol/theme.css`):
 
 - `/_sol/manifest.webmanifest`: `name`, `short_name` and `description` from app.json,
@@ -44,6 +47,9 @@ Result: in Chrome, Edge or Brave, "Install Files" gives a Files window with its 
 dock and app menu. Firefox can't install web apps; bookmarks keep working there.
 
 ### M2. App menu entries per app (Linux, then macOS/Windows)
+
+Status: Linux done (`sol open <app>`, `sol-app-<id>.desktop` entries kept in step by `sol run`); macOS and
+Windows still say not_implemented.
 
 `sol launcher on` already adds "Sol" to the app menu. Extend it: one entry per app with a UI
 ("Sol Files", "Sol Calendar"…) running `sol open files`, which opens that app's origin signed
@@ -68,6 +74,18 @@ the second where it's free.
   and Back from Files' root goes to the home screen, not to Sol.
 - It's all one APK and one node: no second sign-in, works offline, nothing to install.
 
+**Status (built):** `AppActivity` shows one app per task (`sol-app://<id>`,
+`documentLaunchMode="intoExisting"`, task label and icon are the app's; Back at the app's start
+moves the task back, so it stays in recents). Launcher shortcuts go through `ShortcutActivity`,
+a windowless trampoline, because the launcher starts shortcuts with `CLEAR_TASK`, which would
+restart an open app. Dynamic shortcuts (Files, Notes, Tasks, Calendar first, at most 4) come
+from `libsol.so apps --json` when the node comes up and on every `app` admin event, and are only
+rewritten when the list, a name or an icon changed. Icons are the node's
+`/_sol/icon-192.png` as an adaptive bitmap, with a drawn fallback (a colour from the id and the
+first letter). The page asks for a pinned icon with `SolAndroid.addToHomeScreen(id, name)`
+(local pages only); the Sol app's Apps page shows "Add <app> to home screen" in the Android app.
+The WebView setup is shared with the Sol app (`SolWeb`).
+
 ### Web apps on Android (optional, nearly free after M1)
 
 Chrome on Android can reach the node on `localhost` too, and with M1's manifest it can install
@@ -88,9 +106,25 @@ The most useful kind of modularity is your Sol data showing up where you already
   CalendarProvider, so Google Calendar, Etar or the launcher widget show (and can edit) Sol
   events, and alerts use the system's reminders. On desktop the same idea is a read-only
   `.ics` subscription URL per calendar for Thunderbird/GNOME Calendar (local only).
+  *Desktop status: built (`calendar.subscription`, files in the app data dir).*
 - **Tasks → none standard on Android.** Skip; Tasks gets a home-screen shortcut (M3).
 - **Notifications per app.** Inbox items become notifications on their own channel per app
   ("Calendar alerts", "Files: someone sent you files"), with Approve/Deny buttons for approvals.
+  *Desktop status: built* (daemon posts via the OS notifier, never a push service; `sol notifications`,
+  `SOL_NOTIFY`; see ADMIN.md). Android channels: not yet.
+
+  **Status (built, local only).** No push service of any kind (no Firebase/FCM, no Google Play
+  services, no vendor push): the foreground service runs `libsol.so events --json` (the admin
+  event stream, `sol events`) as a child while the node serves and notifies from what this
+  phone's own node says. Items that arrive while the phone is offline are notified when it
+  reconnects and syncs. Each open inbox item is notified once (ids kept, capped at 500), on a
+  channel per app named after it (created on first use; Sol's own items and apps without a UI
+  use "Sol"), so turning an app off is Android's own per-channel switch. Approvals get Approve
+  and Deny, notices Dismiss (each runs `libsol.so inbox approve|deny|dismiss <id>`); an item
+  answered anywhere else cancels its notification. Tapping an approval opens Sol's Inbox, a
+  notice opens its app in the app's own task. On every node start `inbox --json` is read too,
+  so items from while the stream was down are not missed (items older than 7 days are not
+  notified then).
 
 ### M5. Third-party Android apps talking to Sol (the app API on Android)
 
