@@ -104,11 +104,12 @@ func TestShareReadOnlyToBob(t *testing.T) {
 	})
 
 	// An edit Bob makes on disk to a read-only share is not published and not welcomed back.
+	alice.settle(t) // her own scan may still be publishing the empty folder left by the delete
 	before := len(treeEntries(t, alice.api.API, w.alice.ID))
 	bob.write(t, "Shared/alice/Photos/a.jpg", "BOB WAS HERE")
 	bob.settle(t)
 	if !alice.has("Photos/a.jpg", "UPDATED") || len(treeEntries(t, alice.api.API, w.alice.ID)) != before {
-		t.Fatal("a read-only share leaked an edit back")
+		t.Fatalf("a read-only share leaked an edit back: alice has=%v entries %d->%d", alice.has("Photos/a.jpg", "UPDATED"), before, len(treeEntries(t, alice.api.API, w.alice.ID)))
 	}
 	status := bob.must(t, "files.status", map[string]any{})
 	if sk := status["skipped"].([]any); len(sk) != 1 {

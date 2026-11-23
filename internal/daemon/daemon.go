@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apv022/sol/internal/appapi"
@@ -301,7 +302,7 @@ type Daemon struct {
 	ext        extAPI // the app API on loopback TCP for external apps (external.go)
 	uiSrv      *http.Server
 	apiURL     string
-	uiPort     int
+	uiPort     atomic.Int32 // set by startUI, read by sessions that may already be up
 	runDir     string
 	tmpRun     bool
 	peers      *peerBook
@@ -653,8 +654,8 @@ func (d *Daemon) startUI() error {
 	if err != nil {
 		return fmt.Errorf("daemon: UI address %s: %w", addr, err)
 	}
-	d.uiPort = ln.Addr().(*net.TCPAddr).Port
-	d.uiSrv = &http.Server{Handler: d.Host.UI(d.uiPort), ReadHeaderTimeout: 10 * time.Second}
+	d.uiPort.Store(int32(ln.Addr().(*net.TCPAddr).Port))
+	d.uiSrv = &http.Server{Handler: d.Host.UI(int(d.uiPort.Load())), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = d.uiSrv.Serve(ln) }()
 	return fsutil.WriteFileAtomic(filepath.Join(d.dir, "ui.url"), []byte(d.UIURL()+"\n"), 0o600)
 }
@@ -719,10 +720,10 @@ func (d *Daemon) onSession(s *session.Session) {
 func (d *Daemon) APIURL() string { return d.apiURL }
 
 // UIPort is the port of the Sol app and app UIs.
-func (d *Daemon) UIPort() int { return d.uiPort }
+func (d *Daemon) UIPort() int { return int(d.uiPort.Load()) }
 
 // UIURL is the Sol app (the UI root).
-func (d *Daemon) UIURL() string { return "http://localhost:" + strconv.Itoa(d.uiPort) + "/" }
+func (d *Daemon) UIURL() string { return "http://localhost:" + strconv.Itoa(d.UIPort()) + "/" }
 
 // Dir is the data directory.
 func (d *Daemon) Dir() string { return d.dir }

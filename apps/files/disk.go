@@ -381,6 +381,18 @@ func (a *App) scan(ctx context.Context) error {
 			first = err
 		}
 	}
+	// try publishes one path. Without a watcher the scan is the only thing that sees a change, so
+	// a path that failed for a transient reason (daemon or peer unreachable) is remembered in
+	// pending exactly as a watcher event would be, and the retry timer picks it up.
+	try := func(p string) {
+		err := a.localChange(ctx, p)
+		if err != nil && (transient(err) || errors.Is(err, errUnstable)) {
+			a.mu.Lock()
+			a.pending[p] = true
+			a.mu.Unlock()
+		}
+		note(err)
+	}
 	_ = filepath.WalkDir(a.root, func(full string, d fs.DirEntry, err error) error {
 		if err != nil || ctx.Err() != nil {
 			return nil
@@ -399,7 +411,7 @@ func (a *App) scan(ctx context.Context) error {
 		seen[p] = true
 		if d.IsDir() {
 			if ents, e := os.ReadDir(full); e == nil && len(ents) == 0 {
-				note(a.localChange(ctx, p))
+				try(p)
 			}
 			return nil
 		}
@@ -408,7 +420,7 @@ func (a *App) scan(ctx context.Context) error {
 				return nil
 			}
 		}
-		note(a.localChange(ctx, p))
+		try(p)
 		return nil
 	})
 	a.mu.RLock()

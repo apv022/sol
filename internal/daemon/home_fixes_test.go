@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestWallpapers(t *testing.T) {
 		t.Fatalf("%d %+v %v", r.StatusCode, w, err)
 	}
 	p := filepath.Join(d.cfg.Files, ".sol", "wallpapers", w.ID+".png")
-	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(p); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("file: %v %v", fi, err)
 	}
 	// Listed, and chosen through the setting.
@@ -239,7 +240,7 @@ func TestAgentNewFromBrowser(t *testing.T) {
 		t.Fatalf("%d %v %+v", r.StatusCode, err, out)
 	}
 	// The key file is where `sol agent new` keeps it, 0600, and loads as an agent key that works.
-	if fi, err := os.Stat(out.Path); err != nil || fi.Mode().Perm() != 0o600 || out.Path != filepath.Join(d.Dir(), "agents", "bot.key") {
+	if fi, err := os.Stat(out.Path); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) || out.Path != filepath.Join(d.Dir(), "agents", "bot.key") {
 		t.Fatalf("%v %v", fi, err)
 	}
 	k, err := LoadAgentKey(out.Path)

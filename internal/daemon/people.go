@@ -153,7 +153,7 @@ func (d *Daemon) peerURL(name, petname string) string {
 	if !petnameRe.MatchString(petname) {
 		return ""
 	}
-	return "http://" + name + "." + petname + ".localhost:" + itoa(d.uiPort) + "/"
+	return "http://" + name + "." + petname + ".localhost:" + itoa(d.UIPort()) + "/"
 }
 
 // People lists my contacts, by name.

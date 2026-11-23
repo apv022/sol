@@ -141,7 +141,15 @@ func writeReadOnly(p, content string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), p)
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		// Windows refuses to rename over a read-only file (POSIX allows it, the directory is what
+		// counts). Remove the old copy and try again; a reader that has it open keeps its handle.
+		if rerr := os.Remove(p); rerr != nil && !os.IsNotExist(rerr) {
+			return err
+		}
+		return os.Rename(tmp.Name(), p)
+	}
+	return nil
 }
 
 // actSubscription serves calendar.subscription: the files a desktop calendar app can subscribe to.

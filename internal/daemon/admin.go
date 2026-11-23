@@ -180,7 +180,7 @@ func (d *Daemon) Apps() []AppInfo {
 func (d *Daemon) appInfo(s apphost.Status) AppInfo {
 	a := AppInfo{Status: s, Scopes: []string{}}
 	if s.UI {
-		a.URL = apphost.AppURL(s.ID, d.uiPort)
+		a.URL = apphost.AppURL(s.ID, d.UIPort())
 	}
 	if b, ok := d.Host.External(s.ID); ok {
 		a.External, a.Package = true, b.Package

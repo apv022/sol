@@ -1,6 +1,9 @@
 package daemon
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultDirPerOS(t *testing.T) {
 	for _, c := range []struct {
@@ -17,6 +20,9 @@ func TestDefaultDirPerOS(t *testing.T) {
 		{"linux", map[string]string{"SOL_DIR": "/tmp/s"}, "/home/a", "/tmp/s"},
 		{"darwin", map[string]string{"SOL_DIR": "/tmp/s"}, "/Users/a", "/tmp/s"},
 	} {
+		if c.goos == "linux" && c.env["XDG_DATA_HOME"] == "/x/data" && !filepath.IsAbs("/x/data") {
+			continue // "/x/data" is not absolute on a Windows host
+		}
 		got := dirFor(c.goos, func(k string) string { return c.env[k] }, c.home)
 		if c.goos == "windows" && c.env["SOL_DIR"] == "" {
 			// filepath.Join uses the host separator; only the shape matters here.
@@ -25,6 +31,7 @@ func TestDefaultDirPerOS(t *testing.T) {
 			}
 			continue
 		}
+		got = filepath.ToSlash(got) // a Windows host joins with backslashes whatever the target OS
 		if got != c.want {
 			t.Errorf("%s %v: %q, want %q", c.goos, c.env, got, c.want)
 		}
