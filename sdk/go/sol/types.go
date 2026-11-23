@@ -37,9 +37,12 @@ type WhoAmI struct {
 
 // Contact is a paired person as returned by GET /v1/people.
 type Contact struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Petname      string   `json:"petname"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Petname string `json:"petname"`
+	// Renamed is true when the person gave this contact a petname themselves; otherwise Petname
+	// is the default address label (lowercase, DNS-safe) derived from Name. Show DisplayName.
+	Renamed      bool     `json:"renamed,omitempty"`
 	Online       bool     `json:"online"`
 	Devices      []Device `json:"devices"`
 	SharesWithMe []string `json:"shares_with_me"`
@@ -265,4 +268,16 @@ func ParseAddress(addr string) (person, app, feed string, err error) {
 		return "", "", "", Errorf("bad_request", fmt.Sprintf("bad feed address %q", addr))
 	}
 	return p[0], p[1], p[2], nil
+}
+
+// DisplayName is the name UIs show for a contact: the petname I gave them, else their own name,
+// else the address label.
+func (c Contact) DisplayName() string {
+	switch {
+	case c.Renamed && c.Petname != "":
+		return c.Petname
+	case c.Name != "":
+		return c.Name
+	}
+	return c.Petname
 }

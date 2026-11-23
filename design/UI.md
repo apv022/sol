@@ -1,7 +1,7 @@
 # UI direction
 
 Every app looks and feels like a well-made Apple app: macOS on desktop, iOS on phones, and the
-Sol app's home screen is in the spirit of umbrelOS (a wallpaper, app icons, a few widgets).
+Sol app's home screen has a wallpaper, app icons, a few widgets and a sidebar for the rest.
 Clean, calm, generous, fast. The one thing that is Sol's own: a **gold accent** (the sun) and the
 **dusk wallpaper** on the home screen. Everything else stays quiet and disciplined.
 
@@ -25,7 +25,7 @@ Semantic tokens, iOS-style, with real dark mode (true black canvas, elevated gre
 | `--on-tint` | `#1D1D1F` | `#000000` | text on gold |
 | `--green` / `--red` / `--blue` | `#34C759` / `#FF3B30` / `#007AFF` | `#30D158` / `#FF453A` / `#0A84FF` | online, destructive, info only |
 
-Shadows are layered and soft, used only on things that float (menus, sheets, popovers, the dock):
+Shadows are layered and soft, used only on things that float (menus, sheets, popovers):
 `0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.12)` (dark: higher opacity, plus a 0.5px
 inner highlight on glass).
 

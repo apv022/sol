@@ -40,7 +40,7 @@ func (s *Server) Contact(id string) (sol.Contact, bool) {
 			pet = p
 		}
 	}
-	c := sol.Contact{ID: id, Name: name, Petname: pet, Devices: []sol.Device{},
+	c := sol.Contact{ID: id, Name: name, Petname: pet, Renamed: pet != petname(name, id), Devices: []sol.Device{},
 		SharesWithMe: []string{}, IShare: []string{}}
 	if s.n.Cache != nil {
 		if _, dl, ok := s.n.Cache.Latest(pub); ok {

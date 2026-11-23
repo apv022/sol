@@ -91,8 +91,9 @@ type App struct {
 	recv       map[string]*recvShare
 	sharedBack map[string]bool // received write shares whose co-author feed I shared back to the owner
 	cursors    map[string]uint64
-	dirty      map[string]bool // feed addresses to read again
-	petnames   map[string]string
+	dirty      map[string]bool   // feed addresses to read again
+	petnames   map[string]string // address labels: used in Shared/<petname>/ paths
+	names      map[string]string // display names (Contact.DisplayName): used in messages and Received/<name>/
 	devStats   map[string]*devStat
 	rev        uint64
 	view       *view
@@ -175,7 +176,7 @@ func New(api sol.API, cfg Config) *App {
 	}
 	a := &App{api: api, cfg: cfg, manifest: m, root: filepath.Clean(cfg.Root), data: cfg.DataDir,
 		own: NewTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{}, sharedBack: map[string]bool{},
-		cursors: map[string]uint64{}, dirty: map[string]bool{}, petnames: map[string]string{},
+		cursors: map[string]uint64{}, dirty: map[string]bool{}, petnames: map[string]string{}, names: map[string]string{},
 		devStats: map[string]*devStat{}, index: map[string]idxEntry{}, keep: map[string]bool{}, dirsMade: map[string]bool{},
 		sends: newSendState(), noticed: map[string]bool{}, mergeTried: map[string]bool{}, skipped: map[string]string{}, pending: map[string]bool{},
 		wake: make(chan struct{}, 1), fsq: make(chan string, 256)}

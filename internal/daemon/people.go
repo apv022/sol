@@ -47,7 +47,10 @@ type PersonInfo struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Petname string `json:"petname"`
-	Online  bool   `json:"online"`
+	// Renamed is true when I gave this person a petname myself; otherwise Petname is the
+	// default address label derived from their name, and UIs show Name.
+	Renamed bool `json:"renamed,omitempty"`
+	Online  bool `json:"online"`
 	// Anonymous: reached over Tor only, both ways; they only ever learn my onion addresses.
 	Anonymous    bool         `json:"anonymous"`
 	Devices      []sol.Device `json:"devices"`
@@ -105,6 +108,7 @@ func (d *Daemon) person(id string) (PersonInfo, bool) {
 	}
 	pi := PersonInfo{ID: c.ID, Name: c.Name, Petname: c.Petname, Online: c.Online, Devices: c.Devices,
 		SharesWithMe: []ShareRef{}, IShare: []ShareRef{}}
+	pi.Renamed = d.pets.get(id) != ""
 	if pub, err := identity.ParseID(c.ID); err == nil {
 		pi.Anonymous = d.Contacts.Anonymous(pub)
 	}

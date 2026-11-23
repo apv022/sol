@@ -49,7 +49,8 @@ const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices']
 const ic = (n) => html`<sol-icon name="${n}"></sol-icon>`;
 const list = (v) => v || [];
 const meName = () => state.status?.me?.person?.name || '';
-const nameOf = (p) => p.petname || p.name || p.id;
+// A petname is an address label (lowercase, DNS-safe): show it only when I renamed the person.
+const nameOf = (p) => (p.renamed && p.petname) || p.name || p.petname || p.id;
 const fail = (e) => { if (e?.status !== 401) toast(e?.message || String(e), { kind: 'error' }); };
 const act = async (fn, done) => { try { await fn(); if (done) toast(done); } catch (e) { fail(e); } };
 const onlineDevices = (p) => list(p.devices).filter((d) => d.online).length;
@@ -370,7 +371,7 @@ function personView(id) {
   const on = isOnline(p);
   return html`<div class="page">${pageHead('', '', '#/people')}
     <div class="person-head"><sol-avatar name="${nameOf(p)}" id="${p.id}" size="84px" ${on ? raw('online') : ''}></sol-avatar><h1>${nameOf(p)}</h1>
-      <span class="muted">${p.petname && p.name !== p.petname ? `${p.name} · ` : ''}<span class="${on ? 'dot-online' : 'dot-off'}"></span>${on ? 'Online' : `Last seen ${relTime(p.last_seen)}`}</span>
+      <span class="muted">${p.renamed && p.name !== p.petname ? `${p.name} · ` : ''}<span class="${on ? 'dot-online' : 'dot-off'}"></span>${on ? 'Online' : `Last seen ${relTime(p.last_seen)}`}</span>
       <div class="person-actions"><button type="button" data-act="rename-person" data-id="${p.id}">${ic('edit')}Rename</button><button type="button" class="danger" data-act="unpair" data-id="${p.id}">Unpair</button></div></div>
     <section class="section"><h3 class="group-title">Privacy</h3><div class="list"><div data-item><span class="grow">Anonymous<span class="row-sub">${p.anonymous ? 'Tor only, both ways: they only know your onion address' : 'Off: the fastest path (WireGuard, then direct, Tor last)'}</span></span><input type="checkbox" role="switch" data-anon="${p.id}" aria-label="Anonymous" ${p.anonymous ? raw('checked') : ''}></div></div></section>
     <section class="section"><h3 class="group-title">Devices</h3><div class="list">${list(p.devices).map((d) => html`<div data-item><span class="row-icon">${ic('device')}</span><span class="grow"><span class="row-title">${d.name}</span><span class="row-sub">${d.online ? 'Online' : 'Offline'}</span></span>${d.anchor ? html`<span class="badge tint">Anchor</span>` : ''}</div>`)}</div></section>

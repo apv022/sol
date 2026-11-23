@@ -701,7 +701,7 @@ func (a *App) actSearch(ctx context.Context, c sol.Call) (any, error) {
 func (a *App) personName(id string) string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if n := a.petnames[id]; n != "" {
+	if n := a.names[id]; n != "" {
 		return n
 	}
 	return id

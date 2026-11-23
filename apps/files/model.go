@@ -272,6 +272,7 @@ func (a *App) refreshPeople(ctx context.Context) {
 			n = p.Name
 		}
 		a.petnames[p.ID] = n
+		a.names[p.ID] = p.DisplayName()
 	}
 	a.rev++
 	a.mu.Unlock()

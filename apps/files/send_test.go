@@ -45,7 +45,7 @@ func TestSendAccept(t *testing.T) {
 	}
 	waitFor(t, "bob has one approval", func() bool { return len(approvals(w.bob)) == 1 })
 	it := approvals(w.bob)[0]
-	if !strings.HasPrefix(it.Title, "alice sent you 2 files (") || !strings.Contains(it.Body, "a.jpg") || !strings.Contains(it.Body, "for the trip") {
+	if !strings.HasPrefix(it.Title, "Alice sent you 2 files (") || !strings.Contains(it.Body, "a.jpg") || !strings.Contains(it.Body, "for the trip") {
 		t.Fatalf("approval: %q / %q", it.Title, it.Body)
 	}
 	if got := sentStatus(t, alice); got != "sent" {
@@ -60,15 +60,15 @@ func TestSendAccept(t *testing.T) {
 	if err := w.bob.Answer(it.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "files saved under Received/alice", func() bool {
-		return bob.has("Received/alice/a.jpg", "jpeg bytes") && bob.has("Received/alice/notes.txt", "hello bob")
+	waitFor(t, "files saved under Received/Alice", func() bool {
+		return bob.has("Received/Alice/a.jpg", "jpeg bytes") && bob.has("Received/Alice/notes.txt", "hello bob")
 	})
 	waitFor(t, "alice sees saved", func() bool { return sentStatus(t, alice) == "saved" && sentStatus(t, alice2) == "saved" })
 	rec = bob.must(t, "files.received", map[string]any{})["received"].([]any)
-	if m := rec[0].(map[string]any); m["status"] != "saved" || m["saved_to"] != "Received/alice" {
+	if m := rec[0].(map[string]any); m["status"] != "saved" || m["saved_to"] != "Received/Alice" {
 		t.Fatalf("received after: %v", m)
 	}
-	if got := bob.list(t, "Received/alice"); strings.Join(got, ",") != "a.jpg,notes.txt" {
+	if got := bob.list(t, "Received/Alice"); strings.Join(got, ",") != "a.jpg,notes.txt" {
 		t.Fatalf("tree: %v", got)
 	}
 	// Answering again (the Inbox item after Files, or twice) changes nothing.
@@ -101,7 +101,7 @@ func TestSendTwoDevicesOneApproval(t *testing.T) {
 	// Saving on the device that did not file the approval reaches the other.
 	rec := b2.must(t, "files.received", map[string]any{})["received"].([]any)
 	b2.must(t, "files.receive", map[string]any{"send": rec[0].(map[string]any)["send"], "accept": true})
-	waitFor(t, "both devices have the file", func() bool { return b1.has("Received/alice/x.txt", "x") && b2.has("Received/alice/x.txt", "x") })
+	waitFor(t, "both devices have the file", func() bool { return b1.has("Received/Alice/x.txt", "x") && b2.has("Received/Alice/x.txt", "x") })
 }
 
 func TestSendDecline(t *testing.T) {
@@ -113,7 +113,7 @@ func TestSendDecline(t *testing.T) {
 	alice.settle(t)
 	alice.must(t, "files.send", map[string]any{"paths": []string{"a.txt"}, "person": "Bob"})
 	waitFor(t, "approval", func() bool { return len(approvals(w.bob)) == 1 })
-	if t1 := approvals(w.bob)[0].Title; !strings.HasPrefix(t1, "alice sent you a.txt (") {
+	if t1 := approvals(w.bob)[0].Title; !strings.HasPrefix(t1, "Alice sent you a.txt (") {
 		t.Fatalf("title %q", t1)
 	}
 	if err := w.bob.Answer(approvals(w.bob)[0].ID, false); err != nil {
@@ -144,7 +144,7 @@ func TestSendNameClash(t *testing.T) {
 	alice.write(t, "a.txt", "from alice")
 	alice.write(t, "b/a.txt", "second a")
 	alice.settle(t)
-	bob.write(t, "Received/alice/a.txt", "already here")
+	bob.write(t, "Received/Alice/a.txt", "already here")
 	bob.settle(t)
 	alice.must(t, "files.send", map[string]any{"paths": []string{"a.txt", "b/a.txt"}, "person": "bob"})
 	waitFor(t, "approval", func() bool { return len(approvals(w.bob)) == 1 })
@@ -152,9 +152,9 @@ func TestSendNameClash(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "clashing names get numbers", func() bool {
-		return bob.has("Received/alice/a (2).txt", "from alice") && bob.has("Received/alice/a (3).txt", "second a")
+		return bob.has("Received/Alice/a (2).txt", "from alice") && bob.has("Received/Alice/a (3).txt", "second a")
 	})
-	if !bob.has("Received/alice/a.txt", "already here") {
+	if !bob.has("Received/Alice/a.txt", "already here") {
 		t.Fatal("the existing file was replaced")
 	}
 }

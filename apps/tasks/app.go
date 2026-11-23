@@ -488,10 +488,7 @@ func (a *App) loadNames(ctx context.Context) {
 	}
 	a.mu.Lock()
 	for _, p := range ppl {
-		n := p.Petname
-		if n == "" {
-			n = p.Name
-		}
+		n := p.DisplayName()
 		a.names[p.ID] = n
 	}
 	a.dirty = true

@@ -270,10 +270,7 @@ func (a *App) actSend(ctx context.Context, c sol.Call) (any, error) {
 		name := baseOf(p)
 		items = append(items, sendItem{Name: name, Size: f.Size, Blob: f.Blob, Type: mime.TypeByExtension(strings.ToLower(path.Ext(name)))})
 	}
-	name := who.Petname
-	if name == "" {
-		name = who.Name
-	}
+	name := who.DisplayName()
 	if c.DryRun {
 		return plan(planItem{Op: "send", Path: strings.Join(paths, ", "), People: []string{name}, Note: in.Note}), nil
 	}
@@ -339,7 +336,7 @@ func (a *App) actSent(ctx context.Context, c sol.Call) (any, error) {
 		if an, ok := a.sends.theirs[s.Peer+"/"+s.ID]; ok {
 			st = an.Status
 		}
-		so := sentOut{ID: s.ID, To: s.Peer, ToName: a.petnames[s.Peer], Time: s.Time, Note: s.Note, Status: st, Items: []sentItem{}}
+		so := sentOut{ID: s.ID, To: s.Peer, ToName: a.names[s.Peer], Time: s.Time, Note: s.Note, Status: st, Items: []sentItem{}}
 		if so.ToName == "" {
 			so.ToName = s.Peer
 		}
@@ -383,7 +380,7 @@ func (a *App) actReceived(ctx context.Context, c sol.Call) (any, error) {
 	a.mu.RLock()
 	out := make([]recvOut, 0, len(a.sends.in))
 	for k, s := range a.sends.in {
-		ro := recvOut{Send: k, From: s.Peer, FromName: a.petnames[s.Peer], Time: s.Time, Note: s.Note, Status: statusPending, Bytes: s.total(), Items: []recvItem{}}
+		ro := recvOut{Send: k, From: s.Peer, FromName: a.names[s.Peer], Time: s.Time, Note: s.Note, Status: statusPending, Bytes: s.total(), Items: []recvItem{}}
 		if ro.FromName == "" {
 			ro.FromName = s.Peer
 		}
@@ -564,7 +561,7 @@ func (a *App) notifySends(ctx context.Context) {
 	for _, k := range todo {
 		a.mu.RLock()
 		s := a.sends.in[k]
-		who := a.petnames[s.Peer]
+		who := a.names[s.Peer]
 		a.mu.RUnlock()
 		if who == "" {
 			who = "Someone"
