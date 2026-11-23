@@ -1,10 +1,29 @@
-# Sol for Android
+<p align="center"><img src="docs/media/logo.svg" width="96" alt="Sol logo"></p>
 
-**Your own private network of devices and people, in your pocket.** Sol for Android runs the
-full [Sol](https://github.com/apv022/sol) node on your phone: Files, Notes, Tasks and Calendar
-that sync directly with your other devices and the people you add, with no account and no server
-in the middle. The phone can also share its folder, send files to a person, and approve what an
-agent asks for, from a notification.
+<h1 align="center">Sol for Android</h1>
+
+<p align="center"><b>Your own private network of devices and people, in your pocket.</b><br>
+The full <a href="https://github.com/apv022/sol">Sol</a> node on your phone: Files, Notes, Tasks and Calendar,
+synced directly with your other devices and the people you add.<br>
+No account, no server, no push service.</p>
+
+<p align="center">
+<a href="https://github.com/apv022/sol-mobile/releases/latest"><img src="https://img.shields.io/github/v/release/apv022/sol-mobile?include_prereleases&sort=semver" alt="release"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+<img src="https://img.shields.io/badge/Android-8.0%2B%20(arm64)-3DDC84" alt="Android 8.0+ (arm64)">
+<img src="https://img.shields.io/badge/push%20services-none-brightgreen" alt="Push services: none">
+<img src="https://img.shields.io/badge/status-beta-orange" alt="Status: beta">
+</p>
+
+<p align="center">
+<a href="https://solarae.io/sol-mobile/">Website</a> ·
+<a href="https://github.com/apv022/sol-mobile/releases/latest">Download APK</a> ·
+<a href="https://solarae.io/sol/docs/">Docs</a> ·
+<a href="https://github.com/apv022/sol">Sol (desktop and server)</a>
+</p>
+
+The phone can also share its folder, send files to a person, and approve what an agent asks for,
+from a notification.
 
 <p align="center">
   <img src="docs/media/longpress.png" alt="Long-press Sol's icon for Files, Notes, Tasks and Calendar" width="240">

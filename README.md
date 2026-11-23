@@ -1,6 +1,28 @@
-# Sol
+<p align="center"><img src="docs/media/logo.svg" width="96" alt="Sol logo"></p>
 
-**Your own private network of devices and people, with slim apps on top.**
+<h1 align="center">Sol</h1>
+
+<p align="center"><b>Your own private network of devices and people, with slim apps on top.</b><br>
+Files, Notes, Tasks and Calendar, synced directly between your devices and the people you add.<br>
+No accounts, no servers, and every action scriptable by you or an agent.</p>
+
+<p align="center">
+<a href="https://github.com/apv022/sol/actions/workflows/ci.yml"><img src="https://github.com/apv022/sol/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+<a href="https://github.com/apv022/sol/releases/latest"><img src="https://img.shields.io/github/v/release/apv022/sol?include_prereleases&sort=semver" alt="release"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+<a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/apv022/sol" alt="Go version"></a>
+<img src="https://img.shields.io/badge/go%20dependencies-1%20(wireguard--go)-brightgreen" alt="Go dependencies: 1 (wireguard-go)">
+<img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android-lightgrey" alt="Platforms: Linux, macOS, Windows, Android">
+<img src="https://img.shields.io/badge/status-beta-orange" alt="Status: beta">
+</p>
+
+<p align="center">
+<a href="https://solarae.io/sol/">Website</a> ·
+<a href="https://solarae.io/sol/docs/">Docs</a> ·
+<a href="https://github.com/apv022/sol/releases/latest">Download</a> ·
+<a href="https://github.com/apv022/sol-mobile">Android app</a> ·
+<a href="CHANGELOG.md">Changelog</a>
+</p>
 
 Sol connects your devices and the people you add directly to each other (WireGuard, TLS or Tor,
 whichever path is best), with no account and no server in the middle. On top of that one layer
