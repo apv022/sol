@@ -63,6 +63,10 @@ func (a *App) registerActions(act *sol.Actions) {
 	h("files.keep", a.actKeep)
 	h("files.conflicts", a.actConflicts)
 	h("files.resolve", a.actResolve)
+	h("files.send", a.actSend)
+	h("files.sent", a.actSent)
+	h("files.received", a.actReceived)
+	h("files.receive", a.actReceive)
 	h("files.status", a.actStatus)
 	h("files.sync", a.actSync)
 }
@@ -186,7 +190,9 @@ func (a *App) actList(ctx context.Context, c sol.Call) (any, error) {
 		return nil, err
 	}
 	v := a.freshView(ctx)
-	if p != "" && !v.dirs[p] {
+	// Shared always exists, empty until someone shares with me: it is also where files people
+	// send me wait for an answer.
+	if p != "" && p != sharedDir && !v.dirs[p] {
 		if v.files[p] != nil {
 			return nil, bad("%q is a file, not a folder", p)
 		}
@@ -205,7 +211,9 @@ func (a *App) actList(ctx context.Context, c sol.Call) (any, error) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	here := fileInfo{Name: "", Path: "", Type: "dir", Kept: a.isKept("")}
-	if p != "" {
+	if p == sharedDir && !v.dirs[p] {
+		here = fileInfo{Name: sharedDir, Path: sharedDir, Type: "dir", Virtual: true, ReadOnly: true}
+	} else if p != "" {
 		here, _ = a.info(v, p)
 	}
 	// here is the folder itself (what files.stat says), so a UI needs one call per folder.

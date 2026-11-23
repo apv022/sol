@@ -32,6 +32,7 @@ type persisted struct {
 	Keep    map[string]bool     `json:"keep"`
 	Noticed map[string]bool     `json:"noticed"`
 	Dirs    map[string]bool     `json:"dirs"`
+	Asked   map[string]string   `json:"asked,omitempty"`
 }
 
 func (a *App) statePath() string { return filepath.Join(a.data, "state.json") }
@@ -59,11 +60,14 @@ func (a *App) loadState() {
 	if p.Dirs != nil {
 		a.dirsMade = p.Dirs
 	}
+	if p.Asked != nil {
+		a.sends.asked = p.Asked
+	}
 }
 
 func (a *App) saveState() {
 	a.mu.RLock()
-	b, err := json.Marshal(persisted{Index: a.index, Keep: a.keep, Noticed: a.noticed, Dirs: a.dirsMade})
+	b, err := json.Marshal(persisted{Index: a.index, Keep: a.keep, Noticed: a.noticed, Dirs: a.dirsMade, Asked: a.sends.asked})
 	a.mu.RUnlock()
 	if err != nil || a.data == "" {
 		return

@@ -36,7 +36,7 @@ func TestUIAndAssetsAreServed(t *testing.T) {
 
 func TestUIEscapesEverythingAndUsesOnlyKitAndSolJS(t *testing.T) {
 	fetches := 0
-	for _, f := range []string{"ui/app.js", "ui/viewer.js"} {
+	for _, f := range []string{"ui/app.js", "ui/viewer.js", "ui/send.js"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -48,7 +48,7 @@ func TestUIEscapesEverythingAndUsesOnlyKitAndSolJS(t *testing.T) {
 			}
 		}
 		for _, line := range strings.Split(s, "\n") {
-			if strings.HasPrefix(line, "import ") && !strings.Contains(line, "'/sol.js'") && !strings.Contains(line, "'/kit/kit.js'") && !strings.Contains(line, "'./viewer.js'") {
+			if strings.HasPrefix(line, "import ") && !strings.Contains(line, "'/sol.js'") && !strings.Contains(line, "'/kit/kit.js'") && !strings.Contains(line, "'./viewer.js'") && !strings.Contains(line, "'./send.js'") {
 				t.Errorf("%s: unexpected import: %s", f, line)
 			}
 		}

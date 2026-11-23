@@ -100,7 +100,7 @@ func (a *App) loop(evs <-chan sol.Event) {
 
 func (a *App) resubscribe(ctx context.Context) <-chan sol.Event {
 	for ctx.Err() == nil {
-		evs, err := a.api.Events(ctx, sol.EventOptions{People: true})
+		evs, err := a.api.Events(ctx, sol.EventOptions{People: true, Inbox: true})
 		if err == nil {
 			return evs
 		}
@@ -176,6 +176,10 @@ func (a *App) onEvent(ctx context.Context, ev sol.Event) {
 	case sol.EventPerson:
 		a.refreshPeople(ctx)
 		a.syncFeed(ctx, "")
+	case sol.EventInbox:
+		if ev.Inbox != nil {
+			a.onInbox(ctx, *ev.Inbox)
+		}
 	case sol.EventError:
 		a.logf("files: event stream: %s", ev.Err)
 	}
@@ -259,6 +263,7 @@ func (a *App) afterPull(ctx context.Context) {
 	if a.tryMerges(ctx) {
 		return // the merge's own pull runs afterPull again with the new state
 	}
+	a.notifySends(ctx)
 	v := a.getView()
 	a.mu.RLock()
 	var fresh []conflictInfo

@@ -9,5 +9,5 @@
 <ul id="results"></ul>
 <script type="module">
 import { run } from '../../../ui/kit/testing.js';
-run(() => import('./viewer.test.js'));
+run(() => Promise.all([import('./viewer.test.js'), import('./send.test.js')]));
 </script>

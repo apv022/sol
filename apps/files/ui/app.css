@@ -152,3 +152,15 @@ sol-toast .toast .undo { pointer-events: auto; margin-left: var(--space-2); colo
   .v-slide { padding: var(--space-2); }
   .v-slide[data-kind="image"], .v-slide[data-kind="video"] { padding: 0; }
 }
+
+/* Send to a person */
+.person.pick { cursor: pointer; }
+.people { max-height: min(40vh, 18rem); overflow: auto; margin-bottom: var(--space-3); }
+.field { display: grid; gap: var(--space-1); font-size: var(--fs-footnote); color: var(--label-2); margin-bottom: var(--space-3); }
+.incoming { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
+.incoming-head { display: flex; align-items: center; gap: var(--space-3); }
+.incoming-head sol-icon { --size: 24px; color: var(--tint); flex: none; }
+.incoming-note { margin: 0; color: var(--label-2); font-style: italic; overflow-wrap: anywhere; }
+.incoming-files { margin: 0; padding-left: var(--space-5); color: var(--label-2); font-size: var(--fs-subhead); overflow-wrap: anywhere; }
+.sent-head { margin: var(--space-4) 0 var(--space-2); }
+sol-list.sent > [data-item] { gap: var(--space-3); }

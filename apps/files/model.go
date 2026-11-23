@@ -44,6 +44,10 @@ func (a *App) applyEntry(addr string, e sol.Entry) {
 	if err != nil {
 		return
 	}
+	if _, _, ok := isSendFeed(feed); ok {
+		a.applySendEntry(owner, feed, e)
+		return
+	}
 	var b body
 	if json.Unmarshal(e.Body, &b) != nil {
 		return

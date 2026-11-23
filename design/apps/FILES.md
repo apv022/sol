@@ -65,6 +65,37 @@ only. Music and Movies stream online-only files by blob hash without writing the
   feed back to the owner (`read`): a write share alone never exposes a feed of mine.
 - Unsharing stops future updates; files already copied stay where they are.
 
+## Send
+
+"Send to a person" is the AirDrop-style quick send for files (not folders: those are shared). The
+sender picks files and a contact (and an optional note); nothing arrives unasked.
+
+- **Sender.** `files.send {paths, person, note?}` pins the files' blobs (they are already in the
+  tree, so nothing is uploaded again), shares my feed `send.<recipient>` read-only with the person
+  (once; sharing is idempotent) and appends one entry `{id, items: [{name, size, blob, type}], note,
+  time}`. The blob permission rule (API.md §4) then lets the recipient fetch exactly those blobs
+  and nothing else. Refused: an empty list, a folder ("share the folder instead"), a file that is
+  not mine (under Shared), more than 100 files, myself.
+- **Recipient.** Files folds every `send.<me>` feed it can see. For each send that is neither
+  answered nor already asked about it files one Inbox approval: "<Name> sent you <file | N files>
+  (<size>)", the names and note in the body, Action `files.receive {send: "<sender>/<id>", accept:
+  true}`. Only the person's first device (lowest device id, the rule of the conflict notices) files
+  it, and the answer lives in a feed every device reads, so any device may answer. `asked` (send
+  ref → inbox id) is kept in the app's state so a restart does not file it again.
+- **Answer.** Approve (or Save in the Shared view) fetches the blobs with `GET
+  /v1/blobs/{hash}?from=<sender>` and writes the files through the normal tree path into
+  `Received/<sender's name>/`, created if needed, so they sync to my other devices and show in the
+  tree. A name that is taken gets " (2)", " (3)" before the extension; nothing is replaced. Deny
+  (or Decline) saves nothing. Either way the recipient appends `{send, status: saved|declined,
+  time, dir}` to its own `recv.<sender>`, shared read-only with the sender, who sees the status.
+  Answering twice (Files, then the Inbox item) is a no-op that returns the first answer.
+- **Reading.** `files.sent` lists my sends with per-item status (`sent`, `saved`, `declined`) and
+  `files.received` lists incoming ones (`pending`, `saved`, `declined`). Entries of both feeds are
+  untrusted: ids, hashes, sizes and names are validated, names made valid for every platform, and
+  the first entry for an id wins.
+- **Effects.** `files.send` is `write` with approval for agents (it transmits data to a person);
+  `files.receive` is `write`. Anonymous contacts get no special case.
+
 ## Actions (everything the UI can do)
 
 `files.list {path}`, `files.stat {path}`, `files.read {path}` (returns blob hash and a local path
@@ -73,7 +104,9 @@ if kept), `files.write {path, blob | text}`, `files.mkdir {path}`, `files.move {
 {query}` (names; content search is a later addition), `files.share {path, people, mode}`,
 `files.unshare {path, people}`, `files.shared` (with me and by me), `files.keep {path, keep}`,
 `files.conflicts`, `files.resolve {path, keep}`, `files.status` (sync state per device),
-`files.sync` (rescan and fetch now; answers with the status). `files.list` also returns `here`
+`files.sync` (rescan and fetch now; answers with the status), `files.send {paths, person, note}`,
+`files.sent`, `files.received`, `files.receive {send, accept}` (see Send). `files.list Shared` always
+answers, empty when nobody shares with me. `files.list` also returns `here`
 (the folder itself) and an `items` count per folder, so the UI needs one call per folder.
 
 ## UI
@@ -82,7 +115,7 @@ Fast list and grid views (painted from the last listing kept in the page, then t
 breadcrumbs, upload (+ menu, drag and drop, the Android file chooser), multi-select with a
 selection bar and long-press/right-click menus, Move and Copy through a folder chooser, delete
 with an Undo toast for files (restored by blob hash; folders ask first), a share sheet with people,
-a "Shared" section, keep on device / online only per folder, sync status with "Sync now", and
+a "Shared" section (which also carries incoming sends with Save / Decline and a short "Sent" list), "Send to…" in the file menu, selection bar and viewer (contact picker with online state, optional note), keep on device / online only per folder, sync status with "Sync now", and
 conflicts listed with "keep this / keep that / keep both". Phone layout first-class. Uses `ui/kit`
 and `sol.js` only.
 
@@ -106,5 +139,9 @@ Against memsol: two devices of one person converge after concurrent edits (with 
 offline edits merge after reconnect, a share to Bob shows only that subtree and Bob's write-share
 edits come back, online-only files stream by hash with Range, invalid names are refused, watcher
 echo doesn't loop, empty and full folders renamed or removed on disk stay gone on both devices
-(watcher and scan), and every action works from the CLI path with `--dry-run`. The viewer's
-step, swipe and slide rules run in a browser: `apps/files/test/index.html` (`make browser-test`).
+(watcher and scan), and every action works from the CLI path with `--dry-run`. Send: two files from Alice to Bob give Bob exactly one approval, approving saves them under
+`Received/alice/` with the right bytes and Alice sees "saved"; deny shows "declined"; a second
+device does not file a second approval; a third contact cannot read the feed or the blobs; folders,
+empty and oversized lists are refused; name clashes get " (2)"; dry runs send nothing. The viewer's
+step, swipe and slide rules and the send rules (`ui/send.js`) run in a browser:
+`apps/files/test/index.html` (`make browser-test`).

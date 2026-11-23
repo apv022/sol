@@ -5,6 +5,7 @@
 import { call, events, putBlob, people, html, raw, render } from '/sol.js';
 import { toast, showMenu, contextMenu } from '/kit/kit.js';
 import { openViewer, openViewerNow, viewKind, fmtSize } from './viewer.js';
+import { sendable, sendWhat, statusLabel, orderPeople, personLabel, pendingIn, recentOut } from './send.js';
 
 const $main = document.getElementById('main');
 const $shell = document.getElementById('shell');
@@ -27,6 +28,7 @@ const state = {
   error: '',
   ready: false, // the folder's listing has arrived (or came from the local cache)
   selecting: false, // explicit select mode, like iOS "Select"
+  sends: { received: [], sent: [] }, // files people sent me, files I sent (the Shared view)
 };
 const phoneQ = matchMedia('(max-width: 760px)');
 // The Android app opens files in the system viewer: its WebView cannot show a PDF in a frame.
@@ -92,8 +94,10 @@ async function load() {
   try {
     const main = r.kind === 'dir' ? call('files.list', { path: r.path })
       : r.kind === 'search' ? call('files.search', { query: r.q }) : null;
-    const [status, c, got] = await Promise.all([call('files.status', {}), call('files.conflicts', {}), main]);
+    const sends = r.kind === 'dir' && r.path === 'Shared' ? Promise.all([call('files.received', {}), call('files.sent', {})]) : null;
+    const [status, c, got, sd] = await Promise.all([call('files.status', {}), call('files.conflicts', {}), main, sends]);
     if (seq !== loadSeq) return;
+    if (sd) state.sends = { received: sd[0].received, sent: sd[1].sent };
     state.status = status;
     state.conflicts = c.conflicts;
     if (r.kind === 'dir') {
@@ -196,6 +200,7 @@ function entryActions(es) {
     one && one.type === 'file' && { act: 'download', icon: 'download', label: 'Download' },
     one && w && { act: 'rename', icon: 'edit', label: 'Rename' },
     one && one.type === 'dir' && w && !one.path.startsWith('Shared/') && { act: 'share', icon: 'share', label: 'Share' },
+    sendable(es) && { act: 'send', icon: 'send', label: 'Send to…' },
     w && { act: 'move', icon: 'folder', label: 'Move' },
     !es.some((e) => e.virtual) && { act: 'copy', icon: 'copy', label: 'Copy' },
     w && { act: 'delete', icon: 'trash', label: 'Delete', danger: true },
@@ -267,11 +272,31 @@ function dirView() {
     <div class="head"><h1 class="large-title">${title}</h1></div>
     ${phoneQ.matches && !state.selecting ? html`<div class="searchrow">${searchBox()}${phonePill()}</div>` : ''}
     ${folderNote()}
+    ${r.path === 'Shared' && !state.selecting ? sendsView() : ''}
     ${state.error ? html`<div class="card empty"><sol-icon name="alert"></sol-icon><h3>${state.error}</h3></div>` :
       state.view === 'list'
         ? html`<sol-list class="files" aria-label="Files">${rows}${none}</sol-list>`
         : html`<div class="grid" role="list">${rows}</div>${state.entries.length ? '' : none}`}
     ${selBar()}`;
+}
+
+/** Incoming sends waiting for an answer, and a short list of what I sent (top of Shared). */
+function sendsView() {
+  const inc = pendingIn(state.sends.received);
+  const out = recentOut(state.sends.sent);
+  if (!inc.length && !out.length) return '';
+  return html`${inc.map((r) => html`<div class="card incoming" data-send="${r.send}">
+      <div class="incoming-head"><sol-icon name="send"></sol-icon>
+        <div class="grow"><div class="title">${r.from_name} sent you ${sendWhat(r.items)}</div>
+        <small>${fmtSize(r.bytes)} · ${fmtTime(r.time)}</small></div></div>
+      ${r.note ? html`<p class="incoming-note">${r.note}</p>` : ''}
+      <ul class="incoming-files">${r.items.slice(0, 5).map((it) => html`<li>${it.name} <small>${fmtSize(it.size)}</small></li>`)}${r.items.length > 5 ? html`<li><small>and ${r.items.length - 5} more</small></li>` : ''}</ul>
+      <div class="row-actions"><button type="button" class="primary" data-act="receive" data-send="${r.send}" data-accept="1">Save</button>
+        <button type="button" data-act="receive" data-send="${r.send}" data-accept="0">Decline</button></div></div>`)}
+    ${out.length ? html`<h2 class="sent-head">Sent</h2>
+      <sol-list class="sent">${out.map((o) => html`<div data-item><sol-icon name="send"></sol-icon>
+        <div class="grow"><div class="title">${sendWhat(o.items)} to ${o.to_name}</div><small>${fmtTime(o.time)}</small></div>
+        <span class="badge ${o.status === 'saved' ? 'ok' : o.status === 'declined' ? 'warn' : ''}">${statusLabel(o.status)}</span></div>`)}</sol-list>` : ''}`;
 }
 
 // On a phone the pill only shows when something needs attention; "Up to date" is the norm.
@@ -443,6 +468,34 @@ async function shareSheet(path) {
   });
 }
 
+/** "Send to…": pick a contact, add a note, send these files (a copy goes to their Files). */
+async function sendSheet(es) {
+  let ppl;
+  try { ppl = orderPeople(await people()); } catch (e) { return fail(e); }
+  const d = dialog('Send ' + sendWhat(es), html`
+    <p class="muted">They are asked first. If they accept, the files are saved on their devices in Received.</p>
+    ${ppl.length === 0 ? html`<div class="empty"><sol-icon name="people"></sol-icon><h3>No one to send to</h3><p>Pair with someone in Sol first.</p></div>` : html`
+      <div class="people" role="radiogroup" aria-label="Send to">${ppl.map((p) => html`<label class="person pick"><sol-avatar name="${p.name}" id="${p.id}" ${raw(p.online ? 'online' : '')}></sol-avatar>
+        <div class="grow"><div class="title">${personLabel(p)}</div><small>${p.online ? 'Online' : 'Offline: they get it when they are back'}</small></div>
+        <input type="radio" name="to" value="${p.id}" aria-label="${personLabel(p)}"></label>`)}</div>
+      <label class="field">Note (optional)<input type="text" id="send-note" maxlength="500" placeholder="Say what it is"></label>`}
+    <div class="dlg-actions"><button type="button" data-no>Cancel</button>${ppl.length ? html`<button class="primary" type="button" data-go disabled>Send</button>` : ''}</div>`);
+  const go = d.box.querySelector('[data-go]');
+  d.box.querySelector('[data-no]').addEventListener('click', d.close);
+  d.box.addEventListener('change', (ev) => { if (ev.target.name === 'to' && go) go.disabled = false; });
+  go?.addEventListener('click', async () => {
+    const id = d.box.querySelector('input[name=to]:checked')?.value;
+    if (!id) return;
+    go.disabled = true;
+    try {
+      const out = await call('files.send', { paths: es.map((e) => e.path), person: id, note: d.box.querySelector('#send-note').value.trim() });
+      toast('Sent to ' + out.to_name);
+      d.close();
+      soon();
+    } catch (e) { go.disabled = false; fail(e); }
+  });
+}
+
 /** A toast with an Undo button (the kit's toast takes text; the button is added here). */
 function undoToast(message, undo) {
   const t = toast(message, { ms: 6000 });
@@ -458,6 +511,7 @@ function undoToast(message, undo) {
 
 const viewerActions = [
   { act: 'download', icon: 'download', label: 'Download' },
+  { act: 'send', icon: 'send', label: 'Send to…', when: (e) => sendable([e]) },
   { act: 'share', icon: 'share', label: 'Share', when: () => canShareFiles() },
   { act: 'rename', icon: 'edit', label: 'Rename', when: (e) => writable([e]) },
   { act: 'delete', icon: 'trash', label: 'Delete', danger: true, when: (e) => writable([e]) },
@@ -480,6 +534,7 @@ function preview(path, size, more = {}) {
 
 async function viewerAct(act, e, v) {
   if (act === 'download') return saveFile(e);
+  if (act === 'send') return sendSheet([e]);
   if (act === 'open-failed') return toast('Could not open it here; try Download', { kind: 'error' });
   if (act === 'share') {
     try {
@@ -619,6 +674,16 @@ const actions = {
   },
   download() { const [e] = selected(); saveFile(e); },
   share() { const [e] = selected(); shareSheet(e.path); },
+  send() { const es = selected(); if (sendable(es)) return sendSheet(es); },
+  async receive(p, el) {
+    el.disabled = true;
+    try {
+      const accept = el.dataset.accept === '1';
+      const r = await call('files.receive', { send: el.dataset.send, accept });
+      toast(accept ? 'Saved to ' + r.saved_to : 'Declined');
+    } catch (e) { el.disabled = false; fail(e); }
+    soon();
+  },
   async keep() { await run(() => call('files.keep', { path: state.route.path, keep: !state.here.kept })); },
   async resolve(p, el) { await run(async () => { await call('files.resolve', { path: p, keep: el.dataset.keep }); toast('Conflict settled'); }); },
   async syncnow(p, el) {

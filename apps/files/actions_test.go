@@ -251,10 +251,16 @@ func TestAgentDeleteNeedsApprovalThroughMemsol(t *testing.T) {
 		names = append(names, s.Name)
 	}
 	sort.Strings(names)
-	if len(names) != 17 {
+	if len(names) != 21 {
 		t.Fatalf("actions: %v", names)
 	}
 	for _, s := range specs {
+		if s.Name == "files.send" && (s.Effect != sol.EffectWrite || s.Approval != sol.ApprovalAgents) {
+			t.Fatalf("send policy: %+v", s)
+		}
+		if s.Name == "files.receive" && s.Effect != sol.EffectWrite {
+			t.Fatalf("receive policy: %+v", s)
+		}
 		if s.Name == "files.delete" && (s.Effect != sol.EffectDestructive || s.Approval != sol.ApprovalAgents) {
 			t.Fatalf("delete policy: %+v", s)
 		}
