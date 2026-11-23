@@ -194,9 +194,9 @@ func TestTorClientAuth(t *testing.T) {
 		err := knock(withBob, aOnion)
 		return err != nil && strings.Contains(err.Error(), "wrong onion client authorization")
 	})
-	if addOnions(fake, aOnion) <= settled {
-		t.Fatal("the onion was not re-added")
-	}
+	// The key check and the re-added onion are two effects of the same update; on a slow runner
+	// the first can be visible before the ADD_ONION command is recorded, so wait for it too.
+	eventually(t, "the onion re-added", func() bool { return addOnions(fake, aOnion) > settled })
 	for _, c := range fake.Commands() {
 		if strings.Contains(c, "NEWNYM") {
 			t.Fatal("NEWNYM sent:", c)
