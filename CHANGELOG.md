@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.0-beta.2 (beta)
+
+- **Android: folders are online only by default, as designed.** Files never learned it was
+  running on a phone, so phones downloaded every folder. Now a phone keeps only `Notes/` (Notes
+  reads it from disk) plus folders you choose with "Keep on this device"; everything else is
+  fetched when you open it. Files already downloaded stay until you set that folder to "Online
+  only".
+- Test reliability on macOS and Windows CI runners; sol-mobile README images and a note that
+  Android pull requests go to apv022/sol.
+
 ## v0.2.0-beta.1 (beta)
 
 The first public release of the rebuilt Sol. It replaces the earlier alpha (v0.1.0-alpha.6, a

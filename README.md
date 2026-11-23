@@ -16,7 +16,7 @@ can also be run from a script or an AI agent, with scoped keys and your approval
 | <img src="docs/media/home-light.png" alt="Sol home screen" width="420"> | <img src="docs/media/files-viewer.png" alt="Files with its image viewer" width="420"> |
 | <img src="docs/media/notes.png" alt="Notes" width="420"> | <img src="docs/media/calendar-week.png" alt="Calendar, week view" width="420"> |
 
-> **v0.2.0-beta.1 is a beta.** It is tested by its author on Linux, an Android emulator and
+> **This is a beta.** It is tested by its author on Linux, an Android emulator and
 > an Android phone. There is no iOS app. macOS and Windows builds exist but are lightly tested.
 > See [Status](#status-and-limitations).
 
@@ -172,7 +172,7 @@ sol --help          # everything else
 
 ## Status and limitations
 
-v0.2.0-beta.1 is a rebuild of Sol: the earlier alpha (a Tor-only proof of concept) is replaced
+The v0.2.0 betas are a rebuild of Sol: the earlier alpha (a Tor-only proof of concept) is replaced
 and is not compatible. Known limits:
 
 - Tested by the author on Linux and on an Android emulator and phone. No iOS. macOS and Windows

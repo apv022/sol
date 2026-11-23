@@ -11,7 +11,7 @@ agent asks for, from a notification.
   <img src="docs/media/approve-deny.png" alt="An approval with Approve and Deny buttons in the notification shade" width="240">
 </p>
 
-> **v0.2.0-beta.1 is a beta.** Tested by its author on an Android emulator and a phone. There is
+> **This is a beta.** Tested by its author on an Android emulator and a phone. There is
 > no iOS app. Expect rough edges, and [report what breaks](https://github.com/apv022/sol-mobile/issues).
 
 ## Install
