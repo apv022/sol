@@ -49,6 +49,9 @@ Windows builds exist and pass the test suite but are lightly used. No independen
   reads Android's calendar storage), both ways, through a local account and sync adapter; no
   Google account. Off until you turn it on in Calendar's menu.
 - Edge-to-edge UI, PDFs in the system viewer, reconnection on network changes.
+- Other Android apps can become Sol apps: they ask to connect (`app.sol.action.CONNECT`), you
+  approve their permissions on a native screen tied to their signing certificate, and they get
+  their own revocable key for the app API (Settings, Connected apps).
 
 ### Desktop
 
