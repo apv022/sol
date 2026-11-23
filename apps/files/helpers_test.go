@@ -87,6 +87,8 @@ func startNode(t *testing.T, dev *memsol.Device, mut func(*Config)) *node {
 	n := &node{api: &flaky{API: dev.Client(appID)}, root: t.TempDir(), data: t.TempDir()}
 	cfg := Config{Root: n.root, DataDir: n.data, Debounce: 20 * time.Millisecond, RetryEvery: 30 * time.Millisecond,
 		ScanEvery: 60 * time.Millisecond, Logf: t.Logf}
+	// SOL_TEST_NOWATCH=1 runs every test on the scan fallback, as macOS and Windows do.
+	cfg.NoWatch = os.Getenv("SOL_TEST_NOWATCH") != ""
 	if mut != nil {
 		mut(&cfg)
 	}
@@ -104,7 +106,8 @@ func startNode(t *testing.T, dev *memsol.Device, mut func(*Config)) *node {
 func (n *node) restart(t *testing.T, dev *memsol.Device) {
 	t.Helper()
 	n.app.Stop()
-	n.app = New(n.api, Config{Root: n.root, DataDir: n.data, Debounce: 20 * time.Millisecond, RetryEvery: 30 * time.Millisecond, Logf: t.Logf})
+	n.app = New(n.api, Config{Root: n.root, DataDir: n.data, Debounce: 20 * time.Millisecond, RetryEvery: 30 * time.Millisecond,
+		ScanEvery: 60 * time.Millisecond, NoWatch: os.Getenv("SOL_TEST_NOWATCH") != "", Logf: t.Logf})
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := n.app.Start(ctx); err != nil {
 		cancel()

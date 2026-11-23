@@ -3,6 +3,7 @@ package files
 import (
 	"context"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,15 +43,21 @@ func TestInvalidNamesFromDiskAreSkippedAndFromFeedIgnored(t *testing.T) {
 	a := startNode(t, w.a1, nil)
 	b := startNode(t, w.a2, nil)
 	a.write(t, "good.txt", "g")
-	a.write(t, "has:colon.txt", "bad on windows")
-	a.write(t, "ends.with.dot.", "bad")
+	// Windows cannot hold a colon or a trailing dot on disk at all (it strips the dot), so those two
+	// disk-side cases only exist elsewhere; the feed-side check below covers them everywhere.
+	want := 0
+	if runtime.GOOS != "windows" {
+		a.write(t, "has:colon.txt", "bad on windows")
+		a.write(t, "ends.with.dot.", "bad")
+		want = 2
+	}
 	waitFor(t, "good file travels", func() bool { return b.has("good.txt", "g") })
 	a.settle(t)
 	if b.has("has:colon.txt", "bad on windows") || len(b.files()) != 1 {
 		t.Fatalf("invalid names reached the other device: %v", b.files())
 	}
 	st := a.must(t, "files.status", map[string]any{})
-	if sk := st["skipped"].([]any); len(sk) != 2 || !strings.Contains(sk[0].(map[string]any)["reason"].(string), "Windows") {
+	if sk := st["skipped"].([]any); len(sk) != want || (want > 0 && !strings.Contains(sk[0].(map[string]any)["reason"].(string), "Windows")) {
 		t.Fatalf("status.skipped: %v", sk)
 	}
 	// A hostile or buggy device appends an invalid path: every fold ignores it.

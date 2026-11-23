@@ -662,6 +662,10 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 	if m.cfg.OnSession != nil {
 		go m.cfg.OnSession(s)
 	}
+	// Tell the peer this device's current bundle. Changes are pushed only to sessions open at the
+	// time, and the tie-break for two simultaneous dials closes one session and opens another, so
+	// without this a change made in that gap would never reach the peer (until the next change).
+	m.goBG(func() { m.pushMine([]*Session{s}) })
 	if peer.Relation == Self {
 		m.goBG(func() { m.relayAll(s) })
 	}

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	_ "embed"
@@ -36,6 +37,8 @@ var (
 )
 
 func init() {
+	// A CRLF checkout (Windows autocrlf) must not brick Sol: hash the canonical LF form.
+	wordsTxt := bytes.ReplaceAll(wordsTxt, []byte("\r"), nil)
 	sum := sha256.Sum256(wordsTxt)
 	if hex.EncodeToString(sum[:]) != wordsSHA256 {
 		panic("identity: words.txt is not the canonical BIP-39 English list")

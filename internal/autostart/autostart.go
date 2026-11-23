@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -261,7 +262,7 @@ func LaunchAgentPlist(exe, dir, path string) string {
 ` + env + `	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 	<key>ThrottleInterval</key><integer>30</integer>
-	<key>StandardErrorPath</key><string>` + xmlEscape(filepath.Join(dir, "sol.log")) + `</string>
+	<key>StandardErrorPath</key><string>` + xmlEscape(pathpkg.Join(dir, "sol.log")) + `</string>
 </dict>
 </plist>
 `
