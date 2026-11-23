@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/apv022/sol/internal/identity"
@@ -74,8 +75,10 @@ func Running(dir string) (Status, error) {
 // no fixed sleep and no busy loop on systems without a file watcher.
 func WaitUp(dir string, exited <-chan struct{}, timeout time.Duration) (Status, error) {
 	return wait(dir, exited, timeout, func() (Status, bool) {
+		// Up means the UI answers too: the admin socket comes up first, and a status read in
+		// between names port 0.
 		st, err := Running(dir)
-		return st, err == nil
+		return st, err == nil && !strings.HasSuffix(st.UI, ":0/")
 	})
 }
 

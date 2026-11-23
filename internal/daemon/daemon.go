@@ -650,7 +650,23 @@ func (d *Daemon) startUI() error {
 	if addr == "" {
 		addr = "127.0.0.1:7777"
 	}
-	ln, err := net.Listen("tcp", addr)
+	var ln net.Listener
+	var err error
+	if host, port, _ := net.SplitHostPort(addr); port == "0" {
+		// A setup that found 7777 taken got port 0. Prefer 7777 again once it is free, and
+		// remember the port either way: bookmarks and installed web apps name it.
+		if ln, err = net.Listen("tcp", net.JoinHostPort(host, "7777")); err != nil {
+			ln, err = net.Listen("tcp", addr)
+		}
+		if err == nil {
+			d.cfg.UI = ln.Addr().String()
+			if werr := writeConfig(d.dir, d.cfg); werr != nil {
+				d.log.Warn("saving the UI port", "err", werr)
+			}
+		}
+	} else {
+		ln, err = net.Listen("tcp", addr)
+	}
 	if err != nil {
 		return fmt.Errorf("daemon: UI address %s: %w", addr, err)
 	}

@@ -197,3 +197,34 @@ func TestLauncherAppEntries(t *testing.T) {
 		t.Fatalf("left behind: %v", g)
 	}
 }
+
+// TestEnableReplacesProofOfConcept: the old proof of concept's unit (`sol run --data ~/.sol`)
+// can't start this Sol, so Enable stops it and writes its own instead of refusing.
+func TestEnableReplacesProofOfConcept(t *testing.T) {
+	home := t.TempDir()
+	unit := filepath.Join(home, ".config", "systemd", "user", "sol.service")
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := "[Service]\nExecStart=\"/usr/local/bin/sol\" run --data \"/home/a/.sol\"\n"
+	if err := os.WriteFile(unit, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &fake{}
+	m := Manager{GOOS: "linux", Home: home, Exe: "/bin/sol", Dir: "/data/sol", SystemdRunning: true, Run: f.run}
+	if st := m.Status(); !st.Legacy || st.Other || st.Enabled {
+		t.Fatalf("old unit seen as %+v", st)
+	}
+	if err := m.Enable(true); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls[0] != "systemctl --user disable --now sol.service" {
+		t.Fatalf("the old Sol was not stopped first: %q", f.calls)
+	}
+	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `run --dir "/data/sol"`) {
+		t.Fatalf("unit not replaced: %s", b)
+	}
+	if st := m.Status(); !st.Enabled || st.Legacy {
+		t.Fatalf("after enable: %+v", st)
+	}
+}

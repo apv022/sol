@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.0-beta.3 (beta)
+
+- `sol start` printed `UI: http://localhost:0/` when the UI hadn't opened yet; it now waits for it.
+- A setup that found port 7777 taken (often by the old proof of concept) used a new random UI port
+  on every start, breaking bookmarks and installed web apps. Sol now takes 7777 when it's free,
+  and otherwise keeps the port it got.
+- `sol autostart on` replaces the old proof of concept's start-at-login entry (it stops it first)
+  instead of refusing with "set up for another data directory".
+
 ## v0.2.0-beta.2 (beta)
 
 - **Android: folders are online only by default, as designed.** Files never learned it was

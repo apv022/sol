@@ -69,6 +69,9 @@ type State struct {
 	Path      string `json:"path,omitempty"` // the unit or plist file
 	// Other is set when the entry exists but runs a different data directory.
 	Other bool `json:"other,omitempty"`
+	// Legacy is set when the entry is the old proof of concept's (it ran `sol run --data`, a
+	// flag the rebuilt Sol doesn't have): it can never start this Sol, so Enable replaces it.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 func (m Manager) run(name string, args ...string) error {
@@ -119,9 +122,12 @@ func (m Manager) state(path, mine string) State {
 	if err != nil {
 		return st
 	}
-	if strings.Contains(string(b), mine) {
+	switch {
+	case strings.Contains(string(b), mine):
 		st.Enabled = true
-	} else {
+	case strings.Contains(string(b), " run --data ") || strings.Contains(string(b), "<string>--data</string>"):
+		st.Legacy = true
+	default:
 		st.Other = true
 	}
 	return st
@@ -130,13 +136,17 @@ func (m Manager) state(path, mine string) State {
 // Enable writes the entry and registers it; with startNow the daemon also starts at once
 // (pass false when one already runs on the directory).
 func (m Manager) Enable(startNow bool) error {
-	if m.Status().Other {
+	st := m.Status()
+	if st.Other {
 		return ErrOther
 	}
 	switch m.GOOS {
 	case "linux":
 		if !m.SystemdRunning {
 			return ErrNotImplemented
+		}
+		if st.Legacy { // stop the old proof of concept before its unit file is replaced
+			_ = m.run("systemctl", "--user", "disable", "--now", unitName)
 		}
 		if err := writeFile(m.unitPath(), SystemdUnit(m.Exe, m.Dir, m.Path)); err != nil {
 			return err
