@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,13 @@ func (s *supervised) noticed(sub string) bool {
 // waitStatus polls Status until ok accepts it.
 func waitStatus(t *testing.T, tor *Tor, what string, ok func(Status) bool) Status {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	// Generous on Windows: its CI runners are slow enough that a supervised (fake) tor's
+	// publish step once took over 15 s there, with nothing wrong.
+	wait := 15 * time.Second
+	if runtime.GOOS == "windows" {
+		wait = 60 * time.Second
+	}
+	deadline := time.Now().Add(wait)
 	for {
 		st := tor.Status()
 		if ok(st) {
