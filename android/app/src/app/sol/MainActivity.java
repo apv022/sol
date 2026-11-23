@@ -726,7 +726,9 @@ public class MainActivity extends Activity {
                 if (chooser != null) chooser.onReceiveValue(null);
                 chooser = cb;
                 try {
-                    startActivityForResult(p.createIntent(), REQ_FILE);
+                    Intent i = p.createIntent();
+                    if (p.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    startActivityForResult(i, REQ_FILE);
                 } catch (RuntimeException e) {
                     chooser = null;
                     return false;
@@ -873,9 +875,29 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         if (req == REQ_FILE && chooser != null) {
-            chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+            chooser.onReceiveValue(chosenFiles(res, data));
             chooser = null;
         }
+    }
+
+    /**
+     * The files a picker returned. Several files come back as ClipData, which the platform's
+     * FileChooserParams.parseResult ignores (it reads only getData()), so an <input multiple>
+     * received one file or none.
+     */
+    static Uri[] chosenFiles(int res, Intent data) {
+        if (res != RESULT_OK || data == null) return null;
+        android.content.ClipData clip = data.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            java.util.ArrayList<Uri> out = new java.util.ArrayList<>();
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri u = clip.getItemAt(i).getUri();
+                if (u != null) out.add(u);
+            }
+            if (!out.isEmpty()) return out.toArray(new Uri[0]);
+        }
+        Uri one = data.getData();
+        return one != null ? new Uri[] { one } : null;
     }
 
     // ---- the page's bridge ----

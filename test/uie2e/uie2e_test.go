@@ -184,7 +184,7 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 	if v, sub := widget("Storage"); v == "" || !strings.HasSuffix(sub, " free on this device") {
 		t.Errorf("Storage widget %q %q", v, sub)
 	}
-	for _, want := range []string{"Files", "Notes", "Tasks"} {
+	for _, want := range []string{"Files", "Notes", "Tasks", "Calendar"} {
 		if !anyHas(home.Apps, want) {
 			t.Errorf("app grid %v lacks %s", home.Apps, want)
 		}
@@ -230,7 +230,7 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 		// The way back to Sol inside apps (/_sol/nav, drawn by ui/kit): the first visit signs the
 		// browser in on the app origin and caches the list, the second paints it at once.
 		port := base[strings.LastIndex(base, ":")+1:]
-		for _, id := range []string{"files", "notes", "tasks"} {
+		for _, id := range []string{"files", "notes", "tasks", "calendar"} {
 			u := "http://" + id + ".localhost:" + port + "/"
 			_ = ffRun("--screenshot", filepath.Join(tmp, "prime.png"), "--window-size", "1280,800", u).Run()
 			for _, sc := range []struct {

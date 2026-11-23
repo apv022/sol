@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calendar</title>
+<link rel="stylesheet" href="/kit/tokens.css">
+<link rel="stylesheet" href="/kit/kit.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app" class="cal" data-view="month">
+  <aside id="side" class="glass" aria-label="Calendars">
+    <div class="side-scroll">
+      <div id="mini" class="mini" aria-label="Pick a day"></div>
+      <div id="cals"></div>
+    </div>
+    <footer class="side-foot">
+      <button id="add-cal" class="plain" type="button"><sol-icon name="plus"></sol-icon>Add Calendar</button>
+      <button id="file-menu" class="ghost icon-btn" type="button" aria-label="Import or export .ics"><sol-icon name="more"></sol-icon></button>
+    </footer>
+  </aside>
+  <main id="main" aria-label="Calendar">
+    <header id="bar" class="bar">
+      <div class="bar-left">
+        <sol-nav></sol-nav>
+        <button id="cals-btn" class="ghost icon-btn phone-only" type="button" aria-label="Calendars"><sol-icon name="list"></sol-icon></button>
+        <h1 id="title" class="title"></h1>
+      </div>
+      <div class="bar-right">
+        <div class="nav-btns">
+          <button id="prev" class="ghost icon-btn" type="button" aria-label="Previous"><sol-icon name="back"></sol-icon></button>
+          <button id="today" class="plain" type="button">Today</button>
+          <button id="next" class="ghost icon-btn" type="button" aria-label="Next"><sol-icon name="chevron"></sol-icon></button>
+        </div>
+        <label class="ghost icon-btn pick" aria-label="Go to a date"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5.5 5.5h13a1.5 1.5 0 011.5 1.5v11.5a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18.5V7a1.5 1.5 0 011.5-1.5z"/><path d="M4 10h16"/><path d="M8.5 3.5v3"/><path d="M15.5 3.5v3"/></svg><input id="goto" type="date" tabindex="-1" aria-label="Go to a date"></label>
+        <button id="add" class="tinted icon-btn" type="button" aria-label="New event"><sol-icon name="plus"></sol-icon></button>
+      </div>
+    </header>
+    <div class="views">
+      <div id="seg" class="segmented" role="tablist" aria-label="View">
+        <button type="button" data-view="day">Day</button><button type="button" data-view="week">Week</button><button type="button" data-view="month">Month</button><button type="button" data-view="list">List</button>
+      </div>
+    </div>
+    <div id="body" class="body"></div>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
