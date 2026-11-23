@@ -7,8 +7,8 @@ in the middle. The phone can also share its folder, send files to a person, and 
 agent asks for, from a notification.
 
 <p align="center">
-  <img src="shots/m3-longpress.png" alt="Long-press Sol's icon for Files, Notes, Tasks and Calendar" width="240">
-  <img src="shots/m4-approve-deny.png" alt="An approval with Approve and Deny buttons in the notification shade" width="240">
+  <img src="docs/media/longpress.png" alt="Long-press Sol's icon for Files, Notes, Tasks and Calendar" width="240">
+  <img src="docs/media/approve-deny.png" alt="An approval with Approve and Deny buttons in the notification shade" width="240">
 </p>
 
 > **v0.2.0-beta.1 is a beta.** Tested by its author on an Android emulator and a phone. There is
@@ -81,6 +81,13 @@ turn on calendar sync.
 
 arm64 only, no 32-bit build; not on Google Play or F-Droid (the APK is the only way to install
 it); no iOS. More about Sol itself: [apv022/sol](https://github.com/apv022/sol#readme).
+
+## Contributing
+
+This repository is generated: each release copies the `android/` folder of
+[apv022/sol](https://github.com/apv022/sol) here. **Please open issues and pull requests against
+[apv022/sol](https://github.com/apv022/sol)** (Android changes go in its `android/` folder), not
+here; a change merged only in this repository would be overwritten by the next release.
 
 ## Building
 
