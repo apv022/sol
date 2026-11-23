@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0-beta.1 (pre-release)
+## v0.2.0-beta.1 (beta)
 
 The first public release of the rebuilt Sol. It replaces the earlier alpha (v0.1.0-alpha.6, a
 Tor-only proof of concept for connecting your own machines) and is **not compatible** with it:

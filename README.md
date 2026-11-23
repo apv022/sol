@@ -16,7 +16,7 @@ can also be run from a script or an AI agent, with scoped keys and your approval
 | <img src="docs/media/home-light.png" alt="Sol home screen" width="420"> | <img src="docs/media/files-viewer.png" alt="Files with its image viewer" width="420"> |
 | <img src="docs/media/notes.png" alt="Notes" width="420"> | <img src="docs/media/calendar-week.png" alt="Calendar, week view" width="420"> |
 
-> **v0.2.0-beta.1 is a pre-release.** It is tested by its author on Linux, an Android emulator and
+> **v0.2.0-beta.1 is a beta.** It is tested by its author on Linux, an Android emulator and
 > an Android phone. There is no iOS app. macOS and Windows builds exist but are lightly tested.
 > See [Status](#status-and-limitations).
 
@@ -25,7 +25,7 @@ can also be run from a script or an AI agent, with scoped keys and your approval
 ### Linux and macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/apv022/sol-test/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh
 ```
 
 This downloads the `sol` binary for your machine (Tor is built in), checks it against the
@@ -43,12 +43,12 @@ Options: `SOL_VERSION=<tag>`, `SOL_BIN_DIR=<dir>`, `SOL_NO_PATH=1`, `SOL_NO_STAR
 
 ### Windows
 
-Download `sol-windows-amd64.exe` from the [releases page](https://github.com/apv022/sol-test/releases),
+Download `sol-windows-amd64.exe` from the [releases page](https://github.com/apv022/sol/releases),
 rename it `sol.exe`, put it in a folder on your `PATH`, and run `sol`.
 
 ### Android
 
-Download the APK from [apv022/solmob-test releases](https://github.com/apv022/solmob-test/releases)
+Download the APK from [apv022/sol-mobile releases](https://github.com/apv022/sol-mobile/releases)
 and open it (allow installs from your browser or file manager when Android asks). See the
 [sol-mobile README](https://github.com/apv022/sol-mobile#readme) for the first run.
 

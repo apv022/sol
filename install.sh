@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs Sol on Linux or macOS:
 #
-#   curl -fsSL https://raw.githubusercontent.com/apv022/sol-test/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/apv022/sol/main/install.sh | sh
 #
 # It downloads the release binary for this OS and CPU (tor is built in), checks it against the
 # release's SHA256SUMS, installs it as ~/.local/bin/sol (or $SOL_BIN_DIR), and makes sure plain
@@ -10,7 +10,7 @@
 #
 #   SOL_VERSION=v0.2.0-beta.1   install that release instead of the newest one
 #   SOL_BIN_DIR=/path           install there instead of ~/.local/bin
-#   SOL_REPO=owner/name         download from that GitHub repo (default apv022/sol-test until the public ship; then apv022/sol)
+#   SOL_REPO=owner/name         download from that GitHub repo (default apv022/sol)
 #   SOL_NO_PATH=1               leave your shell startup files alone
 #   SOL_NO_START=1              don't start Sol when the install is done
 #
@@ -18,7 +18,7 @@
 # a signed-in gh CLI or GITHUB_TOKEN is used when present.
 set -eu
 
-repo=${SOL_REPO:-apv022/sol-test}
+repo=${SOL_REPO:-apv022/sol}
 say() { printf '%s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "this needs $1"; }

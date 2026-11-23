@@ -11,13 +11,13 @@ agent asks for, from a notification.
   <img src="shots/m4-approve-deny.png" alt="An approval with Approve and Deny buttons in the notification shade" width="240">
 </p>
 
-> **v0.2.0-beta.1 is a pre-release.** Tested by its author on an Android emulator and a phone. There is
+> **v0.2.0-beta.1 is a beta.** Tested by its author on an Android emulator and a phone. There is
 > no iOS app. Expect rough edges, and [report what breaks](https://github.com/apv022/sol-mobile/issues).
 
 ## Install
 
 1. Download the APK from the [latest release](https://github.com/apv022/sol-mobile/releases)
-   (pre-releases are on the same page). The release also has a `SHA256SUMS` file.
+  . The release also has a `SHA256SUMS` file.
 2. Open the file on the phone. When Android asks, allow installing apps from that source (your
    browser or file manager).
 
