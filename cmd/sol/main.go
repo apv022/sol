@@ -738,8 +738,13 @@ func openUI(ctx context.Context, c *daemon.Client, printOnly bool) error {
 	return nil
 }
 
-// openBrowser starts the default browser on url; false if it could not.
+// openBrowser starts the default browser on url; false if it could not. SOL_NO_BROWSER=1
+// (tests, scripts) never opens one: xdg-open reaches the desktop session's browser even when
+// DISPLAY points elsewhere.
 func openBrowser(url string) bool {
+	if os.Getenv("SOL_NO_BROWSER") == "1" {
+		return false
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
