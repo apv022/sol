@@ -141,17 +141,24 @@ type portShare struct {
 	services map[string]Service
 	in       map[string]map[*inStream]struct{}     // service -> open inbound streams
 	remote   map[string]map[string][]RemoteService // person -> device -> offered services
-	tunnels  map[string]*tunnel                    // by ID
-	proxies  map[string]*http.Transport            // "<person>/<service>" for the petname router
-	cancel   context.CancelFunc
-	ctx      context.Context
-	wg       sync.WaitGroup
+	// Offers are numbered: offerSeq counts the lists this process computed (under mu), offerBoot
+	// tells this process's numbers from a previous run's. lastOffer is the newest number seen
+	// per peer device, so a slower, older push never overwrites a newer one.
+	offerBoot string
+	offerSeq  uint64
+	lastOffer map[string]offerMark       // device ID -> newest offer applied
+	tunnels   map[string]*tunnel         // by ID
+	proxies   map[string]*http.Transport // "<person>/<service>" for the petname router
+	cancel    context.CancelFunc
+	ctx       context.Context
+	wg        sync.WaitGroup
 }
 
 func openPortShare(d *Daemon, svcPath, tunPath string) (*portShare, error) {
 	ps := &portShare{d: d, svcPath: svcPath, tunPath: tunPath, services: map[string]Service{},
 		in: map[string]map[*inStream]struct{}{}, remote: map[string]map[string][]RemoteService{},
-		tunnels: map[string]*tunnel{}, proxies: map[string]*http.Transport{}}
+		tunnels: map[string]*tunnel{}, proxies: map[string]*http.Transport{},
+		offerBoot: randomHex(8), lastOffer: map[string]offerMark{}}
 	ps.ctx, ps.cancel = context.WithCancel(d.ctx)
 	var svcs []Service
 	if err := readJSON(svcPath, &svcs); err != nil {
@@ -253,6 +260,11 @@ func (ps *portShare) Services() []Service {
 func (ps *portShare) sharedWith(person string, self bool) []RemoteService {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	return ps.sharedWithLocked(person, self)
+}
+
+// sharedWithLocked is sharedWith with ps.mu held.
+func (ps *portShare) sharedWithLocked(person string, self bool) []RemoteService {
 	out := []RemoteService{}
 	for _, s := range ps.services {
 		if self || slices.Contains(s.People, person) {
@@ -412,18 +424,43 @@ func (ps *portShare) changed(name string, s *Service) {
 // push tells a session's peer which of my services it may open.
 func (ps *portShare) push(ss *session.Session) {
 	p := ss.Peer()
-	list := ps.sharedWith(identity.ID(p.Person), p.Relation == session.Self)
-	b, _ := json.Marshal(map[string]any{"services": list})
 	ctx, cancel := context.WithTimeout(ps.ctx, 30*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://peer"+ServicesPushPath, strings.NewReader(string(b)))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := ss.HTTPClient().Do(req)
-	if err != nil {
-		return
+	// Right after pairing both sides may dial, and the tie-break closes one session: a push
+	// riding the losing one fails. Retry on whichever session to that device is current, so the
+	// offer is never silently lost.
+	for attempt := 0; attempt < 4 && ctx.Err() == nil; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
+			}
+			cur, ok := ps.d.Sessions.Session(p.Device)
+			if !ok {
+				return // gone: the next session's own push (onSession) carries the offer
+			}
+			ss = cur
+		}
+		// The list and its number are taken together, at send time: a retry carries the
+		// current offer, and the peer orders offers by number, not by arrival.
+		ps.mu.Lock()
+		list := ps.sharedWithLocked(identity.ID(p.Person), p.Relation == session.Self)
+		ps.offerSeq++
+		b, _ := json.Marshal(map[string]any{"services": list, "boot": ps.offerBoot, "seq": ps.offerSeq})
+		ps.mu.Unlock()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://peer"+ServicesPushPath, strings.NewReader(string(b)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := ss.HTTPClient().Do(req)
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		resp.Body.Close()
+		if resp.StatusCode < 300 {
+			return
+		}
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-	resp.Body.Close()
 }
 
 // peerPush serves POST /p/services: the calling device's offer to me replaces the one known.
@@ -435,6 +472,8 @@ func (ps *portShare) peerPush(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		Services []RemoteService `json:"services"`
+		Boot     string          `json:"boot"`
+		Seq      uint64          `json:"seq"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&b); err != nil {
 		sol.WriteError(w, sol.Errorf("bad_request", "bad JSON"))
@@ -448,6 +487,14 @@ func (ps *portShare) peerPush(w http.ResponseWriter, r *http.Request) {
 	}
 	pid, did := identity.ID(p.Person), identity.ID(p.Device)
 	ps.mu.Lock()
+	if last, ok := ps.lastOffer[did]; ok && b.Seq != 0 && b.Boot == last.boot && b.Seq <= last.seq {
+		ps.mu.Unlock() // an older offer that arrived late: the newer one stands
+		sol.WriteJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+	if b.Seq != 0 {
+		ps.lastOffer[did] = offerMark{boot: b.Boot, seq: b.Seq}
+	}
 	if ps.remote[pid] == nil {
 		ps.remote[pid] = map[string][]RemoteService{}
 	}
@@ -1154,4 +1201,10 @@ func (ps *portShare) serveHTTPService(w http.ResponseWriter, r *http.Request, pe
 	}
 	ps.mu.Unlock()
 	proxyTo(tr).ServeHTTP(w, r)
+}
+
+// offerMark is the newest service offer applied from one peer device.
+type offerMark struct {
+	boot string
+	seq  uint64
 }

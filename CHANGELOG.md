@@ -8,6 +8,10 @@
   and otherwise keeps the port it got.
 - `sol autostart on` replaces the old proof of concept's start-at-login entry (it stops it first)
   instead of refusing with "set up for another data directory".
+- Port sharing: a person could miss a service you shared right after pairing. Two offers in
+  flight could arrive out of order and the older (without the service) won; offers are now
+  numbered and an older one never replaces a newer one, and a failed push is retried on the
+  current connection.
 
 ## v0.2.0-beta.2 (beta)
 
