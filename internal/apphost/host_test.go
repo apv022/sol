@@ -3,6 +3,7 @@ package apphost
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"image/png"
 	"io"
 	"log/slog"
@@ -32,6 +33,11 @@ func (f *fakeTokens) Issue(app string) string {
 	t := app + "-" + strings.Repeat("x", f.n)
 	f.m[t] = app
 	return t
+}
+func (f *fakeTokens) Grant(app string, sum [32]byte) {
+	f.mu.Lock()
+	f.m[fmt.Sprintf("sha:%x", sum)] = app
+	f.mu.Unlock()
 }
 func (f *fakeTokens) RevokeToken(t string) { f.mu.Lock(); delete(f.m, t); f.mu.Unlock() }
 func (f *fakeTokens) Revoke(app string) {

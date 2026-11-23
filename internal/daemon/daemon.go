@@ -298,6 +298,7 @@ type Daemon struct {
 	nodeLn     net.Listener          // where the direct transports forward sessions
 	anonLn     net.Listener          // where Tor and I2P forward them (anonymous contacts)
 	apiSrv     *http.Server
+	ext        extAPI // the app API on loopback TCP for external apps (external.go)
 	uiSrv      *http.Server
 	apiURL     string
 	uiPort     int
@@ -472,6 +473,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	if err := d.startUI(); err != nil {
 		return nil, err
 	}
+	d.startExternalAPI()
 	d.ports.start()
 	if kr.Person() != nil {
 		d.Host.Start(d.ctx)
@@ -822,6 +824,7 @@ func (d *Daemon) Close() error {
 	if d.Host != nil {
 		d.Host.Close()
 	}
+	d.closeExternalAPI()
 	if d.apiSrv != nil {
 		_ = d.apiSrv.Close()
 	}

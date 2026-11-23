@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tiny client that proves the CONNECT handshake (design/APPS_EVERYWHERE.md M5). Test only:
+     never shipped. Cleartext is allowed because the Sol API is plain HTTP on loopback. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.sol.testclient">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <intent>
+            <action android:name="app.sol.action.CONNECT" />
+        </intent>
+    </queries>
+    <application android:label="Sol test client" android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.Light">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

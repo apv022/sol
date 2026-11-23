@@ -192,7 +192,7 @@ func TestSolAppAgainstRealDaemon(t *testing.T) {
 	if home.Empty != "" {
 		t.Errorf("home says %q", home.Empty)
 	}
-	if !anyHas(people.Rows, "bob", "Online") {
+	if !anyHas(people.Rows, "Bob", "Online") { // the name, not the lowercase address label
 		t.Errorf("People rows %v: want Bob online", people.Rows)
 	}
 	if !anyHas(devices.Rows, "laptop", "This device") {

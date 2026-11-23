@@ -269,7 +269,16 @@ public class NodeService extends Service {
      */
     static String[] cli2(Context c, String... args) { return cliN(c, 2, args); }
 
-    private static String[] cliN(Context c, int words, String... args) {
+    /**
+     * cli2 with {@code stdin} written to the command's standard input: for requests that must
+     * never be in argv (any app can read another process's arguments) or in logcat, such as
+     * `app connect`, whose output holds a new app token (ConnectActivity).
+     */
+    static String[] cli2In(Context c, String stdin, String... args) { return cliRun(c, 2, stdin, args); }
+
+    private static String[] cliN(Context c, int words, String... args) { return cliRun(c, words, null, args); }
+
+    private static String[] cliRun(Context c, int words, String stdin, String[] args) {
         List<String> cmd = new ArrayList<>();
         cmd.add(c.getApplicationInfo().nativeLibraryDir + "/libsol.so");
         for (int i = 0; i < words; i++) cmd.add(args[i]);
@@ -280,6 +289,9 @@ public class NodeService extends Service {
         env(c, pb);
         try {
             Process p = pb.start();
+            try (java.io.OutputStream in = p.getOutputStream()) {
+                if (stdin != null) in.write(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
             StringBuilder out = new StringBuilder();
             try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 String line;

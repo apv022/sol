@@ -101,6 +101,10 @@ type AppInfo struct {
 	Icon        string   `json:"icon,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Scopes      []string `json:"scopes"`
+	// Package is the Android package an external app is bound to (design/APPS_EVERYWHERE.md M5).
+	Package string `json:"package,omitempty"`
+	// External is true for an app Sol does not run (it connected from outside, M5).
+	External bool `json:"external,omitempty"`
 }
 
 // Status describes this device.
@@ -177,6 +181,9 @@ func (d *Daemon) appInfo(s apphost.Status) AppInfo {
 	a := AppInfo{Status: s, Scopes: []string{}}
 	if s.UI {
 		a.URL = apphost.AppURL(s.ID, d.uiPort)
+	}
+	if b, ok := d.Host.External(s.ID); ok {
+		a.External, a.Package = true, b.Package
 	}
 	if m, ok := d.Host.Manifest(s.ID); ok {
 		a.Icon, a.Description = m.Icon, m.Description
@@ -428,6 +435,23 @@ func (d *Daemon) adminHandler() http.Handler {
 			return nil, err
 		}
 		return d.Host.Install(b.Dir)
+	})
+	j("POST /admin/v1/apps/external", "apps.external", func(r *http.Request) (any, error) {
+		// The CLI on this device only: on Android the Sol shell calls it after the person
+		// approved the connecting app (android/README.md "For Android developers"). A web page
+		// must never mint app tokens. The answer holds the token: it is never logged.
+		if err := tokenOnly(r); err != nil {
+			return nil, err
+		}
+		var b struct {
+			Manifest *sol.Manifest `json:"manifest"`
+			Package  string        `json:"package"`
+			Cert     string        `json:"cert"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.RegisterExternal(b.Manifest, b.Package, b.Cert)
 	})
 	j("POST /admin/v1/apps/{id}/remove", "apps.remove", func(r *http.Request) (any, error) {
 		return nil, d.Host.Remove(r.PathValue("id"))

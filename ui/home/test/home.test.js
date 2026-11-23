@@ -87,11 +87,13 @@ test('admin requests: method, path, cookie credentials, JSON body', async () => 
   await a.deny('i2');
   await a.themeSettings({ density: 'compact' });
   await a.revokeAgent('claude-laptop');
+  await a.removeApp('music');
   const got = s.calls.map((c) => `${c.method} ${c.url}`);
   assert.deepEqual(got, [
     'GET /admin/v1/status', 'PATCH /admin/v1/people/bob%201', 'DELETE /admin/v1/people/bob', 'PATCH /admin/v1/devices/d1',
     'POST /admin/v1/invite', 'POST /admin/v1/pair', 'POST /admin/v1/services', 'POST /admin/v1/tunnels',
     'POST /admin/v1/inbox/i1/approve', 'POST /admin/v1/inbox/i2/deny', 'POST /admin/v1/theme/settings', 'POST /admin/v1/agents/claude-laptop/revoke',
+    'POST /admin/v1/apps/music/remove',
   ]);
   assert.ok(s.calls.every((c) => c.credentials === 'same-origin'));
   assert.deepEqual(s.calls[1].body, { petname: 'Bobby' });

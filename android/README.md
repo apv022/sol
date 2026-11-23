@@ -309,3 +309,50 @@ calendar_sync true`, and look with `adb shell content query --uri
 content://com.android.calendar/events`. A `content insert|update|delete` on that URI (without
 the sync-adapter parameter) acts like an edit in a calendar app and reaches Sol within seconds
 (`sol do calendar.agenda` via `run-as app.sol`). `--ez calendar_sync false` removes it all.
+
+### For Android developers: make your app a Sol app
+
+Any Android app can use the Sol app API (design/API.md) after the person approves it once. No
+library, no Play services: one intent and plain HTTP.
+
+```java
+Intent i = new Intent("app.sol.action.CONNECT")
+        .putExtra("app_id", "music")                       // [a-z][a-z0-9-]{1,31}
+        .putExtra("name", "Music")
+        .putExtra("description", "Plays the music in your Sol.")
+        .putExtra("scopes", new String[]{"feeds", "blobs", "people"});
+// or .putExtra("manifest", "{\"id\":\"music\",...}")   a whole app.json (no exec, ui or folders)
+startActivityForResult(i, CONNECT);                         // not startActivity: Sol must see who you are
+
+@Override protected void onActivityResult(int req, int res, Intent data) {
+    if (res == RESULT_OK) {
+        String token = data.getStringExtra("token");   // keep it in your private storage; shown once
+        String api = data.getStringExtra("api");       // http://127.0.0.1:<port>
+        String id = data.getStringExtra("app_id");
+    } else if (data != null) {
+        String error = data.getStringExtra("error");   // denied, not_for_result, not_set_up, bad_request, failed
+    }
+}
+```
+
+Then call `GET <api>/v1/whoami` (and the rest of the API) with `Authorization: Bearer <token>`.
+Your app needs `INTERNET` and cleartext HTTP to `127.0.0.1` (a network security config with a
+`127.0.0.1` domain, or `usesCleartextTraffic`); on Android 11+ add a `<queries>` entry for the
+`app.sol.action.CONNECT` intent if you check whether Sol is installed first.
+
+- **Who you are** comes from Android, not your extras: Sol shows your label and icon from
+  PackageManager and binds the id to your package and the SHA-256 of your original signing
+  certificate. The same id from another package or certificate is refused.
+- **Connecting again** shows the approval again and gives you a new token; the old one stops
+  working. A `401` means the person removed you (Settings > Connected apps, or
+  `sol app remove <id>`): connect again.
+- **Not available to you:** `folders` (use blobs), a UI served by Sol, and being called: actions
+  in your manifest answer `not_implemented`, because Sol cannot reach into your app.
+- **Inside Sol** (`ConnectActivity`): the approval runs `libsol.so app connect` with the request
+  on stdin (`NodeService.cli2In`), never in argv or logcat; the node stores only the token's
+  hash and serves `/v1/` on a loopback port kept in `files/sol/external-api.addr`.
+
+Test it with the client in `android/testclient/` (never shipped): `android/testclient/build.sh`
+(after one `android/build.sh`), `adb install -r android/testclient/build/sol-testclient.apk`,
+open "Sol test client", tap Connect to Sol, Allow; it calls `/v1/whoami` and shows the answer.
+Revoke with Settings > Connected apps and tap Call whoami again: `401`.

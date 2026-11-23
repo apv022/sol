@@ -30,6 +30,32 @@ Go apps use `sdk/go/sol` and JS UIs use `sdk/js/sol.js`; nobody needs to write r
 also ships `memsol`, an in-memory fake of this whole API, so apps and their tests run without a
 daemon.
 
+### Apps Sol does not run (external apps)
+
+A program Sol does not start, such as a separate Android APK, can be a Sol app too
+(design/APPS_EVERYWHERE.md M5). It is **registered**, not installed: on Android through the
+`app.sol.action.CONNECT` handshake (android/README.md "For Android developers"), which ends in
+`sol app connect` on the device; that is `POST /admin/v1/apps/external`
+`{"manifest": {...}, "package": "org.example.music", "cert": "<sha256 hex>"}` →
+`{"id", "token", "api"}`, admin token only (never a browser session).
+
+- The manifest is validated like any (§9); `exec` is set by the daemon to `external` or
+  `external:android:<package>`; `ui` and `folders` are refused (Sol serves no UI for it and it
+  cannot reach the synced folder's path: use blobs). The id of a Sol app (even one removed) or of
+  an installed app is refused.
+- The **token** is long-lived and shown only in that answer. Sol keeps only its SHA-256, so it
+  survives restarts. Registering again with the same binding (re-approval) issues a new token
+  and revokes the old; `sol app remove <id>` (or Settings > Connected apps) revokes it at once.
+- The binding: an id registered for one package and signing certificate is refused to any
+  other, and a package already registered under one certificate is refused under another.
+- **`api`** is `http://127.0.0.1:<port>`: while any external app is registered the daemon also
+  serves this API on loopback TCP (only `/v1/`, never `/admin/` or `/agent/`). The port is
+  chosen once and kept in `<dir>/external-api.addr`; if it is taken at start Sol says so in the
+  log instead of moving. Any program on the device can reach loopback: the token is the gate.
+- The app calls `/v1/...` with `Authorization: Bearer <token>` like any app, events stream
+  included. It does not listen, so Sol cannot call into it: actions its manifest declares
+  answer `not_implemented` when called. `sol apps` lists it as `external (<package>)`.
+
 ## Names
 
 | Thing | Format | Example |
@@ -283,7 +309,7 @@ the whole "plug and play" contract.
 
 | Field | Meaning |
 |---|---|
-| `exec` | program to start, relative to the app directory. First-party apps are built into the `sol` binary and use `"exec": "builtin:files"` |
+| `exec` | program to start, relative to the app directory. First-party apps are built into the `sol` binary and use `"exec": "builtin:files"`; apps Sol does not run get `external[:android:<package>]` from the daemon ("Apps Sol does not run") |
 | `ui` | path the app serves its UI on; omit for headless apps |
 | `scopes` | API areas the app may use; the person sees them when installing |
 | `runs_on` | `any`, or `anchor` for apps that only run on always-on devices (e.g. a music indexer) |

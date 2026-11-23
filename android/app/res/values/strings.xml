@@ -1,4 +1,22 @@
 <resources>
     <string name="app_name">Sol</string>
     <string name="notif_channel">Sol node</string>
+    <!-- ConnectActivity: another app asking to be a Sol app (M5). -->
+    <string name="connect_title">%1$s wants to use Sol</string>
+    <string name="connect_as">As the Sol app “%1$s” (%2$s), from %3$s.</string>
+    <string name="connect_it_may">It will be able to:</string>
+    <string name="connect_revoke">It keeps this access until you remove it in Sol’s Settings, or with sol app remove %1$s.</string>
+    <string name="connect_allow">Allow</string>
+    <string name="connect_deny">Don’t allow</string>
+    <string name="connect_working">Connecting…</string>
+    <string name="connect_failed">Couldn’t connect the app</string>
+    <string name="connect_not_set_up">Set up Sol first, then try again from the app.</string>
+    <string name="scope_people">See your contacts and devices</string>
+    <string name="scope_feeds">Keep its own data in Sol, synced to your devices, and share it with people you choose</string>
+    <string name="scope_blobs">Store and fetch files through Sol</string>
+    <string name="scope_actions">Use the actions of your other Sol apps (changes need your approval)</string>
+    <string name="scope_inbox">Send you notices and approval requests</string>
+    <string name="scope_dial">Open live connections to your contacts’ apps</string>
+    <string name="scope_reads">Read the data of your %1$s app</string>
+    <string name="scope_none">Only know who you are (your name and this device)</string>
 </resources>

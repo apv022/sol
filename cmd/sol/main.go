@@ -15,7 +15,8 @@
 //	sol pair <link>              redeem a pair link, or a join link on a fresh --join device
 //	sol apps                     list installed apps and their UI addresses
 //	sol app install <dir>        install (or replace) the app in dir
-//	sol app remove <id>          remove an app (its data stays)
+//	sol app remove <id>          remove an app (its data stays; an external app's token is revoked)
+//	sol app connect < req.json   register an external app (design/APPS_EVERYWHERE.md M5)
 //	sol app run <id>             run a builtin app in the foreground (the daemon does this)
 //	sol do <app>.<action> ...    run an action (sol do --help); as an agent with SOL_AGENT_KEY or --as-agent
 //	sol agent new|list|revoke|renew   agent keys
@@ -41,6 +42,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -142,6 +144,7 @@ const usage = `usage: sol <command> [flags]
   pair <link>
   apps [--json]
   app install <dir> | app remove <id> | app run <id>
+  app connect < request.json        register an external app (JSON {manifest, package, cert} on stdin); prints its token once
   do <app>.<action> [--name value ...] [--args JSON|-] [--json] [--dry-run] [--person ID] [--as-agent NAME]
   agent new <name> --scope PATTERN... [--person ID|self] [--days N] [--out FILE] | agent list | agent revoke <name|id> | agent renew <name> [--days N]
   inbox [--json] | inbox approve <id> | inbox deny <id> | inbox dismiss <id>
@@ -375,7 +378,14 @@ func run(args []string) error {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tVERSION\tRUNNING\tUI")
 		for _, a := range apps {
-			fmt.Fprintf(tw, "%s\t%s\t%v\t%s\n", a.ID, a.Version, a.Running, a.URL)
+			running := fmt.Sprint(a.Running)
+			if a.External {
+				running = "external" // Sol does not run it: it connected from outside (M5)
+				if a.Package != "" {
+					running += " (" + a.Package + ")"
+				}
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", a.ID, a.Version, running, a.URL)
 		}
 		return tw.Flush()
 	case "app install":
@@ -388,6 +398,22 @@ func run(args []string) error {
 		}
 		fmt.Printf("Installed %s %s\n", m.ID, m.Version)
 		return nil
+	case "app connect":
+		// The Android shell runs this after the person approved a connecting app (M5): the
+		// request comes on stdin, never argv (other apps can read process arguments), and the
+		// answer, which holds the app's token, goes to stdout only.
+		if fs.NArg() != 0 {
+			return errors.New("usage: sol app connect < {\"manifest\": {...}, \"package\": P, \"cert\": SHA256}")
+		}
+		var in json.RawMessage
+		if err := json.NewDecoder(io.LimitReader(os.Stdin, 1<<20)).Decode(&in); err != nil {
+			return errors.New("app connect: expected a JSON request on stdin")
+		}
+		var out daemon.ExternalApp
+		if err := c.Do(ctx, "POST", "/admin/v1/apps/external", in, &out); err != nil {
+			return err
+		}
+		return printJSON(out)
 	case "app remove":
 		if fs.NArg() != 1 {
 			return errors.New("usage: sol app remove <id>")

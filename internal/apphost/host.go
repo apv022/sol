@@ -28,6 +28,9 @@
 //     Origin (when sent) is the app's own origin and Sec-Fetch-Site (when sent) is same-origin;
 //     a state-changing request needs one of the two, so a page on another origin can never
 //     call an app's API (CSRF).
+//   - An external app (exec "external[:android:<package>]", external.go) is registered, not
+//     installed: Sol never runs it, it holds one long-lived token stored only as a SHA-256 in
+//     its external.json, and it is bound to its Android package and signing certificate.
 //   - Removing an app stops it and revokes its tokens; its data directory is kept, so removing
 //     and reinstalling an app loses nothing.
 package apphost
@@ -116,6 +119,8 @@ type Tokens interface {
 	Issue(app string) string
 	RevokeToken(token string)
 	Revoke(app string)
+	// Grant accepts the token with SHA-256 sum as app's (an external app's stored token).
+	Grant(app string, sum [32]byte)
 }
 
 // Config configures a Host.
@@ -220,6 +225,9 @@ func New(cfg Config) (*Host, error) {
 			continue
 		}
 		h.add(m, dir)
+		if isExternal(m.Exec) {
+			h.grantExternal(m.ID, dir)
+		}
 	}
 	return h, nil
 }
@@ -252,6 +260,10 @@ func (h *Host) Validate(m *sol.Manifest, dir string) error {
 	if name, ok := strings.CutPrefix(m.Exec, "builtin:"); ok {
 		if _, ok := h.cfg.Builtins[name]; !ok {
 			return fmt.Errorf("app.json: unknown builtin %q", name)
+		}
+	} else if isExternal(m.Exec) {
+		if m.UI != "" || len(m.Folders) > 0 {
+			return errors.New("app.json: an external app has no ui or folders")
 		}
 	} else {
 		if filepath.IsAbs(m.Exec) || !filepath.IsLocal(m.Exec) {
@@ -371,7 +383,7 @@ func (h *Host) Start(ctx context.Context) {
 
 // startLocked starts supervising a. h.mu held.
 func (h *Host) startLocked(a *app) {
-	if h.ctx == nil || a.attached || a.cancel != nil {
+	if h.ctx == nil || a.attached || a.cancel != nil || isExternal(a.m.Exec) {
 		return
 	}
 	if slices.Contains(a.m.RunsOn, "anchor") && !slices.Contains(a.m.RunsOn, "any") && (h.cfg.Anchor == nil || !h.cfg.Anchor()) {
@@ -443,6 +455,10 @@ func (h *Host) Restart(id string) error {
 	if a.attached {
 		h.mu.Unlock()
 		return sol.Errorf("conflict", id+" is attached for development; restart it yourself")
+	}
+	if isExternal(a.m.Exec) {
+		h.mu.Unlock()
+		return sol.Errorf("conflict", id+" runs outside Sol; restart it yourself")
 	}
 	wait := h.stopLocked(a)
 	h.mu.Unlock()
@@ -582,6 +598,9 @@ func (h *Host) Install(dir string) (*sol.Manifest, error) {
 	m, err := sol.ParseManifest(raw)
 	if err != nil {
 		return nil, err
+	}
+	if isExternal(m.Exec) {
+		return nil, errors.New("apphost: an external app is registered (sol app connect), not installed")
 	}
 	if err := h.Validate(m, dir); err != nil {
 		return nil, err

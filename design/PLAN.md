@@ -98,7 +98,10 @@ Status: `todo` · `doing` · `done`.
 | M2 | `sol open <app>`; per-app app-menu entries kept in step with installs | done: `sol open [--print] <app>`; `sol launcher on` writes `sol-app-<id>.desktop` per app (Linux), `sol run` refreshes them via `daemon.Options.OnApps` when apps change |
 | M3 | Android: "Add to home screen" pinned shortcuts per app, dynamic shortcuts on Sol's icon, one task per app (own recents entry, Back leaves) | done (AppActivity, Shortcuts, SolWeb; bridge `SolAndroid.addToHomeScreen`) |
 | M4 | Calendar sync adapter (Sol calendars in the phone's calendar apps), desktop `.ics` subscription URL, notification channel per app with Approve/Deny | notifications done (local only: `sol events` + NodeService, no push service); Android calendar sync adapter done (AOSP only, two-way, change-driven; the in-app switch still to place); `.ics` URL todo |
-| M5 | Third-party Android apps: `app.sol.action.CONNECT` intent → approval → app token + API URL | todo (design with its first real app) |
+| M5 | Third-party Android apps: `app.sol.action.CONNECT` intent → approval → app token + API URL | done: external apps (hashed long-lived token, package+cert binding, loopback `/v1/`, `sol app connect`, Settings > Connected apps); proven with android/testclient on the emulator; no real third-party app yet; external apps' actions are `not_implemented` (no callback) |
+| S1 | After the public ship: CI check that nothing under `apps/` imports `internal/` (rule 2 enforced, not just written) | todo |
+| S2 | After the public ship: the SDK as its own Go module (`github.com/apv022/sol/sdk`, semver) so outside apps depend on it without the daemon | todo |
+| S3 | The agent (A6) is the first app in its own repo, installed like any third-party app: proves "replaceable" and is the template for others. Designed with APV first. Then, at app API v1, decide whether Files/Notes/Tasks/Calendar move out too (still bundled in the `sol` download) | todo (after the ship) |
 | A10 | Movies: video library, posters, resume, streaming to peers (transcoding decision first) | todo |
 
 Order: A1 → A2 → A3 → A4 while C1 → C7 run; A5 after C8; A6 after C7; A7 after C6; then A8–A10.

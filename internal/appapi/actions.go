@@ -184,6 +184,11 @@ func (s *Server) run(ctx context.Context, requester string, c sol.ActionCall, wh
 	if !approved && !c.DryRun && (needsApproval(spec, who.agent) || crossApp) {
 		return s.fileApproval(requester, sol.ActionCall{Action: c.Action, Args: c.Args}, who.agent)
 	}
+	if a.Addr == "" && strings.HasPrefix(a.Manifest.Exec, "external") {
+		// An external app (a separate Android APK, say) calls the API but does not listen for
+		// calls: the daemon has no way to reach it, so its declared actions are not callable.
+		return nil, sol.Errorf("not_implemented", "app "+appID+" runs outside Sol and cannot receive action calls")
+	}
 	if a.Addr == "" {
 		return nil, sol.Errorf("unavailable", "app "+appID+" is not running")
 	}

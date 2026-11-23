@@ -139,15 +139,41 @@ The most useful kind of modularity is your Sol data showing up where you already
 
 ### M5. Third-party Android apps talking to Sol (the app API on Android)
 
-An Android app that wants to be a Sol app (say a music player) should use the same app API as
-everyone else. Proposed handshake:
+Status: done. The contract for app developers is android/README.md "For Android developers";
+the API side is API.md "Apps Sol does not run". Built without a real third-party app yet:
+`android/testclient/` (never shipped) proves it end to end on the emulator.
 
-1. It sends an intent `app.sol.action.CONNECT` with its app id, name and the scopes it wants.
-2. Sol shows an approval screen ("Music wants to read your Music folder and use People"),
-   like installing an app on desktop.
-3. On approval Sol registers it as an app (manifest from the request, no `exec`) and returns
-   its app token and the API URL (`http://127.0.0.1:<api port>`); revocable in Settings.
-4. The app calls the HTTP API with its token like any app. Its events stream works the same.
+An Android app that wants to be a Sol app (say a music player) uses the same app API as
+everyone else. The handshake:
+
+1. It starts `app.sol.action.CONNECT` **with startActivityForResult** (a plain startActivity
+   is refused: Sol identifies the caller by `getCallingPackage()`), with extras `app_id`,
+   `name`, `description`, `scopes` (String[]) or a whole `manifest` (JSON string).
+2. Sol shows a native approval screen: the caller's label and icon **from PackageManager**
+   (never from the extras), the id it asks for, and the scopes in plain words ("See your
+   contacts and devices"), Allow / Don't allow. Other apps' overlays are hidden (Android 12+)
+   and touches through an obscuring window are dropped.
+3. On Allow, Sol runs `sol app connect` (the request on stdin, never argv or logcat): the
+   daemon registers it, exec `external:android:<package>`, bound to the package and the
+   SHA-256 of its **original** signing certificate (the first in its signing history, so key
+   rotation keeps the binding), and returns RESULT_OK with `token`, `api`
+   (`http://127.0.0.1:<port>`) and `app_id`. Deny, back or any failure is RESULT_CANCELED with
+   `error` (`denied`, `not_for_result`, `not_set_up`, `bad_request`, `failed`) and maybe
+   `message`.
+4. The app calls the HTTP API with its token like any app. It keeps the token in its own
+   private storage; Sol keeps only the hash. Connecting again (same package and certificate)
+   asks again and replaces the token. Settings > Connected apps (or `sol app remove <id>`)
+   revokes it.
+
+Decisions made while building:
+- The app API normally listens on a unix socket in Sol's private directory, which another app
+  cannot open, so the daemon also serves `/v1/` on a loopback TCP port, only while an external
+  app is registered, at a port kept across restarts (the app stores the URL).
+- One id per binding: an id is refused to another package or certificate, a package to another
+  certificate. Apps signed by several keys are refused.
+- No folders (the app cannot read Sol's private directory; it uses blobs) and no UI served by Sol.
+- Sol cannot call into an external app (it does not listen), so actions it declares answer
+  `not_implemented`. A loopback callback URL could lift that later; not built.
 
 Two constraints shape this:
 - Android won't run programs from an app's writable storage, so the desktop way of installing

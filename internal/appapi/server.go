@@ -168,6 +168,15 @@ func (s *Server) Issue(app string) string {
 	return t
 }
 
+// Grant accepts the token whose SHA-256 is sum as one of app's, without ever knowing the
+// token: an external app's long-lived token is stored only hashed, and granted again by its
+// hash at every start (apphost.RegisterExternal). Revoke drops it like any other.
+func (s *Server) Grant(app string, sum [32]byte) {
+	s.mu.Lock()
+	s.tokens[sum] = principal{app: app}
+	s.mu.Unlock()
+}
+
 // IssueAdmin returns a new admin token (for the CLI).
 func (s *Server) IssueAdmin() string {
 	t := newToken()
