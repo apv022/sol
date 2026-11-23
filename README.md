@@ -1,3 +1,6 @@
+> **This is the archived proof of concept (v0.1.0-alpha).** Sol has been rebuilt: see the
+> [main branch](https://github.com/apv022/sol) for the current version.
+
 <p align="center"><img src="docs/media/logo.svg" width="96" alt="Sol logo"></p>
 
 <h1 align="center">Sol</h1>
@@ -314,8 +317,7 @@ Start with [AGENTS.md](AGENTS.md) for a map of the code and the rules, and
 - **Security problems:** privately, see [SECURITY.md](SECURITY.md).
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md).
 
-Sol is free and will stay free. I also do paid private self-hosting setups (your own media,
-photos, files and home automation, reachable from anywhere) through [Solarae](https://solarae.io).
+Sol is free and will stay free.
 
 ## License
 
