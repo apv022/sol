@@ -1,0 +1,9 @@
+# Check every text file out with LF line endings on every OS. Sol embeds data files whose bytes
+# are hashed or compared (the BIP-39 word list, golden test files, .ics fixtures); Git for
+# Windows' default autocrlf would turn them into CRLF and break those checks.
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.jpg binary
+*.jar binary
+*.apk binary
