@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Calendar sync (CalendarSync): asked for only when the person turns it on in Sol. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
 
     <!-- allowBackup=false: the device key must not reach cloud backups. extractNativeLibs=true:
          libsol.so is a program and must exist as a file to be executed. -->
@@ -46,6 +51,29 @@
             </intent-filter>
         </activity>
 
+        <!-- One Sol app full screen in its own task (sol-app://<id>): one recents entry per app. -->
+        <activity
+            android:name=".AppActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|uiMode"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:taskAffinity="" />
+
+        <!-- Launcher shortcuts land here and hand over to AppActivity without restarting its task. -->
+        <activity
+            android:name=".ShortcutActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- Approve / Deny / Dismiss on inbox notifications. -->
+        <receiver
+            android:name=".InboxReceiver"
+            android:exported="false" />
+
         <service
             android:name=".NodeService"
             android:exported="false"
@@ -66,6 +94,28 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
+
+        <!-- The local "app.sol" account and its calendar sync adapter (CalendarSync). -->
+        <service
+            android:name=".CalendarSync$AuthService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/authenticator" />
+        </service>
+        <service
+            android:name=".CalendarSync$SyncService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.content.SyncAdapter" />
+            </intent-filter>
+            <meta-data
+                android:name="android.content.SyncAdapter"
+                android:resource="@xml/syncadapter" />
+        </service>
 
         <!-- Files handed to a viewer app (a PDF preview), read-only, by per-intent grant only. -->
         <provider

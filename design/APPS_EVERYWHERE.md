@@ -4,7 +4,7 @@ Status: plan, for APV to agree before building (tickets M1–M5 in PLAN.md).
 
 Today every app is reachable only through the Sol app: on Android only inside Sol's WebView,
 on desktop at `http://<app>.localhost:7777/` (bookmarkable, but a browser tab). The goal: each
-app feels like its own app (its own icon on the home screen or dock, its own window, its own
+app feels like its own app (its own icon on the home screen or in the app menu, its own window, its own
 entry in recents) while staying one Sol underneath, and other apps on the device can work
 with Sol's data without going through Sol's UI.
 
@@ -44,7 +44,7 @@ The kit's `sol.js` adds the `<link rel="manifest">` and registers the worker, so
 first-party or not, is installable with no work. The Sol app itself gets the same treatment.
 
 Result: in Chrome, Edge or Brave, "Install Files" gives a Files window with its own icon in the
-dock and app menu. Firefox can't install web apps; bookmarks keep working there.
+app menu. Firefox can't install web apps; bookmarks keep working there.
 
 ### M2. App menu entries per app (Linux, then macOS/Windows)
 
@@ -125,6 +125,17 @@ The most useful kind of modularity is your Sol data showing up where you already
   notice opens its app in the app's own task. On every node start `inbox --json` is read too,
   so items from while the stream was down are not missed (items older than 7 days are not
   notified then).
+
+  **Status (calendar sync adapter built, Android).** AOSP framework only (no Google account, Play
+  services or push): a local `app.sol` account named after the person and a sync adapter for
+  `com.android.calendar`. Sol calendars and events (rules, exceptions, all-day, zones; from
+  `calendar.export`) appear in every CalendarProvider app, and creates, edits, deletes and
+  per-occurrence changes made there go back through `calendar.add/update/delete`. Change-driven
+  only (node start, the Calendar origin's event stream, a provider observer). Off until turned
+  on with `window.SolAndroid.calendarSync(true)` (no page shows the switch yet); off removes the
+  account and its rows. Alerts stay Sol's (Inbox notifications): no Reminders rows, so nothing
+  alerts twice. Not yet: invitations, the desktop `.ics` subscription URL. Details in
+  android/README.md.
 
 ### M5. Third-party Android apps talking to Sol (the app API on Android)
 

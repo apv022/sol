@@ -416,16 +416,31 @@ async function subscribeSheet() {
   });
 }
 
+// Inside the Android app the shell can mirror Sol calendars into the phone's calendar apps
+// (android/README.md, "Calendar sync"); it asks for the calendar permission when turned on.
+const CAN_PHONE_SYNC = typeof window.SolAndroid?.calendarSync === 'function';
+const phoneSyncOn = () => { try { return !!window.SolAndroid.calendarSyncEnabled(); } catch { return false; } };
+function togglePhoneSync() {
+  const on = !phoneSyncOn();
+  addEventListener('sol-calendar-sync', (e) => {
+    toast(e.detail?.on ? 'Your calendars now show in the phone’s calendar apps' : (on ? 'Calendar permission was not given' : 'Removed from the phone’s calendar apps'));
+  }, { once: true });
+  window.SolAndroid.calendarSync(on);
+}
+
 function fileMenu(anchor) {
   const items = [
     { label: 'Import .ics…', icon: 'upload', onSelect: () => importICS(null) },
     { label: 'Export all calendars', icon: 'download', onSelect: () => exportICS(null) },
   ];
   if (CAN_SUBSCRIBE) items.push({ label: 'Subscribe from another app…', icon: 'link', onSelect: subscribeSheet });
+  const syncLabel = () => (phoneSyncOn() ? 'Stop showing in phone’s calendar apps' : 'Show in phone’s calendar apps');
+  if (CAN_PHONE_SYNC) items.push({ label: syncLabel(), icon: 'phone', onSelect: togglePhoneSync });
   const opts = [['import', 'Import .ics…'], ['export', 'Export all calendars']];
   if (CAN_SUBSCRIBE) opts.push(['subscribe', 'Subscribe from another app…']);
+  if (CAN_PHONE_SYNC) opts.push(['phone', syncLabel()]);
   if (anchor) showMenu(items, { anchor });
-  else choose('Import or export', 'iCalendar (.ics) files work with every calendar app.', opts).then((v) => { if (v === 'import') importICS(null); if (v === 'export') exportICS(null); if (v === 'subscribe') subscribeSheet(); });
+  else choose('Import or export', 'iCalendar (.ics) files work with every calendar app.', opts).then((v) => { if (v === 'import') importICS(null); if (v === 'export') exportICS(null); if (v === 'subscribe') subscribeSheet(); if (v === 'phone') togglePhoneSync(); });
 }
 
 function calMenu(anchor, c) {

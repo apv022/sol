@@ -68,6 +68,8 @@ public class NodeService extends Service {
     private volatile Network current;
     private ConnectivityManager cm;
     private ConnectivityManager.NetworkCallback netCallback;
+    /** Inbox items as notifications, from the node's own event stream (no push service). */
+    private final Notifier notifier = new Notifier(this);
 
     /** Where the node keeps its identity and config. */
     static File dataDir(Context c) { return new File(c.getFilesDir(), "sol"); }
@@ -102,7 +104,8 @@ public class NodeService extends Service {
             note(state());
             return START_STICKY;
         }
-        Notification n = notification("Starting");
+        // Another start (an app window opening) while the node runs keeps saying it runs.
+        Notification n = notification(ready ? state() : "Starting");
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
@@ -115,6 +118,7 @@ public class NodeService extends Service {
                     .putString(EXTRA_DEVICE, in.getStringExtra(EXTRA_DEVICE)).apply();
         }
         watchNetwork();
+        notifier.start();
         synchronized (this) {
             if (supervisor == null || !supervisor.isAlive()) {
                 stopping = false;
@@ -137,6 +141,8 @@ public class NodeService extends Service {
     private void stopNode() {
         stopping = true;
         ready = false;
+        notifier.stop();
+        CalendarSync.nodeStopped(this);
         Process p = node;
         if (p != null) p.destroy(); // SIGTERM: the node closes cleanly
     }
@@ -202,6 +208,11 @@ public class NodeService extends Service {
                         joining = line.startsWith("Sol is running for  on ");
                         note(state());
                         sendBroadcast(new Intent(ACTION_READY).setPackage(getPackageName()));
+                        // The launcher's app shortcuts and the inbox notifications catch up.
+                        Shortcuts.refreshAsync(this);
+                        new Thread(notifier::sync, "sol-inbox-sync").start();
+                        // Calendars in the phone's calendar apps catch up and follow changes.
+                        new Thread(() -> CalendarSync.onNodeReady(this), "sol-calendar-ready").start();
                     }
                 }
             }
@@ -224,7 +235,7 @@ public class NodeService extends Service {
      * native library directory, the only place an app may execute files from), which the node
      * runs for its Tor transport instead of looking for a tor on PATH.
      */
-    private static void env(Context c, ProcessBuilder pb) {
+    static void env(Context c, ProcessBuilder pb) {
         pb.environment().put("HOME", c.getFilesDir().getAbsolutePath());
         pb.environment().put("TMPDIR", c.getCacheDir().getAbsolutePath());
         File tor = new File(c.getApplicationInfo().nativeLibraryDir, "libtor.so");
@@ -250,13 +261,21 @@ public class NodeService extends Service {
      * returns its exit code and combined output, which is user-facing text. The link is passed as
      * an argument and never logged.
      */
-    static String[] cli(Context c, String... args) {
+    static String[] cli(Context c, String... args) { return cliN(c, 1, args); }
+
+    /**
+     * cli for a two-word command (`inbox approve <id>`): the CLI reads the second word only right
+     * after the first, so --dir goes after both.
+     */
+    static String[] cli2(Context c, String... args) { return cliN(c, 2, args); }
+
+    private static String[] cliN(Context c, int words, String... args) {
         List<String> cmd = new ArrayList<>();
         cmd.add(c.getApplicationInfo().nativeLibraryDir + "/libsol.so");
-        cmd.add(args[0]);
+        for (int i = 0; i < words; i++) cmd.add(args[i]);
         cmd.add("--dir");
         cmd.add(dataDir(c).getAbsolutePath());
-        for (int i = 1; i < args.length; i++) cmd.add(args[i]);
+        for (int i = words; i < args.length; i++) cmd.add(args[i]);
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         env(c, pb);
         try {
