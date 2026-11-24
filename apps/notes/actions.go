@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/apv022/sol/sdk/go/sol"
@@ -813,7 +814,20 @@ func (a *App) actTidyNames(ctx context.Context, c sol.Call) (any, error) {
 	var plan []rename
 	a.wmu.Lock()
 	taken := map[string]bool{}
-	for _, d := range a.idx.snapshot() {
+	docs := a.idx.snapshot()
+	// In path order, so the oldest Untitled gets the plain name and later ones " 2", " 3".
+	num := func(p string) int { // Untitled -> 1, Untitled 2 -> 2, ...
+		n, _ := strconv.Atoi(strings.TrimLeft(stemOf(p)[len("untitled"):], " -"))
+		return max(n, 1)
+	}
+	sort.Slice(docs, func(i, j int) bool {
+		a, b := docs[i].path, docs[j].path
+		if dirOf(a) != dirOf(b) || !untitledRe.MatchString(stemOf(a)) || !untitledRe.MatchString(stemOf(b)) {
+			return a < b
+		}
+		return num(a) < num(b)
+	})
+	for _, d := range docs {
 		if (len(want) > 0 && !want[d.path]) || !untitledRe.MatchString(stemOf(d.path)) {
 			continue
 		}
