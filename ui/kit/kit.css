@@ -337,6 +337,8 @@ sol-app-icon { --size: 60px; --glyph: calc(var(--size) * .5); position: relative
   border-radius: var(--radius-icon); background: linear-gradient(160deg, var(--icon-a, var(--tint)), var(--icon-b, var(--tint-pressed)));
   box-shadow: 0 1px 2px rgba(0, 0, 0, .18), inset 0 0 0 var(--hairline) rgba(255, 255, 255, .25), inset 0 1px 0 rgba(255, 255, 255, .22); }
 sol-app-icon sol-icon { --size: var(--glyph); filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .18)); }
+/* A heavier stroke than UI glyphs: at icon size a 1.75 line reads as a hairline (ICON_STROKE in appicon.js). */
+sol-app-icon sol-icon svg { stroke-width: 2.25; }
 sol-app-icon[data-dark-glyph] { color: var(--on-tint); }
 .widget { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); border-radius: var(--radius-sheet); min-width: 8rem; background: var(--glass); backdrop-filter: var(--glass-filter); -webkit-backdrop-filter: var(--glass-filter); box-shadow: var(--shadow-1), inset 0 0 0 var(--hairline) var(--glass-edge); }
 .widget-title { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-subhead); line-height: var(--lh-subhead); font-weight: 600; color: var(--label-2); }

@@ -1,6 +1,7 @@
 // Sol kit: plain custom elements (light DOM, styled by kit.css) plus a few helpers. No framework.
 // Text is always set with textContent; nothing here parses API data as markup.
 import { icons } from './icons.js';
+import { appIconColors } from './appicon.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const phone = () => matchMedia('(max-width: 760px)').matches;
@@ -57,9 +58,9 @@ class SolAppIcon extends HTMLElement {
   render() {
     const hue = this.getAttribute('hue');
     if (hue !== null && hue !== '') {
-      const h = Number(hue) || 0;
-      this.style.setProperty('--icon-a', `hsl(${h} 82% 62%)`);
-      this.style.setProperty('--icon-b', `hsl(${(h + 14) % 360} 78% 46%)`);
+      const [a, b] = appIconColors(hue);
+      this.style.setProperty('--icon-a', a);
+      this.style.setProperty('--icon-b', b);
     } else { this.style.removeProperty('--icon-a'); this.style.removeProperty('--icon-b'); this.toggleAttribute('data-dark-glyph', true); }
     if (hue !== null && hue !== '') this.removeAttribute('data-dark-glyph');
     if (this.hasAttribute('size')) this.style.setProperty('--size', this.getAttribute('size'));

@@ -33,16 +33,15 @@ const page = `<!doctype html><meta charset="utf-8"><body style="margin:0;backgro
 <script type="module">
 import { icons } from '/ui/kit/icons.js';
 import { appIconSpec } from '/ui/home/util.js';
+import { appIconColors, ICON_STROKE } from '/ui/kit/appicon.js';
 const q = new URLSearchParams(location.search);
 const { glyph, hue } = appIconSpec({ id: q.get('id'), icon: 'icon.svg' }, icons);
-// hsl(h 82% 62%) and hsl(h+14 78% 46%) as hex: the gradient of kit.css sol-app-icon.
-const hex = (h, s, l) => { s /= 100; l /= 100; const a = s * Math.min(l, 1 - l);
-  const f = (n) => { const k = (n + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); };
-  return '#' + f(0) + f(8) + f(4); };
+// The same gradient <sol-app-icon> draws (ui/kit/appicon.js).
+const [a, b] = appIconColors(hue);
 const svg = (rx) => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="g" x1="0" y1="0" x2=".35" y2="1">' +
-  '<stop offset="0" stop-color="' + hex(hue, 82, 62) + '"/><stop offset="1" stop-color="' + hex((hue + 14) % 360, 78, 46) + '"/></linearGradient></defs>' +
+  '<stop offset="0" stop-color="' + a + '"/><stop offset="1" stop-color="' + b + '"/></linearGradient></defs>' +
   '<rect width="512" height="512" rx="' + rx + '" fill="url(#g)"/>' +
-  '<g transform="translate(128 128) scale(10.667)" fill="none" stroke="#fff" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+  '<g transform="translate(128 128) scale(10.667)" fill="none" stroke="#fff" stroke-width="' + ICON_STROKE + '" stroke-linecap="round" stroke-linejoin="round">' +
   icons[glyph].map((d) => '<path d="' + d + '"/>').join('') + '</g></svg>';
 const out = document.getElementById('out');
 out.innerHTML = svg(0).replace('<svg ', '<svg width="100%" height="100%" ');

@@ -65,7 +65,12 @@ export function bytes(n) {
 }
 
 /** A stable hue 0..359 from a string (same idea as the kit's avatar). */
+// Hues of the built-in apps, picked to be far apart so the grid tells them apart at a glance.
+const HUES = { files: 250, notes: 300, tasks: 150, calendar: 25, music: 0, photos: 330, video: 50, chat: 200, browser: 225 };
+
+/** The icon hue of an app: a fixed one for built-in apps, else one derived from the id. */
 export function hueOf(key) {
+  if (Object.hasOwn(HUES, key)) return HUES[key];
   let h = 0;
   for (const c of String(key)) h = (h * 31 + c.codePointAt(0)) % 360;
   return h;
@@ -174,4 +179,20 @@ export function agentScopes({ all = false, apps = [], actions = [] }) {
 export function agentCommand(name, keyPath) {
   const q = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
   return { here: `sol do --as-agent ${q(name)} <app>.<action>`, elsewhere: `SOL_AGENT_KEY=${q(keyPath)} sol do <app>.<action>` };
+}
+
+/** The marker the daemon puts in place of a secret argument (sdk/go/sol.Redacted). */
+export const REDACTED = '••••';
+
+/**
+ * One line naming the call an open approval would run: `vault.unlock user: "al", password: ••••`.
+ * The daemon already redacted secret values; the caller escapes the text before it reaches the DOM.
+ */
+export function callText(action, max = 200) {
+  if (!action || !action.action) return '';
+  const args = action.args && typeof action.args === 'object' && !Array.isArray(action.args)
+    ? Object.entries(action.args).map(([k, v]) => `${k}: ${v === REDACTED ? REDACTED : JSON.stringify(v)}`).join(', ')
+    : (action.args === undefined || action.args === null ? '' : (action.args === REDACTED ? REDACTED : JSON.stringify(action.args)));
+  const s = args ? `${action.action} ${args}` : action.action;
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
