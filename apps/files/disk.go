@@ -206,7 +206,7 @@ func (a *App) localChange(ctx context.Context, p string) error {
 	st, err := os.Lstat(a.disk(p))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return a.localGone(ctx, p)
+		return a.localGone(ctx, a.goneRoot(p))
 	case err != nil:
 		return err
 	case st.Mode()&os.ModeSymlink != 0:
@@ -333,6 +333,17 @@ func (a *App) markDir(p string, on bool) {
 
 // localGone publishes the deletion of a path (or a folder of paths) that vanished from disk.
 func (a *App) localGone(ctx context.Context, p string) error {
+	if _, err := os.Lstat(a.root); err != nil {
+		// The folder itself is gone (an unmounted disk, a deleted SolDrive): that is not the
+		// person deleting every file, so nothing is published.
+		return fmt.Errorf("the synced folder %s is missing: %w", a.root, err)
+	}
+	// One removal on disk is one deletion in Trash (a folder removed with rm -r is one row).
+	group := newShareID()
+	del := func(b body) error {
+		b.Op, b.Trash, b.In, b.Why = opDelete, group, p, whyDisk
+		return a.commit(ctx, b)
+	}
 	a.mu.RLock()
 	var gone []string
 	for k := range a.index {
@@ -353,7 +364,7 @@ func (a *App) localGone(ctx context.Context, p string) error {
 		if _, _, err := v.route(k); err != nil {
 			continue
 		}
-		if err := a.commit(ctx, body{Op: opDelete, Path: k, Base: e.Blob}); err != nil {
+		if err := del(body{Path: k, Base: e.Blob}); err != nil {
 			a.setIndex(k, e) // not published: keep it so the next scan tries again
 			if first == nil {
 				first = err
@@ -373,7 +384,7 @@ func (a *App) localGone(ctx context.Context, p string) error {
 		if _, _, err := v.route(d); err != nil {
 			continue
 		}
-		if err := a.commit(ctx, body{Op: opDelete, Path: d}); err != nil {
+		if err := del(body{Path: d}); err != nil {
 			if first == nil {
 				first = err
 			}
@@ -451,12 +462,34 @@ func (a *App) scan(ctx context.Context) error {
 	}
 	a.mu.RUnlock()
 	sort.Strings(missing)
+	var done []string
+next:
 	for _, k := range missing {
+		for _, d := range done {
+			if under(k, d) {
+				continue next
+			}
+		}
 		if _, err := os.Lstat(a.disk(k)); errors.Is(err, fs.ErrNotExist) {
-			note(a.localGone(ctx, k))
+			r := a.goneRoot(k)
+			done = append(done, r)
+			note(a.localGone(ctx, r))
 		}
 	}
 	return first
+}
+
+// goneRoot climbs from a path that vanished from disk to the highest folder above it that
+// vanished too, so a folder removed with everything in it is published as one deletion.
+func (a *App) goneRoot(p string) string {
+	top := p
+	for d := parentOf(p); d != ""; d = parentOf(d) {
+		if _, err := os.Lstat(a.disk(d)); err == nil {
+			break
+		}
+		top = d
+	}
+	return top
 }
 
 // reconcile makes the disk match the tree for every kept path: it writes new and changed

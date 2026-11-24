@@ -11,13 +11,21 @@ import (
 
 // Op names in the tree and share feeds.
 const (
-	opPut     = "put"
-	opDelete  = "delete"
-	opMove    = "move"
-	opMkdir   = "mkdir"
-	opShare   = "share"   // tree feed only: I shared a folder (see shareRec)
-	opUnshare = "unshare" // tree feed only
-	opMeta    = "meta"    // share feed only: first entry, names the folder
+	opPut           = "put"
+	opDelete        = "delete"
+	opMove          = "move"
+	opMkdir         = "mkdir"
+	opShare         = "share"          // tree feed only: I shared a folder (see shareRec)
+	opUnshare       = "unshare"        // tree feed only
+	opMeta          = "meta"           // share feed only: first entry, names the folder
+	opPurge         = "purge"          // tree feed only: forget trash records or versions (ids), see trash.go
+	opTrashSettings = "trash-settings" // tree feed only: retention (days, versions), last writer wins
+)
+
+// Why values of a delete entry.
+const (
+	whyMove = "move" // the file lives on at another path (a move across shares, "keep both"): no trash
+	whyDisk = "disk" // noticed on disk (watcher or scan) rather than asked for in Files
 )
 
 // body is one entry of a tree or share feed (design/apps/FILES.md "Model"). Unknown ops are
@@ -33,6 +41,19 @@ type body struct {
 	Dev   string `json:"dev,omitempty"`   // device name, for conflict copy names
 	// Also lists further blobs this put supersedes: a merge of two concurrent edits replaces both.
 	Also []string `json:"also,omitempty"`
+	// At is when the change was made (Unix ms, the author's clock). Mtime is the file's own time,
+	// which can be years old for a copied file, so trash and version retention count from At.
+	At int64 `json:"at,omitempty"`
+
+	// delete: Trash groups the entries of one deletion (a folder is one entry per file), In is
+	// the path the person deleted (the group's root) and Why says why ("move", "disk").
+	Trash string `json:"trash,omitempty"`
+	In    string `json:"in,omitempty"`
+	Why   string `json:"why,omitempty"`
+	// purge: trash groups, trash records or versions to forget; trash-settings: retention.
+	IDs      []string `json:"ids,omitempty"`
+	Days     int      `json:"days,omitempty"`
+	Versions *int     `json:"versions,omitempty"`
 
 	// share ops
 	ID     string   `json:"id,omitempty"`
@@ -75,11 +96,30 @@ type Tree struct {
 
 	cache    map[string]resolved
 	cacheRev uint64
+
+	// hist is set on my own tree only: it keeps Trash and versions (trash.go). Folders shared
+	// with me keep none: their owner does.
+	hist *history
 }
 
 // NewTree returns an empty tree.
 func NewTree() *Tree {
 	return &Tree{files: map[string][]version{}, dirs: map[string]int64{}}
+}
+
+// newOwnTree returns an empty tree that keeps Trash and versions.
+func newOwnTree() *Tree {
+	t := NewTree()
+	t.hist = newHistory()
+	return t
+}
+
+// change is the context of the entry being folded: who made it and when.
+type change struct {
+	device, from string
+	seq          uint64
+	at           int64
+	b            body
 }
 
 // resolved is one path of the visible tree.
@@ -92,17 +132,21 @@ type resolved struct {
 // Apply folds one entry into the tree. path prefix mapping is the caller's job; invalid paths
 // are ignored (they cannot be written to disk on every platform).
 func (t *Tree) Apply(device, from string, seq uint64, b body) {
+	c := change{device: device, from: from, seq: seq, at: b.At, b: b}
+	if c.at <= 0 {
+		c.at = b.Mtime // entries written before At existed
+	}
 	switch b.Op {
 	case opPut:
 		if ValidatePath(b.Path, false) != nil || !sol.ValidHash(b.Blob) {
 			return
 		}
-		t.put(b.Path, version{Blob: b.Blob, Size: b.Size, Mtime: b.Mtime, Device: device, Dev: b.Dev, From: from, Base: b.Base, seq: seq}, b.Base, b.Also...)
+		t.put(c, b.Path, version{Blob: b.Blob, Size: b.Size, Mtime: b.Mtime, Device: device, Dev: b.Dev, From: from, Base: b.Base, seq: seq}, b.Base, b.Also...)
 	case opDelete:
 		if ValidatePath(b.Path, false) != nil {
 			return
 		}
-		t.del(b.Path, b.Base, b.Mtime)
+		t.del(c, b.Path, b.Base, b.Mtime)
 	case opMkdir:
 		if ValidatePath(b.Path, false) != nil {
 			return
@@ -114,18 +158,32 @@ func (t *Tree) Apply(device, from string, seq uint64, b body) {
 			return
 		}
 		t.move(b.Path, b.To)
+	case opPurge:
+		if t.hist != nil {
+			t.hist.purge(b.IDs)
+			t.rev++
+		}
+	case opTrashSettings:
+		if t.hist != nil && t.hist.setSettings(c) {
+			t.rev++
+		}
 	}
 }
 
-func (t *Tree) put(p string, v version, base string, also ...string) {
+func (t *Tree) put(c change, p string, v version, base string, also ...string) {
 	var keep []version
 next:
 	for _, h := range t.files[p] {
-		if h.Blob == v.Blob || (base != "" && h.Blob == base) {
+		if h.Blob == v.Blob {
+			continue
+		}
+		if base != "" && h.Blob == base {
+			t.hist.replaced(c, p, h) // the content this edit replaced becomes a version
 			continue
 		}
 		for _, o := range also {
 			if o == h.Blob {
+				t.hist.replaced(c, p, h)
 				continue next
 			}
 		}
@@ -135,17 +193,29 @@ next:
 	t.rev++
 }
 
-func (t *Tree) del(p, base string, mtime int64) {
+func (t *Tree) del(c change, p, base string, mtime int64) {
 	if _, isDir := t.dirs[p]; isDir {
 		delete(t.dirs, p)
+		t.hist.trashDir(c, p)
 		t.rev++
 	}
-	var keep []version
+	var keep, gone []version
 	for _, h := range t.files[p] {
 		if (base != "" && h.Blob == base) || (base == "" && h.Mtime <= mtime) {
+			gone = append(gone, h)
 			continue
 		}
 		keep = append(keep, h)
+	}
+	for _, h := range gone {
+		// A deletion the person made (it has a trash group) goes to Trash even when another
+		// head survives; one without a group that leaves a head ("keep this" of a conflict) only
+		// set a version aside.
+		if len(keep) > 0 && c.b.Trash == "" {
+			t.hist.replaced(c, p, h)
+		} else {
+			t.hist.trashFile(c, p, h)
+		}
 	}
 	if len(keep) == 0 {
 		delete(t.files, p)
@@ -180,6 +250,7 @@ func (t *Tree) move(from, to string) {
 			t.dirs[to+strings.TrimPrefix(d, from)] = m
 		}
 	}
+	t.hist.move(from, to)
 	t.rev++
 }
 

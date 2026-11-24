@@ -164,3 +164,18 @@ sol-toast .toast .undo { pointer-events: auto; margin-left: var(--space-2); colo
 .incoming-files { margin: 0; padding-left: var(--space-5); color: var(--label-2); font-size: var(--fs-subhead); overflow-wrap: anywhere; }
 .sent-head { margin: var(--space-4) 0 var(--space-2); }
 sol-list.sent > [data-item] { gap: var(--space-3); }
+
+/* Trash and versions */
+.trash-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.trash-top p { margin: 0; flex: 1; min-width: 14rem; }
+.trow .row-sub { display: block; color: var(--label-2); font-size: var(--fs-footnote); overflow: hidden; text-overflow: ellipsis; }
+.trow .grow { min-width: 0; }
+.trow .row-actions { flex: none; }
+.vlist { max-height: min(50vh, 24rem); overflow: auto; margin-bottom: var(--space-3); }
+.vrow { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding-block: var(--space-2); }
+.vrow.current { padding-inline: var(--space-3); background: var(--surface-2); border-radius: var(--radius-control); margin-bottom: var(--space-2); }
+.vrow .grow { min-width: 10rem; }
+@media (max-width: 760px) {
+  .trow { flex-wrap: wrap; }
+  .trow .row-actions { width: 100%; padding-left: 64px; }
+}

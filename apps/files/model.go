@@ -86,6 +86,12 @@ func (a *App) applyEntry(addr string, e sol.Entry) {
 		switch b.Op {
 		case opPut, opDelete, opMkdir:
 			b.Path = join(sh.Path, b.Path)
+			if b.In != "" {
+				b.In = join(sh.Path, b.In) // their deletion lands in my Trash as one row
+			}
+			if b.Why == whyMove {
+				b.Why = "" // a co-author cannot keep a deletion out of my Trash by calling it a move
+			}
 		case opMove:
 			b.Path, b.To = join(sh.Path, b.Path), join(sh.Path, b.To)
 		default:

@@ -6,11 +6,13 @@ import { call, events, putBlob, people, html, raw, render } from '/sol.js';
 import { toast, showMenu, contextMenu } from '/kit/kit.js';
 import { openViewer, openViewerNow, viewKind, fmtSize } from './viewer.js';
 import { sendable, sendWhat, statusLabel, orderPeople, personLabel, pendingIn, recentOut } from './send.js';
+import { trashWhere, trashWhat, trashWho, goneIn, trashSummary, expiryDelay, hasVersions, versionWho } from './trash.js';
 
 const $main = document.getElementById('main');
 const $shell = document.getElementById('shell');
 const $veil = document.getElementById('dropveil');
 
+function readTrash() { try { return JSON.parse(localStorage.getItem('files-trash') || 'null'); } catch { return null; } }
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* optional */ } },
@@ -29,6 +31,7 @@ const state = {
   ready: false, // the folder's listing has arrived (or came from the local cache)
   selecting: false, // explicit select mode, like iOS "Select"
   sends: { received: [], sent: [] }, // files people sent me, files I sent (the Shared view)
+  trash: readTrash(), // files.trash_list, kept locally so Trash paints at once
 };
 const phoneQ = matchMedia('(max-width: 760px)');
 // The Android app opens files in the system viewer: its WebView cannot show a PDF in a frame.
@@ -66,6 +69,7 @@ function parseHash() {
   const h = decodeURIComponent(location.hash || '#/');
   if (h.startsWith('#!conflicts')) return { kind: 'conflicts' };
   if (h.startsWith('#!sync')) return { kind: 'sync' };
+  if (h.startsWith('#!trash')) return { kind: 'trash' };
   if (h.startsWith('#!search=')) return { kind: 'search', q: h.slice(9) };
   return { kind: 'dir', path: h.replace(/^#\/?/, '').replace(/\/+$/, '') };
 }
@@ -90,10 +94,13 @@ async function load() {
     state.ready = !!c;
     draw();
   }
+  // Trash paints at once from the copy kept in the page; the live list follows.
+  if (r.kind === 'trash') { state.entries = []; state.error = ''; draw(); }
   if (r.kind !== 'search') state.query = '';
   try {
     const main = r.kind === 'dir' ? call('files.list', { path: r.path })
-      : r.kind === 'search' ? call('files.search', { query: r.q }) : null;
+      : r.kind === 'search' ? call('files.search', { query: r.q })
+        : r.kind === 'trash' ? call('files.trash_list', {}) : null;
     const sends = r.kind === 'dir' && r.path === 'Shared' ? Promise.all([call('files.received', {}), call('files.sent', {})]) : null;
     const [status, c, got, sd] = await Promise.all([call('files.status', {}), call('files.conflicts', {}), main, sends]);
     if (seq !== loadSeq) return;
@@ -108,6 +115,11 @@ async function load() {
       state.query = r.q;
       state.entries = got.results;
       state.here = null;
+    } else if (r.kind === 'trash') {
+      state.trash = got;
+      state.entries = [];
+      store.set('files-trash', JSON.stringify({ ...got, items: got.items.slice(0, 200) }));
+      armExpiry();
     }
     state.error = '';
     // Keep only selections that still exist.
@@ -142,6 +154,13 @@ async function openLink(path, seq) {
 
 let timer = null;
 const soon = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
+// Trash changes by itself only when something expires: one timer to that moment, no polling.
+let expiryTimer = null;
+function armExpiry() {
+  clearTimeout(expiryTimer);
+  const d = expiryDelay(state.trash);
+  if (d !== null) expiryTimer = setTimeout(() => { if (state.route.kind === 'trash') soon(); }, d);
+}
 
 // ---------- drawing ----------
 
@@ -199,6 +218,7 @@ function entryActions(es) {
   return [
     one && one.type === 'file' && { act: 'download', icon: 'download', label: 'Download' },
     one && w && { act: 'rename', icon: 'edit', label: 'Rename' },
+    one && hasVersions(one) && { act: 'versions', icon: 'clock', label: 'Versions' },
     one && one.type === 'dir' && w && !one.path.startsWith('Shared/') && { act: 'share', icon: 'share', label: 'Share' },
     sendable(es) && { act: 'send', icon: 'send', label: 'Send to…' },
     w && { act: 'move', icon: 'folder', label: 'Move' },
@@ -353,17 +373,36 @@ function syncView() {
       <sol-list>${s.skipped.map((k) => html`<div data-item><div class="grow"><div class="title">${k.path}</div><small>${k.reason}</small></div></div>`)}</sol-list>` : ''}`;
 }
 
+const trashIcon = (r) => (r.dir ? 'folder' : ICON[viewKind(r.name)] || 'file');
+
+function trashView() {
+  const t = state.trash;
+  const rows = t ? t.items : [];
+  const days = t ? t.days : 30;
+  return html`<div class="head"><h1 class="large-title">Trash</h1></div>
+    <div class="trash-top"><p class="muted">Deleted files stay here for ${plural(days, 'day')}, the same on all your devices, wherever they were deleted (in Files, or on disk by any program). ${t ? trashSummary(t, fmtSize) : ''}</p>
+      ${rows.length ? html`<button type="button" class="danger" data-act="trashEmpty"><sol-icon name="trash"></sol-icon>Empty trash</button>` : ''}</div>
+    ${state.error ? html`<div class="card empty"><sol-icon name="alert"></sol-icon><h3>${state.error}</h3></div>` :
+      html`<sol-list class="files trash" aria-label="Deleted items">${rows.map((r) => html`<div data-item class="frow trow" data-id="${r.id}">
+        <span class="glyph"><sol-icon class="ico ${r.dir ? 'dir' : 'file'}" name="${trashIcon(r)}"></sol-icon></span>
+        <div class="grow name"><div class="line"><span class="title">${r.name}</span>${r.dir ? html`<span class="badge">${trashWhat(r)}</span>` : ''}</div>
+          <span class="row-sub">${trashWhere(r)} · ${fmtTime(r.deleted_at)} · ${trashWho(r)} · ${fmtSize(r.size)} · ${goneIn(r.expires_at)}</span></div>
+        <div class="row-actions"><button type="button" data-act="trashRestore" data-id="${r.id}">Restore</button>
+          <button type="button" class="ghost danger" data-act="trashPurge" data-id="${r.id}" aria-label="Delete ${r.name} forever">Delete forever</button></div>
+      </div>`)}${state.ready || t ? html`<div slot="empty" class="empty"><sol-icon name="trash"></sol-icon><h3>Trash is empty</h3><p>Deleted files show up here.</p></div>` : ''}</sol-list>`}`;
+}
+
 function draw() {
   const r = state.route;
   const cc = document.getElementById('conflict-count');
   cc.hidden = state.conflicts.length === 0;
   cc.textContent = state.conflicts.length;
-  $shell.setCurrent(r.kind === 'conflicts' ? 'conflicts' : r.kind === 'sync' ? 'sync' : r.kind === 'dir' && (r.path === 'Shared' || r.path.startsWith('Shared/')) ? 'shared' : 'files');
+  $shell.setCurrent(r.kind === 'conflicts' ? 'conflicts' : r.kind === 'sync' ? 'sync' : r.kind === 'trash' ? 'trash' : r.kind === 'dir' && (r.path === 'Shared' || r.path.startsWith('Shared/')) ? 'shared' : 'files');
   const active = document.activeElement;
   const hadSearch = active && active.id === 'search';
   if (!state.entries.length && state.selecting) state.selecting = false;
   drawBar();
-  render($main, r.kind === 'conflicts' ? conflictsView() : r.kind === 'sync' ? syncView() : r.kind === 'search' ? searchView() : dirView());
+  render($main, r.kind === 'conflicts' ? conflictsView() : r.kind === 'sync' ? syncView() : r.kind === 'trash' ? trashView() : r.kind === 'search' ? searchView() : dirView());
   if (hadSearch) { const s = document.getElementById('search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
 }
 
@@ -514,6 +553,7 @@ const viewerActions = [
   { act: 'send', icon: 'send', label: 'Send to…', when: (e) => sendable([e]) },
   { act: 'share', icon: 'share', label: 'Share', when: () => canShareFiles() },
   { act: 'rename', icon: 'edit', label: 'Rename', when: (e) => writable([e]) },
+  { act: 'versions', icon: 'clock', label: 'Versions', when: (e) => hasVersions(e) },
   { act: 'delete', icon: 'trash', label: 'Delete', danger: true, when: (e) => writable([e]) },
 ];
 const canShareFiles = () => { try { return !!navigator.canShare?.({ files: [new File([''], 'x.txt', { type: 'text/plain' })] }); } catch { return false; } };
@@ -535,6 +575,7 @@ function preview(path, size, more = {}) {
 async function viewerAct(act, e, v) {
   if (act === 'download') return saveFile(e);
   if (act === 'send') return sendSheet([e]);
+  if (act === 'versions') return versionsSheet(e);
   if (act === 'open-failed') return toast('Could not open it here; try Download', { kind: 'error' });
   if (act === 'share') {
     try {
@@ -555,24 +596,68 @@ async function viewerAct(act, e, v) {
   }
 }
 
-function saveFile(e) {
+function saveFile(e, url = rawURL(e, true)) {
   const a = document.createElement('a');
-  a.href = rawURL(e, true);
+  a.href = url;
   a.download = e.name;
   document.body.append(a);
   a.click();
   a.remove();
 }
 
-/** Deletes entries; for files alone the toast can undo it (the content is still there by hash). */
+/** Deletes entries into Trash; the toast's Undo restores them from there (folders too). */
 async function removeFiles(es) {
-  await call('files.delete', { paths: es.map((e) => e.path) });
+  const out = await call('files.delete', { paths: es.map((e) => e.path) });
   const what = es.length === 1 ? es[0].name : plural(es.length, 'item');
-  if (es.every((e) => e.type === 'file' && e.blob)) {
-    undoToast('Deleted ' + what, async () => { for (const e of es) await call('files.write', { path: e.path, blob: e.blob }); });
-  } else toast('Deleted ' + what);
+  const ids = out.trash || [];
+  // Things deleted in a folder someone shares with me go to its owner's Trash, not mine.
+  if (ids.length) undoToast('Moved ' + what + ' to Trash', () => call('files.trash_restore', { ids }));
+  else toast('Deleted ' + what);
   soon();
 }
+
+/** The Versions sheet of one file: earlier contents with Download, Restore and Delete. */
+async function versionsSheet(e) {
+  const d = dialog('Versions of ' + e.name, html`<div class="versions-box"></div>`);
+  const box = d.box.querySelector('.versions-box');
+  let list = null;
+  const show = () => render(box, html`
+    <p class="muted">Earlier contents of this file, kept when an edit, another device or a merge replaced them${state.trash ? ' (' + plural(state.trash.days, 'day') + ', at most ' + state.trash.versions + ')' : ''}.</p>
+    ${list && list.current ? html`<div class="vrow current"><sol-icon name="file"></sol-icon><div class="grow"><strong>Current</strong> <small class="muted">${fmtTime(list.current.mtime)} · ${fmtSize(list.current.size)}</small></div></div>` : ''}
+    <sol-list class="vlist">${(list ? list.versions : []).map((v) => html`<div data-item class="vrow" data-id="${v.id}">
+      <sol-icon name="clock"></sol-icon>
+      <div class="grow"><div class="title">${fmtTime(v.mtime)}</div><small class="muted">${versionWho(v)} ${fmtTime(v.replaced_at)} · ${fmtSize(v.size)}</small></div>
+      <div class="row-actions"><button type="button" class="ghost icon-btn" data-vact="download" data-blob="${v.blob}" aria-label="Download this version"><sol-icon name="download"></sol-icon></button>
+        <button type="button" data-vact="restore" data-id="${v.id}">Restore</button>
+        <button type="button" class="ghost danger" data-vact="delete" data-id="${v.id}" aria-label="Delete this version">Delete</button></div></div>`)}
+      ${list ? html`<div slot="empty" class="muted pick-none">No earlier versions</div>` : ''}</sol-list>
+    <div class="dlg-actions"><button type="button" data-no>Close</button></div>`);
+  const refresh = async () => {
+    try { list = await call('files.versions', { path: e.path }); } catch (err) { fail(err); list = { versions: [] }; }
+    show();
+  };
+  box.addEventListener('click', async (ev) => {
+    if (ev.target.closest('[data-no]')) return d.close();
+    const b = ev.target.closest('[data-vact]');
+    if (!b) return;
+    if (b.dataset.vact === 'download') return saveFile({ name: e.name }, versionURL(e.path, b.dataset.blob));
+    b.disabled = true;
+    try {
+      if (b.dataset.vact === 'restore') {
+        await call('files.version_restore', { path: e.path, id: b.dataset.id });
+        toast('Version restored');
+      } else {
+        if (!(await confirmBox({ title: 'Delete version', body: 'Delete this version forever, on all your devices?', ok: 'Delete', danger: true }))) { b.disabled = false; return; }
+        await call('files.version_delete', { path: e.path, ids: [b.dataset.id] });
+      }
+      await refresh();
+      soon();
+    } catch (err) { b.disabled = false; fail(err); }
+  });
+  show();
+  refresh();
+}
+const versionURL = (p, blob) => '/raw?path=' + encodeURIComponent(p) + '&blob=' + encodeURIComponent(blob) + '&download=1';
 
 // ---------- actions ----------
 
@@ -667,7 +752,7 @@ const actions = {
     const dirs = es.filter((e) => e.type === 'dir');
     if (dirs.length) {
       const what = es.length === 1 ? `the folder "${es[0].name}" and everything in it` : plural(es.length, 'item') + ', folders with everything in them';
-      if (!(await confirmBox({ title: 'Delete', body: `Delete ${what} from all your devices?`, ok: 'Delete', danger: true }))) return;
+      if (!(await confirmBox({ title: 'Delete', body: `Delete ${what} from all your devices? It stays in Trash for a while.`, ok: 'Delete', danger: true }))) return;
     }
     state.sel.clear();
     await run(() => removeFiles(es));
@@ -693,6 +778,26 @@ const actions = {
     soon();
   },
   preview(p, el) { preview(p, el.dataset.size); },
+  versions() { const [e] = selected(); if (hasVersions(e)) return versionsSheet(e); },
+  async trashRestore(p, el) {
+    el.disabled = true;
+    try {
+      const r = await call('files.trash_restore', { ids: [el.dataset.id] });
+      const moved = r.restored.find((x) => x.from !== x.to);
+      toast(moved ? 'Restored as ' + moved.to : 'Restored');
+    } catch (e) { el.disabled = false; fail(e); }
+    soon();
+  },
+  async trashPurge(p, el) {
+    const row = state.trash?.items.find((r) => r.id === el.dataset.id);
+    if (!(await confirmBox({ title: 'Delete forever', body: `Delete "${row ? row.name : 'this'}" forever, on all your devices? It cannot be restored.`, ok: 'Delete forever', danger: true }))) return;
+    await run(() => call('files.trash_purge', { ids: [el.dataset.id] }));
+  },
+  async trashEmpty() {
+    const n = state.trash?.count || 0;
+    if (!(await confirmBox({ title: 'Empty trash', body: `Delete ${plural(n, 'item')} forever, on all your devices? They cannot be restored.`, ok: 'Empty trash', danger: true }))) return;
+    await run(() => call('files.trash_empty', {}));
+  },
 };
 
 const rowOf = (ev) => ev.target.closest('[data-item][data-path]');

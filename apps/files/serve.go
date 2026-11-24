@@ -101,6 +101,7 @@ func (b *blobReader) Close() error {
 
 // serveRaw streams one file by path with Range support: GET /raw?path=Music/a.mp3[&download=1]
 // [&v=<blob>] (v makes the response cacheable for good: the URL then names one content).
+// [&blob=<hash>] serves an earlier version or a deleted file of that path instead.
 // Content comes from the blob (never from the folder), so it works for online-only files.
 func (a *App) serveRaw(w http.ResponseWriter, r *http.Request) {
 	if !sol.CallerOf(r).Self {
@@ -114,7 +115,13 @@ func (a *App) serveRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	v := a.getView()
 	f := v.files[p]
-	if f == nil {
+	if old := r.URL.Query().Get("blob"); old != "" {
+		// An earlier version or a deleted file of that path (Versions and Trash).
+		f = nil
+		if hv, ok := a.histVersion(p, old); ok {
+			f = &vfile{resolved: resolved{version: hv}, Path: p}
+		}
+	} else if f == nil {
 		if _, perr := a.pullAll(r.Context()); perr == nil {
 			f = a.getView().files[p]
 		}
@@ -140,7 +147,7 @@ func (a *App) serveRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Etag", `"`+f.Blob+`"`)
-	if r.URL.Query().Get("v") == f.Blob {
+	if r.URL.Query().Get("v") == f.Blob || r.URL.Query().Get("blob") == f.Blob {
 		// The URL names the content (v is the blob hash), so it never changes: thumbnails and
 		// previews re-rendered by a live update come from the browser cache, not the network.
 		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")

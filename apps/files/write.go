@@ -17,8 +17,11 @@ import (
 // same-named feed. a.syncMu held.
 func (a *App) commit(ctx context.Context, b body) error {
 	b.Dev = a.devName
+	if b.At == 0 {
+		b.At = a.nowMs()
+	}
 	if b.Mtime == 0 {
-		b.Mtime = a.nowMs()
+		b.Mtime = b.At
 	}
 	v := a.getView()
 	rs, relp, err := v.route(b.Path)
@@ -28,6 +31,12 @@ func (a *App) commit(ctx context.Context, b body) error {
 	if rs != nil {
 		nb := b
 		nb.Path = relp
+		nb.In = ""
+		if b.In != "" {
+			if rsIn, relIn, err := v.route(b.In); err == nil && rsIn == rs {
+				nb.In = relIn // the owner keeps it in their Trash under the same deletion
+			}
+		}
 		if b.To != "" {
 			rs2, rel2, err := v.route(b.To)
 			if err != nil {
@@ -105,6 +114,7 @@ func (a *App) mirror(ctx context.Context, b body, pre []*vfile) error {
 			if in(b.Path) {
 				nb := b
 				nb.Path = rel(b.Path, sh.Path)
+				nb.In, nb.Trash = "", "" // Trash is mine: the deleted root may be outside their folder
 				out = append(out, nb)
 			}
 		case opMove:

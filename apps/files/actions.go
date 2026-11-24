@@ -69,6 +69,14 @@ func (a *App) registerActions(act *sol.Actions) {
 	h("files.receive", a.actReceive)
 	h("files.status", a.actStatus)
 	h("files.sync", a.actSync)
+	h("files.trash_list", a.actTrashList)
+	h("files.trash_restore", a.actTrashRestore)
+	h("files.trash_purge", a.actTrashPurge)
+	h("files.trash_empty", a.actTrashEmpty)
+	h("files.trash_settings", a.actTrashSettings)
+	h("files.versions", a.actVersions)
+	h("files.version_restore", a.actVersionRestore)
+	h("files.version_delete", a.actVersionDelete)
 }
 
 // actSync rescans the folder and folds every feed now: the "sync now" of the UI and of agents
@@ -464,7 +472,7 @@ func (a *App) actMove(ctx context.Context, c sol.Call) (any, error) {
 		if err := a.copyTree(ctx, v, from, to); err != nil {
 			return nil, err
 		}
-		if err := a.deleteTree(ctx, a.getView(), from); err != nil {
+		if _, err := a.deleteTree(ctx, a.getView(), from, whyMove); err != nil {
 			return nil, err
 		}
 	}
@@ -569,8 +577,18 @@ func (a *App) headsOf(f *vfile) (string, []version) {
 	return f.Path, nil
 }
 
-// deleteTree deletes the file or folder p from the tree (all versions of every file).
-func (a *App) deleteTree(ctx context.Context, v *view, p string) error {
+// deleteTree deletes the file or folder p from the tree (all versions of every file). Unless why
+// is whyMove the entries share one new trash group, which it returns: the deletion is one row
+// of Trash.
+func (a *App) deleteTree(ctx context.Context, v *view, p, why string) (string, error) {
+	group := ""
+	if why != whyMove {
+		group = newShareID()
+	}
+	del := func(b body) error {
+		b.Op, b.Trash, b.In, b.Why = opDelete, group, p, why
+		return a.commit(ctx, b)
+	}
 	fs := v.filesUnder(p)
 	for _, f := range fs {
 		path, heads := a.headsOf(f)
@@ -580,8 +598,8 @@ func (a *App) deleteTree(ctx context.Context, v *view, p string) error {
 			path = join(rootOf(v, f), f.Orig)
 		}
 		for _, h := range heads {
-			if err := a.commit(ctx, body{Op: opDelete, Path: path, Base: h.Blob}); err != nil {
-				return err
+			if err := del(body{Path: path, Base: h.Blob}); err != nil {
+				return group, err
 			}
 		}
 	}
@@ -593,11 +611,11 @@ func (a *App) deleteTree(ctx context.Context, v *view, p string) error {
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, d := range dirs {
-		if err := a.commit(ctx, body{Op: opDelete, Path: d}); err != nil {
-			return err
+		if err := del(body{Path: d}); err != nil {
+			return group, err
 		}
 	}
-	return nil
+	return group, nil
 }
 
 // rootOf returns the unified prefix of the share a file belongs to.
@@ -647,15 +665,24 @@ func (a *App) actDelete(ctx context.Context, c sol.Call) (any, error) {
 	}
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
+	// Deletions of my own files go to my Trash (trash: their ids, for files.trash_restore);
+	// ones inside a folder shared with me go to its owner's Trash.
+	trash := []string{}
 	for _, p := range paths {
-		if err := a.deleteTree(ctx, a.getView(), p); err != nil {
+		v := a.getView()
+		rs, _, _ := v.route(p)
+		g, err := a.deleteTree(ctx, v, p, "")
+		if err != nil {
 			return nil, err
+		}
+		if rs == nil {
+			trash = append(trash, g)
 		}
 	}
 	if err := a.reconcile(ctx); err != nil && transient(err) {
 		a.noteErr(err)
 	}
-	return map[string]any{"deleted": paths}, nil
+	return map[string]any{"deleted": paths, "trash": trash}, nil
 }
 
 func (a *App) actSearch(ctx context.Context, c sol.Call) (any, error) {
@@ -1088,7 +1115,8 @@ func (a *App) actResolve(ctx context.Context, c sol.Call) (any, error) {
 			if err := a.commit(ctx, body{Op: opPut, Path: l.CopyPath, Blob: l.Blob, Size: l.Size}); err != nil {
 				return nil, err
 			}
-			if err := a.commit(ctx, body{Op: opDelete, Path: hit.Path, Base: l.Blob}); err != nil {
+			// It lives on under the copy's name: neither Trash nor a version.
+			if err := a.commit(ctx, body{Op: opDelete, Path: hit.Path, Base: l.Blob, Why: whyMove}); err != nil {
 				return nil, err
 			}
 		}

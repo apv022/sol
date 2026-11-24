@@ -175,7 +175,7 @@ func New(api sol.API, cfg Config) *App {
 		cfg.DataDir = os.Getenv("SOL_APP_DATA")
 	}
 	a := &App{api: api, cfg: cfg, manifest: m, root: filepath.Clean(cfg.Root), data: cfg.DataDir,
-		own: NewTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{}, sharedBack: map[string]bool{},
+		own: newOwnTree(), shares: map[string]*shareRec{}, myShareID: map[string]bool{}, recv: map[string]*recvShare{}, sharedBack: map[string]bool{},
 		cursors: map[string]uint64{}, dirty: map[string]bool{}, petnames: map[string]string{}, names: map[string]string{},
 		devStats: map[string]*devStat{}, index: map[string]idxEntry{}, keep: map[string]bool{}, dirsMade: map[string]bool{},
 		sends: newSendState(), noticed: map[string]bool{}, mergeTried: map[string]bool{}, skipped: map[string]string{}, pending: map[string]bool{},

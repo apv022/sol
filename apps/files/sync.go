@@ -61,14 +61,36 @@ func (a *App) loop(evs <-chan sol.Event) {
 		scanTick = t.C
 	}
 	var retry <-chan time.Time
+	// One timer to the next Trash or version expiry, set again whenever the tree changes.
+	var expiry *time.Timer
+	defer func() {
+		if expiry != nil {
+			expiry.Stop()
+		}
+	}()
+	var expC <-chan time.Time
+	expRev, expStale := uint64(0), true
 	arm := func() {
 		a.mu.RLock()
 		need := len(a.pending) > 0 || a.pullErr
+		rev := a.own.Rev()
 		a.mu.RUnlock()
 		if need && retry == nil {
 			retry = after(a.cfg.RetryEvery)
 		}
+		if expStale || rev != expRev {
+			expRev, expStale = rev, false
+			if expiry != nil {
+				expiry.Stop()
+				expiry, expC = nil, nil
+			}
+			if next := a.nextExpiry(); next > 0 {
+				expiry = time.NewTimer(time.Duration(max(next-a.nowMs(), 0)+1) * time.Millisecond)
+				expC = expiry.C
+			}
+		}
 	}
+	arm()
 	for {
 		select {
 		case <-ctx.Done():
@@ -93,6 +115,9 @@ func (a *App) loop(evs <-chan sol.Event) {
 		case <-retry:
 			retry = nil
 			a.onRetry(ctx)
+		case <-expC:
+			expiry, expC, expStale = nil, nil, true
+			a.expire(ctx)
 		}
 		arm()
 	}
