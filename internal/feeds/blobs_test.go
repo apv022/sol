@@ -98,7 +98,7 @@ func TestBlobPermission(t *testing.T) {
 		t.Fatal("still fetchable after unshare")
 	}
 	// A co-author (Bob write-shares his "music") may read mine, and so fetch.
-	if err := sh.SetIncoming(bobID, map[string]string{"files/music": ModeWrite}); err != nil {
+	if err := sh.SetIncoming(bobID, map[string]string{"files/music": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if refs.MayFetch(bobID, shared) {
@@ -203,7 +203,7 @@ func TestIncomingReplicates(t *testing.T) {
 	}
 	sub := phone.Bus().Subscribe(100)
 	defer sub.Close()
-	if err := ls.SetIncoming(bobID, map[string]string{"notes/b": ModeWrite}); err != nil {
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/b": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
 	}
 	copyFeeds(t, laptop, phone)
@@ -224,7 +224,7 @@ func TestIncomingReplicates(t *testing.T) {
 	}
 	// Setting the same thing again writes nothing.
 	before := len(readAll(t, phone, Address(identity.ID(fx.laptop.Person()), InternalApp, IncomingFeed)))
-	if err := ps.SetIncoming(bobID, map[string]string{"notes/b": ModeWrite}); err != nil {
+	if err := ps.SetIncoming(bobID, map[string]string{"notes/b": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if after := len(readAll(t, phone, Address(identity.ID(fx.laptop.Person()), InternalApp, IncomingFeed))); after != before {

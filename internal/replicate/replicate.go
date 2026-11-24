@@ -93,6 +93,9 @@ type Message struct {
 	Feed     string      `json:"feed,omitempty"`
 	Readable bool        `json:"readable,omitempty"`
 	Mode     string      `json:"mode,omitempty"`
+	// Ver, on feed and live messages to a contact, is the sender's sharing Version
+	// (feeds.Shares.Version), so the contact can ignore what a device that is behind announces.
+	Ver uint64 `json:"ver,omitempty"`
 }
 
 // Tunables, package variables so tests can shorten them.
@@ -196,7 +199,7 @@ func (r *Replicator) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		if !live {
 			live = true
-			if st.enc.Encode(Message{T: MsgLive}) != nil {
+			if st.enc.Encode(Message{T: MsgLive, Ver: st.ver}) != nil {
 				return
 			}
 		}
@@ -221,6 +224,7 @@ type stream struct {
 	cursor         map[string]uint64 // feed -> last pos looked at
 	modes          map[string]string // feed -> mode announced (contacts)
 	denied         map[string]bool   // requested feeds refused and said so
+	ver            uint64            // my sharing Version as of the current pass (contacts)
 }
 
 // allowed returns the feeds this caller may read now, with the reason.
@@ -245,8 +249,12 @@ func (st *stream) allowed() map[string]string {
 
 // pass sends every change since the last pass: readability, then entries.
 func (st *stream) pass() error {
-	allowed := st.allowed()
 	contact := st.peer.Relation == session.Contact
+	if contact {
+		// Read before what it describes, so it never claims more than this pass sends.
+		st.ver = st.r.cfg.Shares.Version()
+	}
+	allowed := st.allowed()
 	for addr := range st.req.Feeds {
 		if _, ok := allowed[addr]; !ok && !st.denied[addr] && st.modes[addr] == "" {
 			st.denied[addr] = true
@@ -260,7 +268,7 @@ func (st *stream) pass() error {
 			delete(st.modes, addr)
 			delete(st.cursor, addr)
 			st.r.log.Info("feed no longer shared with a peer", "feed", addr, "peer", short(st.caller))
-			if err := st.enc.Encode(Message{T: MsgFeed, Feed: addr}); err != nil {
+			if err := st.enc.Encode(Message{T: MsgFeed, Feed: addr, Ver: st.ver}); err != nil {
 				return err
 			}
 		}
@@ -271,7 +279,7 @@ func (st *stream) pass() error {
 		if contact && st.modes[addr] != mode {
 			st.modes[addr] = mode
 			delete(st.denied, addr)
-			if err := st.enc.Encode(Message{T: MsgFeed, Feed: addr, Readable: true, Mode: mode}); err != nil {
+			if err := st.enc.Encode(Message{T: MsgFeed, Feed: addr, Readable: true, Mode: mode, Ver: st.ver}); err != nil {
 				return err
 			}
 		}
@@ -396,6 +404,7 @@ func (r *Replicator) pullOnce(ctx context.Context, s *session.Session) (live boo
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), maxLine)
 	readable := map[string]string{} // contact feeds announced, addr -> mode
+	var ver uint64                  // the highest sharing Version the peer reported
 	blocked := map[string]bool{}    // feed|device chains given up on in this stream
 	refreshed := map[string]bool{}
 	n := 0
@@ -404,11 +413,12 @@ func (r *Replicator) pullOnce(ctx context.Context, s *session.Session) (live boo
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
 			return live, fmt.Errorf("replicate: bad message: %w", err)
 		}
+		ver = max(ver, m.Ver)
 		switch m.T {
 		case MsgLive:
 			live = true
 			if !self {
-				r.setIncoming(pid, readable)
+				r.setIncoming(pid, readable, ver)
 			}
 			store.Flush()
 		case MsgFeed:
@@ -424,7 +434,7 @@ func (r *Replicator) pullOnce(ctx context.Context, s *session.Session) (live boo
 				delete(readable, m.Feed)
 			}
 			if live {
-				r.setIncoming(pid, readable)
+				r.setIncoming(pid, readable, ver)
 			}
 		case MsgEntry:
 			if m.Entry == nil {
@@ -475,12 +485,12 @@ func (r *Replicator) pullOnce(ctx context.Context, s *session.Session) (live boo
 
 // setIncoming records what the contact pid announced as readable to me,
 // keyed "<app>/<name>".
-func (r *Replicator) setIncoming(pid string, readable map[string]string) {
+func (r *Replicator) setIncoming(pid string, readable map[string]string, ver uint64) {
 	m := make(map[string]string, len(readable))
 	for addr, mode := range readable {
 		m[strings.TrimPrefix(addr, pid+"/")] = mode
 	}
-	if err := r.cfg.Shares.SetIncoming(pid, m); err != nil {
+	if err := r.cfg.Shares.SetIncoming(pid, m, ver); err != nil {
 		r.log.Warn("recording incoming shares", "err", err)
 	}
 }

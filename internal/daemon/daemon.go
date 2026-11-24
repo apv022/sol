@@ -644,6 +644,21 @@ func (d *Daemon) startAPI() error {
 	return fsutil.WriteFileAtomic(filepath.Join(d.dir, "admin.token"), []byte(d.API.IssueAdmin()+"\n"), 0o600)
 }
 
+// listenUI listens on addr. When addr is the well-known port 7777 and something else holds it
+// (another program took it since setup, or two Sols on one machine), Sol still starts, on a free
+// port for this run: a Sol that refuses to start is worse than one at an unfamiliar address. The
+// config keeps 7777, so the next start goes back to it once it is free.
+func listenUI(addr string, log *slog.Logger) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if host, port, _ := net.SplitHostPort(addr); err != nil && port == "7777" {
+		if alt, aerr := net.Listen("tcp", net.JoinHostPort(host, "0")); aerr == nil {
+			log.Warn("UI port 7777 is taken; using a free port for this run", "addr", alt.Addr().String(), "err", err)
+			return alt, nil
+		}
+	}
+	return ln, err
+}
+
 // startUI serves the Sol app at the UI root and the app origins.
 func (d *Daemon) startUI() error {
 	addr := d.cfg.UI
@@ -665,7 +680,7 @@ func (d *Daemon) startUI() error {
 			}
 		}
 	} else {
-		ln, err = net.Listen("tcp", addr)
+		ln, err = listenUI(addr, d.log)
 	}
 	if err != nil {
 		return fmt.Errorf("daemon: UI address %s: %w", addr, err)

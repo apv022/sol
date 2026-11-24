@@ -122,6 +122,15 @@ func (l *lww[V]) all() map[string]V {
 	return maps.Clone(l.vals)
 }
 
+// head is how many entries of my internal feed this device holds. Every device of mine ends up
+// holding the same entries, so a device that is behind has a smaller head.
+func (l *lww[V]) head() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sync()
+	return l.pos
+}
+
 // put appends a new value to my internal feed.
 func (l *lww[V]) put(v V) error {
 	b, err := json.Marshal(v)
@@ -253,6 +262,10 @@ type Shares struct {
 type incomingRecord struct {
 	Person string            `json:"person"`
 	Shares map[string]string `json:"shares"`
+	// Ver is the sharer's Version when they announced Shares (0 from older builds). An
+	// announcement with a lower Ver comes from one of their devices that is behind, and is
+	// ignored.
+	Ver uint64 `json:"ver,omitempty"`
 }
 
 // NewShares returns the sharing view over s. contacts, if not nil, limits
@@ -273,7 +286,7 @@ func NewShares(s *Store, contacts *Contacts) (*Shares, error) {
 			return nil, fmt.Errorf("feeds: %s: %w", sh.incomingPath(), err)
 		}
 		for p, m := range old {
-			if err := sh.SetIncoming(p, m); err != nil {
+			if err := sh.SetIncoming(p, m, 0); err != nil {
 				return nil, err
 			}
 		}
@@ -450,18 +463,31 @@ func (sh *Shares) IncomingAll(person string) map[string]string {
 	return maps.Clone(r.Shares)
 }
 
+// Version is how far my sharing records go: the number of entries of my shares feed this device
+// holds. It only grows, and a device of mine that has not caught up yet has a lower one, so a
+// contact can tell a stale announcement of what I share from a current one.
+func (sh *Shares) Version() uint64 { return sh.l.head() }
+
 // SetIncoming replaces what person shares with me ("<app>/<name>" -> mode,
-// as announced by one of their devices). A change is appended to my
-// incoming feed, which replicates to my other devices; every device then
-// publishes EventFeed for each feed that became readable or unreadable to me.
-func (sh *Shares) SetIncoming(person string, m map[string]string) error {
+// as announced by one of their devices at their Version ver, 0 if unknown).
+// An announcement from a device of theirs that is behind (a lower ver than
+// the one recorded) is ignored: otherwise their phone reconnecting before it
+// caught up would take back a share their laptop just made. A change is
+// appended to my incoming feed, which replicates to my other devices; every
+// device then publishes EventFeed for each feed that became readable or
+// unreadable to me.
+func (sh *Shares) SetIncoming(person string, m map[string]string, ver uint64) error {
 	if _, err := identity.ParseID(person); err != nil {
 		return fmt.Errorf("%w: bad person", ErrInvalid)
 	}
 	sh.setMu.Lock()
 	defer sh.setMu.Unlock()
-	if r, _ := sh.in.get(person); maps.Equal(r.Shares, m) {
+	r, _ := sh.in.get(person)
+	if ver > 0 && ver < r.Ver {
 		return nil
 	}
-	return sh.in.put(incomingRecord{Person: person, Shares: maps.Clone(m)})
+	if maps.Equal(r.Shares, m) && ver <= r.Ver {
+		return nil
+	}
+	return sh.in.put(incomingRecord{Person: person, Shares: maps.Clone(m), Ver: max(ver, r.Ver)})
 }

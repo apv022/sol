@@ -221,7 +221,13 @@ var (
 	notifySlots = make(chan struct{}, 8)
 )
 
+// osNotifierAvailable reports whether this system has a notifier Sol may use. SOL_NOTIFY=off
+// turns desktop notifications off; every test package that runs daemons sets it (testenv_test.go),
+// since test daemons file inbox items by the dozen and must never pop up on the developer's desktop.
 func osNotifierAvailable() bool {
+	if os.Getenv("SOL_NOTIFY") == "off" {
+		return false
+	}
 	tool := map[string]string{"linux": "notify-send", "darwin": "osascript", "windows": "powershell"}[notifyGOOS]
 	if tool == "" {
 		return false

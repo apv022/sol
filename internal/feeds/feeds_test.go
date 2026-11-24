@@ -439,7 +439,7 @@ func TestViews(t *testing.T) {
 	}
 	// Bob write-shares his "doc": he may pull my "doc" as co-author.
 	sub := laptop.Bus().Subscribe(10)
-	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}); err != nil {
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
 	}
 	ev := <-sub.C()
@@ -454,14 +454,31 @@ func TestViews(t *testing.T) {
 	if ls.CanRead(bobID, doc) || len(ls.ReadableBy(bobID)) != 1 {
 		t.Fatalf("an announced write share granted my same-named feed: %v", ls.ReadableBy(bobID))
 	}
-	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite, "notes/todo": ModeWrite, "files/tree": ModeWrite}); err != nil {
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite, "notes/todo": ModeWrite, "files/tree": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if ls.CanRead(bobID, Address(me, "files", "tree")) || !ls.CanRead(bobID, todo) || len(ls.ReadableBy(bobID)) != 1 {
 		t.Fatal("announced write shares changed what Bob may read")
 	}
-	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}); err != nil {
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}, 0); err != nil {
 		t.Fatal(err)
+	}
+	// Versioned announcements: one from a device of Bob's that is behind (a lower version) never
+	// takes back what a device that caught up announced; a newer or equal one applies.
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite, "notes/x": ModeRead}, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}, 5); err != nil {
+		t.Fatal(err)
+	}
+	if ls.Incoming(bobID, "notes", "x") != ModeRead {
+		t.Fatal("a stale announcement replaced a newer one")
+	}
+	if err := ls.SetIncoming(bobID, map[string]string{"notes/doc": ModeWrite}, 8); err != nil {
+		t.Fatal(err)
+	}
+	if ls.Incoming(bobID, "notes", "x") != "" || ls.Incoming(bobID, "notes", "doc") != ModeWrite {
+		t.Fatal("a newer announcement was ignored")
 	}
 	// My app consents by sharing its co-author feed back.
 	if err := ls.Share("notes", "doc", []string{bobID}, ModeRead); err != nil {

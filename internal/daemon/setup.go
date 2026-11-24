@@ -101,7 +101,7 @@ func RunSetup(ctx context.Context, o SetupOptions) (SetupResult, error) {
 	if addr == "" {
 		addr = "127.0.0.1:7777"
 	}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listenUI(addr, o.Log)
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("daemon: UI address %s: %w", addr, err)
 	}
