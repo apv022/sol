@@ -271,12 +271,40 @@ on its socket at `path`, with caller headers.
 {"kind": "approval", "title": "Delete 3 files?", "action": {"action": "files.delete", "args": {…}}}
 ```
 `GET /v1/inbox` lists this app's items newest first: `id, app, kind, title, body, from, time,
-answer, action, agent` and, once an approved action ran, its `result` (output) or `error`.
+answer, action, args_digest, secret_args, agent, outcome, error` and, once, `result`.
 
 Notices appear in the Sol app (and as an OS notification when `to` is `self` and the person allows
-it). An approval is answered by the person on any of their devices; on approval the daemon runs the
-stored action as the requesting principal (the app, and the agent when an agent's call needed
-it), records the result on the item, and then an `inbox` event reports the answer.
+it). An approval is answered by the person on the device it was filed on (the inbox is per device
+and never synced); on approval the daemon runs the stored action as the requesting principal (the
+app, and the agent when an agent's call needed it), records the outcome on the item, and then an
+`inbox` event reports the answer.
+
+### What the inbox keeps, and for how long
+Action args and outputs are request and response bodies, so the inbox (`<SOL_DIR>/inbox.json`,
+`0600`, written atomically, never synced, never logged) keeps as little of them as it can:
+
+- **Open approval:** the call (`action` with its `args`) and `args_digest` (`sha256:<hex>` of the
+  args, the same digest as the activity log). Args the action's input marks `"secret": true`
+  (section 9) are stored and shown as `"••••"` and `secret_args` is `true`; their real values are
+  held in memory only, so the person still sees what they approve and the app gets the real
+  values when it runs. If the daemon restarts before the answer, such an approval is answered
+  `expired` with error `unavailable` ("make the call again"); an approval without secret args
+  stays open across restarts.
+- **Answered approval** (`approved`, `denied` or `expired`): only the action's name (and person),
+  `args_digest`, the `answer`, and once the action ran, `outcome` (`ok` or `error`) with the
+  `error` code and message. No args and no output.
+- **Output** of an approved action: never written to disk. It is held in memory for the waiting
+  requester and handed over once, in `result`: to the requesting app by `GET /v1/inbox` (its own
+  requests), or to the agent by `GET /agent/v1/inbox` (its calls; `sol do` prints the item id to
+  poll). It is dropped once handed over, after 10 minutes, or when the daemon restarts; after that
+  the item shows `outcome` without `result`. The person approving also gets it in the reply of
+  `POST /admin/v1/inbox/{id}/approve` (`sol inbox approve`), unless the action declares
+  `output_secret`; the Inbox listing never shows outputs.
+- Dismissing an answered approval or a notice removes it; past 1000 items the oldest answered
+  ones go first.
+
+An older `inbox.json` with args or results on answered approvals is scrubbed (and rewritten)
+when the daemon starts.
 
 ## 9. The manifest: `app.json`
 
@@ -317,6 +345,8 @@ the whole "plug and play" contract.
 | `reads` | other apps whose feeds this app may read, e.g. `["files"]` (Music reads the Files tree to stream peers' music by blob hash) |
 | `effect` | `read`, `write` or `destructive` |
 | `approval` | `never` (default for read), `agents` (agents need approval), `always` |
+| `secret` | on a property of an action's `input` (at any depth, in `properties` or `items`, never on the input itself): its value is a secret (a password, a seed, a key). A call waiting for approval holds it in memory only and every view shows `"••••"` (section 8). Apps get the real value |
+| `output_secret` | on an action: its output is a secret. When an approval runs it, the output goes only to the waiting requester, once, from memory; never to disk, the activity log or the approver's reply (section 8) |
 
 ## 10. Opening an app's UI
 

@@ -232,11 +232,19 @@ func ShareReadAndEvents(t *testing.T, w *World) {
 	if err := w.A.Share(ctx, sol.ShareRequest{Feed: "tree", People: []string{w.BobID}}); err != nil {
 		t.Fatal(err)
 	}
-	if fe := wait(t, bobEv); fe.Type != sol.EventFeed || !fe.Feed.Readable || fe.Feed.Feed != addr {
-		t.Fatalf("%+v", fe)
-	}
-	if pe := wait(t, bobEv); pe.Type != sol.EventPerson || len(pe.Person.SharesWithMe) != 1 || pe.Person.SharesWithMe[0] != "docs/tree" {
-		t.Fatalf("%+v %+v", pe, pe.Person)
+	// Bob hears about the feed and about Alice's new share, in either order. Person events
+	// without the share are presence changes (Alice's node coming online), which can land first
+	// on a slow runner; they are skipped.
+	for gotFeed, gotShare := false, false; !gotFeed || !gotShare; {
+		switch ev := wait(t, bobEv); {
+		case ev.Type == sol.EventFeed && ev.Feed.Readable && ev.Feed.Feed == addr:
+			gotFeed = true
+		case ev.Type == sol.EventPerson && len(ev.Person.SharesWithMe) == 1 && ev.Person.SharesWithMe[0] == "docs/tree":
+			gotShare = true
+		case ev.Type == sol.EventPerson && len(ev.Person.SharesWithMe) == 0:
+		default:
+			t.Fatalf("%+v %+v", ev, ev.Person)
+		}
 	}
 	shares, _ := w.A.Shares(ctx, "tree")
 	if len(shares) != 1 || shares[0].Person != w.BobID || shares[0].Mode != "read" {
@@ -540,8 +548,8 @@ func InboxNotice(t *testing.T, w *World) {
 }
 
 // InboxApproval: an app files an approval; Inbox lists it open; once the person approves, the
-// stored action runs as the app and the item carries the answer and the result, with an inbox
-// event for the app.
+// stored action runs as the app and the item carries the answer and, once, the result, with an
+// inbox event for the app.
 func InboxApproval(t *testing.T, w *World) {
 	items, err := w.A.Inbox(ctx)
 	if err != nil || len(items) != 0 {
@@ -578,6 +586,11 @@ func InboxApproval(t *testing.T, w *World) {
 	items, _ = w.A.Inbox(ctx)
 	if len(items) != 1 || items[0].Answer != "approved" || string(items[0].Result) != `{"dry":false}` || items[0].Error != nil {
 		t.Fatalf("answered: %+v", items)
+	}
+	// The output is handed over once and never kept; the answered item keeps no args.
+	items, _ = w.A.Inbox(ctx)
+	if len(items) != 1 || items[0].Result != nil || items[0].Outcome != "ok" || items[0].Action == nil || items[0].Action.Args != nil {
+		t.Fatalf("answered, listed again: %+v", items)
 	}
 	if err := w.Answer(w.AliceID, r.ID, false); !errors.Is(err, sol.ErrNotFound) {
 		t.Fatalf("answering twice: %v", err)

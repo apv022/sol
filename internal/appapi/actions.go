@@ -3,8 +3,6 @@ package appapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -145,13 +143,11 @@ func needsApproval(spec sol.ActionSpec, agent string) bool {
 
 // fileApproval posts an approval item for a call and returns {"approval": id}.
 func (s *Server) fileApproval(requester string, c sol.ActionCall, agent string) (json.RawMessage, error) {
-	id, err := s.inbox.post(item{App: requester, Kind: "approval", Title: "Approve " + c.Action + "?",
-		Action: &sol.ActionCall{Action: c.Action, Args: c.Args, Person: c.Person}, Agent: agent})
+	res, err := s.postApproval(item{App: requester, Kind: "approval", Title: "Approve " + c.Action + "?", Agent: agent}, c)
 	if err != nil {
 		return nil, err
 	}
-	s.inboxEvent(requester, id)
-	return json.Marshal(map[string]string{"approval": id})
+	return json.Marshal(map[string]string{"approval": res.ID})
 }
 
 func splitAction(name string) (app, verb string, err error) {
@@ -250,13 +246,12 @@ func relay(resp *http.Response) (json.RawMessage, error) {
 // logActivity appends a row to the activity log. Failures are logged, never fatal: the action
 // already ran.
 func (s *Server) logActivity(who caller, app string, c sol.ActionCall, err error) {
-	sum := sha256.Sum256(c.Args)
 	result := "ok"
 	if err != nil {
 		result = "error: " + err.Error()
 	}
 	row := sol.ActivityEntry{Time: time.Now().UTC(), Person: who.person, Device: who.device, Agent: who.agent,
-		App: app, Action: c.Action, ArgsDigest: "sha256:" + hex.EncodeToString(sum[:]), Result: result}
+		App: app, Action: c.Action, ArgsDigest: argsDigest(c.Args), Result: result}
 	b, _ := json.Marshal(row)
 	if _, err := s.n.Store.Append(feeds.InternalApp, ActivityFeed, b); err != nil {
 		s.log.Warn("activity log", "err", err)

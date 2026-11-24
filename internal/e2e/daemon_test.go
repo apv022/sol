@@ -107,9 +107,16 @@ func TestScopesAndApproval(t *testing.T) {
 	if _, err := d.API.Answer(ctx, res.Approval, true); !errors.Is(err, sol.ErrNotFound) {
 		t.Fatalf("double answer: %v", err)
 	}
+	// The Inbox listing never shows outputs; the requesting app gets it once (API.md §8).
 	items := d.API.InboxItems()
-	if len(items) != 1 || items[0].Answer != "approved" || string(items[0].Result) != `{"ok":true}` {
+	if len(items) != 1 || items[0].Answer != "approved" || items[0].Outcome != "ok" || items[0].Result != nil {
 		t.Fatalf("%+v", items)
+	}
+	if mine, err := api.Inbox(ctx); err != nil || len(mine) != 1 || string(mine[0].Result) != `{"ok":true}` {
+		t.Fatalf("%+v %v", mine, err)
+	}
+	if mine, _ := api.Inbox(ctx); len(mine) != 1 || mine[0].Result != nil {
+		t.Fatalf("output handed over twice: %+v", mine)
 	}
 }
 

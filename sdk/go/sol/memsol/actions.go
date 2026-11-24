@@ -27,7 +27,8 @@ type InboxItem struct {
 	Answer   string // "", "approved" or "denied"
 	Agent    string // the agent whose call needed approval
 	Time     time.Time
-	Result   json.RawMessage // the approved action's output
+	Result   json.RawMessage // the approved action's output, until the requesting app lists it
+	Outcome  string          // "ok" or "error" once the approved action ran
 	Err      *sol.Error      // or its failure
 	action   *sol.ActionCall
 	requests *Client
@@ -70,8 +71,9 @@ func (p *Person) Answer(id string, approve bool) error {
 		var res sol.ActionResult
 		res, err = it.requests.invoke(*it.action, true)
 		n.mu.Lock()
-		it.Result = res.Output
+		it.Result, it.Outcome = res.Output, "ok"
 		if err != nil {
+			it.Outcome = "error"
 			var se *sol.Error
 			if !errors.As(err, &se) {
 				se = sol.Errorf("internal", err.Error())
@@ -87,7 +89,8 @@ func (p *Person) Answer(id string, approve bool) error {
 	return err
 }
 
-// Inbox implements sol.API: this app's items of the client's person, newest first.
+// Inbox implements sol.API: this app's items of the client's person, newest first. As in the
+// daemon, an approved request's output is handed over once (an agent's goes to the agent).
 func (c *Client) Inbox(context.Context) ([]sol.InboxItem, error) {
 	n := c.n
 	n.mu.Lock()
@@ -103,8 +106,15 @@ func (c *Client) Inbox(context.Context) ([]sol.InboxItem, error) {
 			a := *it.action
 			act = &a
 		}
+		var result json.RawMessage
+		if it.Agent == "" {
+			result, it.Result = it.Result, nil
+		}
+		if act != nil && it.Answer != "" {
+			act.Args = nil
+		}
 		out = append(out, sol.InboxItem{ID: it.ID, App: it.App, Kind: it.Kind, Title: it.Title, Body: it.Body,
-			Time: it.Time, Answer: it.Answer, Action: act, Agent: it.Agent, Result: it.Result, Error: it.Err})
+			Time: it.Time, Answer: it.Answer, Action: act, Agent: it.Agent, Outcome: it.Outcome, Result: result, Error: it.Err})
 	}
 	return out, nil
 }

@@ -333,3 +333,18 @@ func (t *trimWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// CallSummary is one line naming an inbox approval's call for `sol inbox`: the action and
+// its args as compact JSON, cut to max runes. The daemon already shows secret values as
+// sol.Redacted, so this never sees them; an answered approval has no args left to show.
+func CallSummary(action string, args json.RawMessage, max int) string {
+	s := action
+	var b bytes.Buffer
+	if len(args) > 0 && json.Compact(&b, args) == nil && b.String() != "{}" {
+		s += " " + b.String()
+	}
+	if r := []rune(s); max > 1 && len(r) > max {
+		s = string(r[:max-1]) + "…"
+	}
+	return s
+}

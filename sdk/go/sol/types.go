@@ -207,7 +207,8 @@ type InboxPost struct {
 }
 
 // InboxItem is one row of GET /v1/inbox: a notice or an approval of this app, with its answer
-// and, for an approved action, what running it returned.
+// and, once an approved action ran, its outcome (API.md section 8 says what is kept, and for
+// how long).
 type InboxItem struct {
 	ID    string    `json:"id"`
 	App   string    `json:"app"`
@@ -216,12 +217,22 @@ type InboxItem struct {
 	Body  string    `json:"body,omitempty"`
 	From  string    `json:"from,omitempty"` // a contact's person ID; empty for my own apps
 	Time  time.Time `json:"time"`
-	// Answer is "approved", "denied" or empty while open.
-	Answer string      `json:"answer,omitempty"`
+	// Answer is "approved", "denied", "expired" (the daemon restarted before an approval with
+	// secret args was answered) or empty while open.
+	Answer string `json:"answer,omitempty"`
+	// Action is the call to approve. Its args are there only while the approval is open, with
+	// secret values shown as Redacted; once answered only the action name and person remain.
 	Action *ActionCall `json:"action,omitempty"`
+	// ArgsDigest is "sha256:<hex>" of the call's args, as the activity log records it.
+	ArgsDigest string `json:"args_digest,omitempty"`
+	// SecretArgs reports that Action's args had secret values, held in memory only.
+	SecretArgs bool `json:"secret_args,omitempty"`
 	// Agent is the agent key whose call needed the approval (empty for an app's own request).
 	Agent string `json:"agent,omitempty"`
-	// Result is the approved action's output; Error its failure.
+	// Outcome is "ok" or "error" once an approved action ran.
+	Outcome string `json:"outcome,omitempty"`
+	// Result is the approved action's output, delivered once to the waiting requester and
+	// never stored; Error is its failure (kept).
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *Error          `json:"error,omitempty"`
 }

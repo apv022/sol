@@ -16,6 +16,76 @@ type Schema struct {
 	Properties map[string]*Schema `json:"properties,omitempty"`
 	Items      *Schema            `json:"items,omitempty"`
 	Enum       []json.RawMessage  `json:"enum,omitempty"`
+	// Secret marks a property whose value is a secret (a password, a key, a seed). The daemon
+	// keeps a call's secret values in memory only and shows them as Redacted (API.md section 9).
+	// Valid on properties and array items, at any depth, but not on the input schema itself.
+	Secret bool `json:"secret,omitempty"`
+}
+
+// Redacted replaces a secret value wherever a call is shown or stored (API.md section 8).
+const Redacted = "••••"
+
+// HasSecret reports whether any property under s is marked secret.
+func (s *Schema) HasSecret() bool {
+	if s == nil {
+		return false
+	}
+	if s.Secret || s.Items.HasSecret() {
+		return true
+	}
+	for _, p := range s.Properties {
+		if p.HasSecret() {
+			return true
+		}
+	}
+	return false
+}
+
+// Redact returns raw with every value of a secret property replaced by Redacted, and whether
+// it replaced anything. Args that are not valid JSON are replaced whole when the schema has a
+// secret, since nothing in them can be told apart.
+func (s *Schema) Redact(raw json.RawMessage) (json.RawMessage, bool) {
+	if !s.HasSecret() || len(bytes.TrimSpace(raw)) == 0 {
+		return raw, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return mustJSON(Redacted), true
+	}
+	v, changed := s.redact(v)
+	if !changed {
+		return raw, false
+	}
+	return mustJSON(v), true
+}
+
+func (s *Schema) redact(v any) (any, bool) {
+	if s == nil {
+		return v, false
+	}
+	if s.Secret {
+		return Redacted, true
+	}
+	changed := false
+	switch x := v.(type) {
+	case map[string]any:
+		for k, p := range s.Properties {
+			if pv, ok := x[k]; ok {
+				nv, c := p.redact(pv)
+				x[k], changed = nv, changed || c
+			}
+		}
+	case []any:
+		if s.Items != nil {
+			for i := range x {
+				nv, c := s.Items.redact(x[i])
+				x[i], changed = nv, changed || c
+			}
+		}
+	}
+	return v, changed
 }
 
 // Validate checks raw JSON against the schema. A nil Schema accepts everything; empty raw is

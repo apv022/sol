@@ -496,6 +496,11 @@ func run(args []string) error {
 			if it.Agent != "" {
 				title += " (agent " + it.Agent[:8] + ")"
 			}
+			// An open approval shows the call to approve, secret values already redacted by
+			// the daemon; an answered one keeps no args.
+			if it.Kind == "approval" && it.Answer == "" && it.Action != nil {
+				title += ": " + cli.CallSummary(it.Action.Action, it.Action.Args, 80)
+			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.App, it.Kind, title, state, it.Time.Local().Format("2006-01-02 15:04"))
 		}
 		return tw.Flush()
@@ -526,6 +531,10 @@ func run(args []string) error {
 		}
 		if len(it.Result) > 0 {
 			return cli.Render(os.Stdout, it.Result)
+		}
+		if it.Outcome == "ok" && it.Agent != "" {
+			// An output_secret action's output goes only to the agent that asked (API.md §8).
+			fmt.Println("The output goes to the agent that asked.")
 		}
 		return nil
 	case "theme list":

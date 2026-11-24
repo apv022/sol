@@ -1,7 +1,7 @@
 // Tests for the Sol app's pure helpers and the admin client's request shapes (stub fetch).
 import { test, assert } from '../../kit/testing.js';
 import { createAdmin, AdminError } from '../admin.js';
-import { greeting, greetingFor, clockText, msToNextMinute, relTime, minutesLeft, bytes, appIconSpec, parseRoute, toMs, hueOf, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, agentScopes, agentCommand, AGENT_NAME_RE } from '../util.js';
+import { greeting, greetingFor, clockText, msToNextMinute, relTime, minutesLeft, bytes, appIconSpec, parseRoute, toMs, hueOf, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, agentScopes, agentCommand, AGENT_NAME_RE, callText, REDACTED } from '../util.js';
 
 const at = (h, m = 0) => new Date(2026, 10, 19, h, m, 0, 0);
 
@@ -222,4 +222,12 @@ test('admin: wallpaper upload is the raw file with its type; agent key and sign-
   assert.equal(calls[0].headers['Content-Type'], 'image/png');
   assert.deepEqual(JSON.parse(calls[2].body), { name: 'bot', scopes: ['files.*'], days: 30 });
   assert.equal(calls[3].body, undefined);
+});
+
+test('callText shows an approval\'s call with secret values redacted', () => {
+  assert.equal(callText({ action: 'vault.unlock', args: { user: 'al', password: REDACTED } }), 'vault.unlock user: "al", password: ••••');
+  assert.equal(callText({ action: 'files.delete' }), 'files.delete');
+  assert.equal(callText({ action: 'vault.unlock', args: REDACTED }), 'vault.unlock ••••');
+  assert.equal(callText({ action: 'a.b', args: { t: 'x'.repeat(50) } }, 20).length, 20);
+  assert.equal(callText(null), '');
 });

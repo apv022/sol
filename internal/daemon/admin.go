@@ -512,9 +512,11 @@ func (d *Daemon) adminHandler() http.Handler {
 			if it, ok := d.API.InboxItem(id); ok && it.Answer != "" {
 				return nil, sol.Errorf("conflict", "already "+it.Answer)
 			}
-			_, err := d.API.Answer(r.Context(), id, approve)
-			// Once answered, the item records what the action did (or how it failed).
+			out, err := d.API.Answer(r.Context(), id, approve)
+			// Once answered, the item records the outcome; the output (never stored, and left
+			// out for output_secret actions) rides along for the person who approved.
 			if it, ok := d.API.InboxItem(id); ok && it.Answer != "" {
+				it.Result = out
 				return it, nil
 			}
 			return nil, err

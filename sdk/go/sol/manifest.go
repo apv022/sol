@@ -28,7 +28,14 @@ type ActionSpec struct {
 	// Columns is an optional hint for `sol do`'s human output: the fields of each result row to
 	// show, in order. Without it the CLI shows the first five scalar fields. --json is unaffected.
 	Columns []string `json:"columns,omitempty"`
+	// OutputSecret marks an action whose output is a secret (a decrypted item, a key): when an
+	// approval runs it, the daemon hands the output only to the waiting requester, from memory,
+	// never to disk, the activity log or the approver's reply (API.md sections 8 and 9).
+	OutputSecret bool `json:"output_secret,omitempty"`
 }
+
+// SecretArgs reports whether the action's input marks any property secret.
+func (a ActionSpec) SecretArgs() bool { return a.Input.HasSecret() }
 
 // Manifest is an app's app.json.
 type Manifest struct {
@@ -113,6 +120,9 @@ func (m *Manifest) Validate() error {
 		case EffectRead, EffectWrite, EffectDestructive:
 		default:
 			return fmt.Errorf("app.json: action %q: bad effect %q", a.Name, a.Effect)
+		}
+		if a.Input != nil && a.Input.Secret {
+			return fmt.Errorf("app.json: action %q: mark the secret properties of the input, not the input itself", a.Name)
 		}
 		switch a.Approval {
 		case "":

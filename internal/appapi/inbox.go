@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,18 +25,47 @@ import (
 // maxInbox bounds the stored items; the oldest answered ones go first.
 const maxInbox = 1000
 
+// resultTTL is how long an approved action's output waits in memory for its requester
+// (API.md section 8). A variable so tests can shorten it.
+var resultTTL = 10 * time.Minute
+
 // item is one inbox item (API.md §8), as stored and as GET /v1/inbox shows it.
 type item = sol.InboxItem
 
-// inbox is the persisted list of items, oldest first.
+// inbox is the list of items, oldest first, persisted to inbox.json. What it persists never
+// holds a secret or a result: an answered approval keeps only the action's name, the args
+// digest, the answer and the outcome; an open one keeps its args with secret values redacted.
+// The secret values and the outputs waiting for their requester live in memory only, so a
+// restart drops them (and expires the open approvals whose args they were).
 type inbox struct {
 	path  string
 	mu    sync.Mutex
 	items []item
+	// secrets holds the unredacted args of open approvals whose calls have secret values.
+	secrets map[string]json.RawMessage
+	// results holds approved actions' outputs until their requester takes them, or resultTTL.
+	results map[string]heldResult
+}
+
+// heldResult is an output waiting for its requester.
+type heldResult struct {
+	out   json.RawMessage
+	timer *time.Timer
+}
+
+// expiredErr answers an approval whose secret args a restart lost.
+func expiredErr() *sol.Error {
+	return sol.Errorf("unavailable", "Sol restarted before this approval was answered; its secret arguments were kept only in memory, so make the call again")
+}
+
+// argsDigest is the activity log's digest of a call's args.
+func argsDigest(args json.RawMessage) string {
+	sum := sha256.Sum256(args)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func openInbox(dir string) (*inbox, error) {
-	in := &inbox{}
+	in := &inbox{secrets: map[string]json.RawMessage{}, results: map[string]heldResult{}}
 	if dir == "" {
 		return in, nil
 	}
@@ -50,7 +80,48 @@ func openInbox(dir string) (*inbox, error) {
 	if err := json.Unmarshal(b, &in.items); err != nil {
 		return nil, errors.New("appapi: inbox.json is corrupt")
 	}
+	if in.scrubLocked() {
+		if err := in.saveLocked(); err != nil {
+			return nil, err
+		}
+	}
 	return in, nil
+}
+
+// scrubLocked removes what must not outlive memory from the loaded items, and reports whether
+// it changed anything: it expires open approvals whose secret args a restart lost, and drops
+// the args and results that older versions kept on answered approvals (issue #4).
+func (in *inbox) scrubLocked() bool {
+	changed := false
+	for i := range in.items {
+		it := &in.items[i]
+		if it.Kind != "approval" {
+			continue
+		}
+		if it.Answer == "" && it.SecretArgs {
+			it.Answer, it.Error = "expired", expiredErr()
+		}
+		if it.Answer == "" {
+			continue
+		}
+		if it.Action != nil && it.Action.Args != nil {
+			if it.ArgsDigest == "" && !it.SecretArgs {
+				it.ArgsDigest = argsDigest(it.Action.Args)
+			}
+			it.Action = &sol.ActionCall{Action: it.Action.Action, Person: it.Action.Person}
+			changed = true
+		}
+		if it.Result != nil {
+			it.Result, changed = nil, true
+		}
+		if it.Answer == "approved" && it.Outcome == "" && it.Action != nil {
+			it.Outcome, changed = "ok", true
+			if it.Error != nil {
+				it.Outcome = "error"
+			}
+		}
+	}
+	return changed
 }
 
 // saveLocked writes the inbox atomically (0600). in.mu held.
@@ -65,19 +136,34 @@ func (in *inbox) saveLocked() error {
 	return fsutil.WriteFileAtomic(in.path, b, 0o600)
 }
 
-func (in *inbox) post(it item) (string, error) {
+// post adds an item. secretArgs, if set, are the unredacted args of an approval whose stored
+// Action carries them redacted: they stay in memory until it is answered.
+func (in *inbox) post(it item, secretArgs json.RawMessage) (string, error) {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	it.ID, it.Time = "in-"+hex.EncodeToString(b), time.Now().UTC()
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.items = append(in.items, it)
+	if secretArgs != nil {
+		in.secrets[it.ID] = secretArgs
+	}
 	if len(in.items) > maxInbox {
 		if i := slices.IndexFunc(in.items, func(x item) bool { return x.Kind == "notice" || x.Answer != "" }); i >= 0 {
+			in.dropLocked(in.items[i].ID)
 			in.items = slices.Delete(in.items, i, i+1)
 		}
 	}
 	return it.ID, in.saveLocked()
+}
+
+// dropLocked forgets what memory holds for an item.
+func (in *inbox) dropLocked(id string) {
+	delete(in.secrets, id)
+	if h, ok := in.results[id]; ok {
+		h.timer.Stop()
+		delete(in.results, id)
+	}
 }
 
 func (in *inbox) get(id string) (item, bool) {
@@ -91,20 +177,29 @@ func (in *inbox) get(id string) (item, bool) {
 	return item{}, false
 }
 
-// list returns the items of app ("" for all), newest first.
-func (in *inbox) list(app string) []item {
+// list returns the items match accepts, newest first. For those deliver also accepts, a held
+// result is attached and then forgotten: each output reaches its requester once.
+func (in *inbox) list(match, deliver func(item) bool) []item {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	out := []item{}
 	for i := len(in.items) - 1; i >= 0; i-- {
-		if app == "" || in.items[i].App == app {
-			out = append(out, in.items[i])
+		it := in.items[i]
+		if !match(it) {
+			continue
 		}
+		if h, ok := in.results[it.ID]; ok && deliver != nil && deliver(it) {
+			it.Result = h.out
+			h.timer.Stop()
+			delete(in.results, it.ID)
+		}
+		out = append(out, it)
 	}
 	return out
 }
 
-// answer records the answer of an open approval and returns it.
+// answer records the answer of an open approval. It returns the item with the call's full
+// args (secret ones from memory) to run, and stores it with only the action's name.
 func (in *inbox) answer(id string, approve bool) (item, error) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -120,12 +215,23 @@ func (in *inbox) answer(id string, approve bool) (item, error) {
 		if approve {
 			it.Answer = "approved"
 		}
-		return *it, in.saveLocked()
+		full := *it
+		if it.Action != nil {
+			call := *it.Action
+			if it.SecretArgs {
+				call.Args = in.secrets[id]
+			}
+			full.Action = &call
+			it.Action = &sol.ActionCall{Action: call.Action, Person: call.Person}
+		}
+		delete(in.secrets, id)
+		return full, in.saveLocked()
 	}
 	return item{}, sol.Errorf("not_found", "no open approval "+id)
 }
 
-// setResult records what running an approved item's action returned.
+// setResult records the outcome of an approved item's action, and holds its output in memory
+// for the requester for resultTTL. The output is never written to disk.
 func (in *inbox) setResult(id string, out json.RawMessage, err error) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -133,17 +239,29 @@ func (in *inbox) setResult(id string, out json.RawMessage, err error) error {
 		if in.items[i].ID != id {
 			continue
 		}
-		in.items[i].Result = out
+		in.items[i].Outcome = "ok"
 		if err != nil {
 			var se *sol.Error
 			if !errors.As(err, &se) {
 				se = sol.Errorf("internal", "action failed")
 			}
-			in.items[i].Error = se
+			in.items[i].Outcome, in.items[i].Error = "error", se
+		} else if len(out) > 0 {
+			in.dropLocked(id)
+			in.results[id] = heldResult{out: out, timer: time.AfterFunc(resultTTL, func() { in.expireResult(id, out) })}
 		}
 		return in.saveLocked()
 	}
 	return nil
+}
+
+// expireResult forgets a held output its requester did not take in time.
+func (in *inbox) expireResult(id string, out json.RawMessage) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if h, ok := in.results[id]; ok && bytes.Equal(h.out, out) {
+		delete(in.results, id)
+	}
 }
 
 func (s *Server) inboxEvent(app, id string) {
@@ -178,7 +296,10 @@ func (s *Server) postInbox(q req, w http.ResponseWriter, r *http.Request) (any, 
 			return nil, err
 		}
 	}
-	id, err := s.inbox.post(item{App: q.app, Kind: b.Kind, Title: b.Title, Body: b.Body, Action: b.Action})
+	if b.Kind == "approval" {
+		return s.postApproval(item{App: q.app, Kind: b.Kind, Title: b.Title, Body: b.Body}, *b.Action)
+	}
+	id, err := s.inbox.post(item{App: q.app, Kind: b.Kind, Title: b.Title, Body: b.Body, Action: b.Action}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -186,9 +307,48 @@ func (s *Server) postInbox(q req, w http.ResponseWriter, r *http.Request) (any, 
 	return sol.InboxResult{ID: id}, nil
 }
 
-// listInbox serves GET /v1/inbox: this app's items, newest first.
+// postApproval files an approval of call. When the call is to an action of an app here whose
+// input marks secret properties, the item carries the args redacted and the real ones stay in
+// memory (API.md section 8).
+func (s *Server) postApproval(it item, c sol.ActionCall) (sol.InboxResult, error) {
+	call := sol.ActionCall{Action: c.Action, Args: c.Args, Person: c.Person}
+	it.ArgsDigest = argsDigest(c.Args)
+	var secret json.RawMessage
+	if spec, ok := s.localSpec(c); ok {
+		if red, changed := spec.Input.Redact(c.Args); changed {
+			secret, call.Args, it.SecretArgs = c.Args, red, true
+		}
+	}
+	it.Action = &call
+	id, err := s.inbox.post(it, secret)
+	if err != nil {
+		return sol.InboxResult{}, err
+	}
+	s.inboxEvent(it.App, id)
+	return sol.InboxResult{ID: id}, nil
+}
+
+// localSpec returns the spec of a call's action when it runs on this device.
+func (s *Server) localSpec(c sol.ActionCall) (sol.ActionSpec, bool) {
+	if me, _ := s.me(); c.Person != "" && c.Person != me {
+		return sol.ActionSpec{}, false
+	}
+	appID, _, err := splitAction(c.Action)
+	if err != nil {
+		return sol.ActionSpec{}, false
+	}
+	a, ok := s.cfg.Apps.App(appID)
+	if !ok {
+		return sol.ActionSpec{}, false
+	}
+	return a.Manifest.Action(c.Action)
+}
+
+// listInbox serves GET /v1/inbox: this app's items, newest first. The outputs of the app's own
+// approved requests are handed over here, once; an agent's go to the agent.
 func (s *Server) listInbox(q req, w http.ResponseWriter, r *http.Request) (any, error) {
-	return s.inbox.list(q.app), nil
+	return s.inbox.list(func(it item) bool { return it.App == q.app },
+		func(it item) bool { return it.Agent == "" }), nil
 }
 
 // peerNotice is the body of POST /p/inbox.
@@ -246,7 +406,7 @@ func (s *Server) peerInbox(w http.ResponseWriter, r *http.Request) {
 	if p.Relation != session.Self {
 		from = identity.ID(p.Person)
 	}
-	id, err := s.inbox.post(item{App: b.App, Kind: "notice", Title: b.Title, Body: b.Body, From: from})
+	id, err := s.inbox.post(item{App: b.App, Kind: "notice", Title: b.Title, Body: b.Body, From: from}, nil)
 	if err != nil {
 		sol.WriteError(w, err)
 		return
@@ -255,16 +415,28 @@ func (s *Server) peerInbox(w http.ResponseWriter, r *http.Request) {
 	sol.WriteJSON(w, http.StatusOK, sol.InboxResult{ID: id})
 }
 
-// InboxItems returns every inbox item, newest first (for the CLI and the Sol app).
-func (s *Server) InboxItems() []sol.InboxItem { return s.inbox.list("") }
+// InboxItems returns every inbox item, newest first (for the CLI and the Sol app). It never
+// carries a result: those wait for their requester (AgentInbox, GET /v1/inbox).
+func (s *Server) InboxItems() []sol.InboxItem {
+	return s.inbox.list(func(item) bool { return true }, nil)
+}
+
+// AgentInbox returns the approvals an agent's calls needed, newest first, for
+// GET /agent/v1/inbox. The output of an approved call is handed over here, once.
+func (s *Server) AgentInbox(agent string) []sol.InboxItem {
+	mine := func(it item) bool { return it.Agent == agent }
+	return s.inbox.list(mine, mine)
+}
 
 // InboxItem returns one inbox item.
 func (s *Server) InboxItem(id string) (sol.InboxItem, bool) { return s.inbox.get(id) }
 
 // Answer approves or denies an approval. On approval the stored action runs as the principal
 // that asked: the requesting app, on this device, with me as the caller and, when an agent's
-// call needed the approval, that agent in Sol-Agent. The result is recorded on the item, and
-// then an "inbox" event reports the answer to the app.
+// call needed the approval, that agent in Sol-Agent. The outcome is recorded on the item and
+// the output held in memory for the requester; then an "inbox" event reports the answer to the
+// app. The output is also returned, for the person who approved, unless the action declares
+// output_secret (then only the requester gets it).
 func (s *Server) Answer(ctx context.Context, id string, approve bool) (json.RawMessage, error) {
 	it, err := s.inbox.answer(id, approve)
 	if err != nil {
@@ -285,6 +457,9 @@ func (s *Server) Answer(ctx context.Context, id string, approve bool) (json.RawM
 	if rerr := s.inbox.setResult(it.ID, out, err); rerr != nil {
 		s.log.Warn("inbox: recording a result", "err", rerr)
 	}
+	if spec, ok := s.localSpec(*it.Action); ok && spec.OutputSecret {
+		out = nil
+	}
 	return out, err
 }
 
@@ -301,6 +476,7 @@ func (s *Server) Dismiss(id string) error {
 		if it.Kind == "approval" && it.Answer == "" {
 			return sol.Errorf("conflict", "approve or deny it instead")
 		}
+		in.dropLocked(id)
 		in.items = slices.Delete(in.items, i, i+1)
 		return in.saveLocked()
 	}

@@ -592,14 +592,8 @@ func (d *Daemon) agentHandler() http.Handler {
 		return d.API.CallAs(r.Context(), identity.ID(c.Agent), call)
 	})
 	j("GET /agent/v1/inbox", func(c identity.AgentCert, _ []byte, _ *http.Request) (any, error) {
-		id := identity.ID(c.Agent)
-		out := []sol.InboxItem{}
-		for _, it := range d.API.InboxItems() {
-			if it.Agent == id {
-				out = append(out, it)
-			}
-		}
-		return out, nil
+		// Its approved calls' outputs are handed over here once (API.md section 8).
+		return d.API.AgentInbox(identity.ID(c.Agent)), nil
 	})
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		sol.WriteError(w, sol.Errorf("not_found", "no such path"))

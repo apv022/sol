@@ -7,7 +7,7 @@ import { applySettings, toast } from '/kit/kit.js';
 import { icons } from '/kit/icons.js';
 import '/kit/qr.js';
 import { createAdmin } from '/admin.js';
-import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, appIconSpec, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand } from '/util.js';
+import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, appIconSpec, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand, callText } from '/util.js';
 
 const $ = (id) => document.getElementById(id);
 // The UI root forbids inline styles (CSP style-src 'self'): markup uses classes and data-var-*
@@ -393,7 +393,7 @@ function inboxItem(i, mini = false) {
   const actions = html`<span class="${mini ? 'mini-actions' : 'inline-actions'}">${approval ? html`<button class="primary" type="button" data-act="approve" data-id="${i.id}">Approve</button><button type="button" data-act="deny" data-id="${i.id}">Deny</button>` : html`<button type="button" data-act="deny" data-id="${i.id}">Dismiss</button>`}</span>`;
   return mini
     ? html`<div class="mini"><span><span class="row-title">${i.title}</span><span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`
-    : html`<div data-item class="wrap"><span class="grow"><span class="row-title wraps">${i.title}</span><span class="row-sub wraps">${i.body || ''}</span><span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`;
+    : html`<div data-item class="wrap"><span class="grow"><span class="row-title wraps">${i.title}</span><span class="row-sub wraps">${i.body || ''}</span>${approval && !i.answer && i.action ? html`<span class="row-sub wraps"><code class="inline">${callText(i.action)}</code></span>` : ''}<span class="row-sub">${i.app} · ${relTime(i.time)}</span></span>${actions}</div>`;
 }
 function inboxView() {
   const items = list(state.inbox);

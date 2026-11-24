@@ -242,3 +242,20 @@ func TestRenderColumnsHintAndFormats(t *testing.T) {
 		t.Errorf("fallback %q", b.String())
 	}
 }
+
+func TestCallSummary(t *testing.T) {
+	for _, c := range []struct {
+		args string
+		max  int
+		want string
+	}{
+		{`{"user": "al", "password": "••••"}`, 80, `vault.unlock {"user":"al","password":"••••"}`},
+		{``, 80, `vault.unlock`},
+		{`{}`, 80, `vault.unlock`},
+		{`{"text":"abcdefghij"}`, 20, `vault.unlock {"text…`},
+	} {
+		if got := CallSummary("vault.unlock", json.RawMessage(c.args), c.max); got != c.want {
+			t.Errorf("CallSummary(%s) = %q, want %q", c.args, got, c.want)
+		}
+	}
+}
