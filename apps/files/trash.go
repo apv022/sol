@@ -163,12 +163,22 @@ func (h *history) replaced(c change, p string, v version) {
 	}
 	ov := &oldVersion{ID: id, version: v, At: c.at, ByDev: c.b.Dev, By: c.from}
 	vs := append(h.vers[p], ov)
-	sort.SliceStable(vs, func(i, j int) bool { return vs[i].At > vs[j].At })
+	sort.SliceStable(vs, func(i, j int) bool { return vs[i].newer(vs[j]) })
 	for _, drop := range vs[min(len(vs), maxVersions):] {
 		delete(h.verPath, drop.ID)
 	}
 	h.vers[p] = vs[:min(len(vs), maxVersions)]
 	h.verPath[id] = p
+}
+
+// newer orders versions newest first: by when they were replaced, then (two edits in the same
+// millisecond are common) by the last-writer-wins order of the content itself, which every device
+// computes the same.
+func (v *oldVersion) newer(o *oldVersion) bool {
+	if v.At != o.At {
+		return v.At > o.At
+	}
+	return v.version.newer(o.version)
 }
 
 // move carries the versions of the files under from along to their new paths.
@@ -185,7 +195,7 @@ func (h *history) move(from, to string) {
 	}
 	for p, vs := range moved {
 		all := append(h.vers[p], vs...)
-		sort.SliceStable(all, func(i, j int) bool { return all[i].At > all[j].At })
+		sort.SliceStable(all, func(i, j int) bool { return all[i].newer(all[j]) })
 		h.vers[p] = all
 		for _, v := range all {
 			h.verPath[v.ID] = p
