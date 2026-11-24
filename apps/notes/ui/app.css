@@ -48,7 +48,9 @@
 
 /* the editor: a transparent textarea over a highlight layer with identical metrics (colour only,
    never size or weight, so the two stay aligned) */
-.hl-wrap { position: relative; padding: var(--space-4); }
+/* The wrapper fills the pane, so a tap anywhere below the text lands in the editor (app.js focuses
+   the textarea), and the last line can scroll clear of the nav bar. */
+.hl-wrap { position: relative; box-sizing: border-box; min-height: 100%; padding: var(--space-4) var(--space-4) calc(var(--safe-bottom) + var(--space-7)); }
 #hl, #ta { margin: 0; padding: 0; border: 0; font: inherit; font-size: var(--fs-body); line-height: 1.6; letter-spacing: 0; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; tab-size: 4; width: 100%; }
 #hl { position: absolute; inset: var(--space-4); width: auto; pointer-events: none; color: var(--label); }
 #ta { position: relative; display: block; background: transparent; color: transparent; caret-color: var(--label); resize: none; overflow: hidden; min-height: 40vh; outline: none; border-radius: 0; box-shadow: none; }
@@ -85,6 +87,6 @@
   #back { display: inline-flex; }
   .ed-head { padding-top: calc(var(--space-2) + var(--safe-top)); }
   .ed-title { visibility: hidden; }
-  .hl-wrap { padding: var(--space-4); }
+  .hl-wrap { padding: var(--space-4) var(--space-4) calc(var(--safe-bottom) + var(--space-7)); }
 }
 .backlinks button strong { display: block; }

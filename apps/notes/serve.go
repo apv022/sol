@@ -2,12 +2,15 @@ package notes
 
 import (
 	"embed"
+	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/apv022/sol/sdk/go/sol"
 	"github.com/apv022/sol/sdk/js"
@@ -26,6 +29,7 @@ func (a *App) buildHandler() http.Handler {
 	}
 	mux.Handle("POST /_sol/actions/", act)
 	mux.HandleFunc("GET /file", a.serveFile)
+	mux.HandleFunc("GET /changes", a.serveChanges)
 	mux.Handle("GET /kit/", http.StripPrefix("/kit/", http.FileServerFS(kit.FS)))
 	mux.HandleFunc("GET /sol.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -39,6 +43,44 @@ func (a *App) buildHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// serveChanges is a server-sent event stream of the index revision: one event now and one after
+// every change (an edit here, a file synced in from another device, an edit in another editor),
+// so the UI refreshes when something changed instead of polling. Comments every 30s keep proxies
+// and the WebView from dropping an idle stream.
+func (a *App) serveChanges(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	keep := time.NewTicker(30 * time.Second)
+	defer keep.Stop()
+	var last uint64
+	first := true
+	for {
+		rev, ch := a.idx.changed()
+		if first || rev != last {
+			if _, err := fmt.Fprintf(w, "data: %d\n\n", rev); err != nil {
+				return
+			}
+			fl.Flush()
+			first, last = false, rev
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-keep.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			fl.Flush()
+		case <-ch:
+		}
+	}
 }
 
 // serveFile serves a file from Notes/ (an attachment an image tag points at): GET

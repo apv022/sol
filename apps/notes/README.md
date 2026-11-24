@@ -11,6 +11,10 @@ devices and merges or conflicts concurrent edits; Notes never syncs anything its
 - Links are by name: `[[Name]]` matches a file name, then a `# Title`, case-insensitively;
   `[[Folder/Name]]` matches a path. `notes.move` rewrites links to a renamed note (option
   `rewrite_links`, default on; code is never touched). Moving a folder does not rewrite path links.
+- "New note" makes `Untitled.md`; leaving the note renames it after its first `# heading`
+  (`notes.tidy_names`, which only ever renames `Untitled*` files, so a name you chose is kept).
+- The UI hears about changes from `GET /changes`, a server-sent event stream of the index
+  revision (pushed on every change, never polled).
 - Images and files go to `attachments/` next to the note (`notes.attach`, up to 3 MiB; the UI shrinks big photos).
 - Pins are per device (in app data), so they do not touch the files.
 - The Markdown renderer (`ui/md.js`) escapes all raw HTML; entities like `&copy;` are shown as typed.

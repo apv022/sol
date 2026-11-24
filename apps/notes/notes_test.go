@@ -1,9 +1,11 @@
 package notes
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -294,6 +296,45 @@ func TestMoveRewritesLinks(t *testing.T) {
 	}
 	if p := e.ok("notes.list", map[string]any{"pinned": true})["notes"].([]any); len(p) != 1 {
 		t.Errorf("pin followed: %v", p)
+	}
+}
+
+func TestTidyNames(t *testing.T) {
+	e := newEnv(t, nil)
+	// What "New note" makes: Untitled.md, Untitled 2.md, Untitled 3.md, each with an empty heading.
+	for range 3 {
+		e.ok("notes.create", map[string]any{"title": "Untitled", "text": "# \n\n"})
+	}
+	e.ok("notes.write", map[string]any{"path": "Untitled.md", "text": "# Groceries\n\nmilk"})
+	e.ok("notes.write", map[string]any{"path": "Untitled 2.md", "text": "# Groceries\n\neggs"}) // same title
+	e.ok("notes.write", map[string]any{"path": "Mine.md", "text": "# Something else\n[[Untitled]]"})
+	e.ok("notes.write", map[string]any{"path": "Kept.md", "text": "# Not the name"})
+
+	code, dr := e.do("notes.tidy_names", nil, true)
+	if code != 200 || dr["dry_run"] != true || !e.exists("Untitled.md") || len(dr["renamed"].([]any)) != 2 {
+		t.Fatalf("dry run: %d %v", code, dr)
+	}
+	r := e.ok("notes.tidy_names", nil)
+	if got := r["renamed"].([]any); len(got) != 2 {
+		t.Fatalf("renamed: %v", r)
+	}
+	if !e.exists("Groceries.md") || !e.exists("Groceries 2.md") || e.exists("Untitled.md") || e.exists("Untitled 2.md") {
+		t.Error("untitled notes not renamed after their heading")
+	}
+	if !e.exists("Untitled 3.md") {
+		t.Error("a note without a heading must keep its name")
+	}
+	if !e.exists("Kept.md") || !e.exists("Mine.md") {
+		t.Error("a chosen name was changed")
+	}
+	if m := e.read("Mine.md"); !strings.Contains(m, "[[Groceries]]") {
+		t.Errorf("links to the renamed note: %q", m)
+	}
+	// paths limits it to the given notes.
+	e.ok("notes.write", map[string]any{"path": "Untitled 3.md", "text": "# Ideas"})
+	e.ok("notes.write", map[string]any{"path": "Untitled 9.md", "text": "# Later"})
+	if r := e.ok("notes.tidy_names", map[string]any{"paths": []string{"Untitled 3.md"}}); len(r["renamed"].([]any)) != 1 || !e.exists("Ideas.md") || !e.exists("Untitled 9.md") {
+		t.Errorf("paths: %v", r)
 	}
 }
 
@@ -625,5 +666,40 @@ func TestUIAndManifest(t *testing.T) {
 	}
 	if c, _ := e.do("notes.list", map[string]any{"limit": "x"}, false); c != 400 {
 		t.Errorf("schema validation: %d", c)
+	}
+}
+
+// The UI's change stream pushes the index revision at once and again after every change.
+func TestChangesStream(t *testing.T) {
+	e := newEnv(t, nil)
+	srv := httptest.NewServer(e.app.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/changes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	rd := bufio.NewReader(resp.Body)
+	next := func() string {
+		for {
+			l, err := rd.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(l, "data: ") {
+				return strings.TrimSpace(strings.TrimPrefix(l, "data: "))
+			}
+		}
+	}
+	first := next()
+	w := e.ok("notes.write", map[string]any{"path": "a.md", "text": "# A"})
+	want := fmt.Sprint(w["rev"])
+	for got := next(); got != want; got = next() {
+		if got == first {
+			t.Fatalf("an event without a change: %s", got)
+		}
 	}
 }

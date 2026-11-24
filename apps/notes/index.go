@@ -36,6 +36,7 @@ type index struct {
 	byTitle  map[string][]string       // lowercase title -> paths
 	dirs     map[string]bool           // every folder under Notes/ (relative), without the root
 	rev      uint64
+	bumped   chan struct{} // closed and replaced whenever rev changes (see changed)
 	tagCount map[string]int
 }
 
@@ -108,7 +109,7 @@ func (x *index) put(d *doc) bool {
 	for dir := dirOf(d.path); dir != ""; dir = dirOf(dir) {
 		x.dirs[dir] = true
 	}
-	x.rev++
+	x.bumpLocked()
 	return true
 }
 
@@ -165,7 +166,7 @@ func (x *index) remove(path string) bool {
 		}
 	}
 	if changed {
-		x.rev++
+		x.bumpLocked()
 	}
 	return changed
 }
@@ -180,7 +181,7 @@ func (x *index) addDir(p string) bool {
 	for ; p != ""; p = dirOf(p) {
 		x.dirs[p] = true
 	}
-	x.rev++
+	x.bumpLocked()
 	return true
 }
 
@@ -188,6 +189,26 @@ func (x *index) get(path string) *doc {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.docs[path]
+}
+
+// bumpLocked advances the revision and wakes everyone waiting in changed. x.mu held.
+func (x *index) bumpLocked() {
+	x.rev++
+	if x.bumped != nil {
+		close(x.bumped)
+		x.bumped = nil
+	}
+}
+
+// changed returns the revision and a channel closed at the next change, so the UI's change
+// stream is pushed, never polled.
+func (x *index) changed() (uint64, <-chan struct{}) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.bumped == nil {
+		x.bumped = make(chan struct{})
+	}
+	return x.rev, x.bumped
 }
 
 func (x *index) revision() uint64 {

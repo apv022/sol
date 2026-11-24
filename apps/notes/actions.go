@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -51,6 +53,7 @@ func (a *App) registerActions(act *sol.Actions) {
 	h("notes.toggle_task", a.actToggle)
 	h("notes.attach", a.actAttach)
 	h("notes.pin", a.actPin)
+	h("notes.tidy_names", a.actTidyNames)
 }
 
 type noteSummary struct {
@@ -779,4 +782,75 @@ func (a *App) actPin(_ context.Context, c sol.Call) (any, error) {
 	a.idx.mu.Unlock()
 	a.wmu.Unlock()
 	return map[string]any{"path": rel, "pinned": in.Pinned, "rev": a.idx.revision()}, nil
+}
+
+// untitledRe matches the file names "New note" gives: Untitled, Untitled 2, ... (and the
+// "-2"/"2" spellings other tools use).
+var untitledRe = regexp.MustCompile(`(?i)^untitled(?:[ -]?\d+)?$`)
+
+// actTidyNames renames notes still called Untitled after their first heading, so a note started
+// with "New note" and titled later gets a real file name. Only Untitled* files are touched: a
+// name the person chose is never changed behind their back. paths limits it to those notes.
+func (a *App) actTidyNames(ctx context.Context, c sol.Call) (any, error) {
+	var in struct {
+		Paths []string `json:"paths"`
+	}
+	if err := c.Decode(&in); err != nil {
+		return nil, bad("%v", err)
+	}
+	want := map[string]bool{}
+	for _, p := range in.Paths {
+		rel, err := cleanNote(p)
+		if err != nil {
+			return nil, bad("%v", err)
+		}
+		want[rel] = true
+	}
+	type rename struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	var plan []rename
+	a.wmu.Lock()
+	taken := map[string]bool{}
+	for _, d := range a.idx.snapshot() {
+		if (len(want) > 0 && !want[d.path]) || !untitledRe.MatchString(stemOf(d.path)) {
+			continue
+		}
+		stem := sanitizeName(d.title)
+		if untitledRe.MatchString(stem) {
+			continue // no heading yet
+		}
+		to, err := a.uniqueName(dirOf(d.path), stem, ".md")
+		for i := 2; err == nil && taken[to] && i < 10000; i++ {
+			to, err = a.uniqueName(dirOf(d.path), fmt.Sprintf("%s %d", stem, i), ".md")
+		}
+		if err != nil {
+			continue
+		}
+		taken[to] = true
+		plan = append(plan, rename{From: d.path, To: to})
+	}
+	a.wmu.Unlock()
+	sort.Slice(plan, func(i, j int) bool { return plan[i].From < plan[j].From })
+	if c.DryRun {
+		return dry(fmt.Sprintf("rename %d untitled notes", len(plan)), map[string]any{"renamed": nonNilRenames(plan)}), nil
+	}
+	done := []rename{}
+	for _, r := range plan {
+		args, _ := json.Marshal(map[string]string{"from": r.From, "to": r.To})
+		if _, err := a.actMove(ctx, sol.Call{Caller: c.Caller, Args: args}); err != nil {
+			a.logf("tidy names: %s: %v", r.From, err)
+			continue
+		}
+		done = append(done, r)
+	}
+	return map[string]any{"renamed": done, "rev": a.idx.revision()}, nil
+}
+
+func nonNilRenames[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }

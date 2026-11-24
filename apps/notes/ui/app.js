@@ -170,7 +170,9 @@ function route() {
 
 async function open(path) {
   if (state.cur && state.cur.path === path) { setView('edit'); return; }
+  const prev = state.cur;
   await flush();
+  if (prev) await nameUntitled(prev);
   let r;
   try { r = await call('notes.read', { path }); } catch (e) { fail(e); location.hash = '#/'; return; }
   state.cur = { path, etag: r.etag, saved: r.text, dirty: false, saving: false, pinned: r.pinned };
@@ -201,8 +203,12 @@ function setPane(p) {
 }
 $('seg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setPane(b.dataset.pane); });
 
-window.addEventListener('hashchange', () => { const p = route(); if (p) open(p); else if (state.cur) close(); else setView('list'); });
-$('back').addEventListener('click', async () => { await flush(); location.hash = '#/'; });
+window.addEventListener('hashchange', () => {
+  const p = route();
+  if (p) open(p);
+  else if (state.cur) { const c = state.cur, saved = flush(); close(); saved.then(() => nameUntitled(c)); } else setView('list');
+});
+$('back').addEventListener('click', async () => { const c = state.cur; await flush(); await nameUntitled(c); location.hash = '#/'; });
 
 let saveT;
 function setStatus(s) { $('status').textContent = s; }
@@ -214,6 +220,30 @@ function afterEdit() {
   $('pin').setAttribute('aria-pressed', String(!!c.pinned)); $('pin').setAttribute('aria-label', c.pinned ? 'Unpin' : 'Pin');
   setStatus(c.dirty ? 'Edited' : 'Saved');
 }
+// A tap in the editor pane but outside the text (below a short note, in the margins) puts the
+// caret at the end, as in any notes app; the textarea itself is only as tall as its text.
+$('edpane').addEventListener('pointerdown', (e) => {
+  if (e.target === $ta || !state.cur || e.button > 0) return;
+  e.preventDefault();
+  $ta.focus({ preventScroll: true });
+  const end = $ta.value.length;
+  $ta.setSelectionRange(end, end);
+});
+
+// Leaving a note still named Untitled gives its file the note's heading as a name (notes.tidy_names
+// only renames Untitled* files, never a name the person chose).
+const untitled = (p) => /^untitled(?:[ -]?\d+)?$/i.test(stemOf(p));
+async function nameUntitled(c) {
+  if (!c || !untitled(c.path)) return;
+  try {
+    const r = await call('notes.tidy_names', { paths: [c.path] });
+    const to = r.renamed?.[0]?.to;
+    if (!to) return;
+    if (state.cur === c) { c.path = to; history.replaceState(null, '', '#/n/' + enc(to)); }
+    await refresh(true);
+  } catch (e) { fail(e); }
+}
+
 function autogrow() { $ta.style.height = 'auto'; $ta.style.height = $ta.scrollHeight + 'px'; }
 
 let hlRaf = 0, pvT = 0;
@@ -251,7 +281,7 @@ async function flush() {
   if (c && c.dirty && !$('banner').dataset.kind) { clearTimeout(saveT); while (c.saving) await new Promise((r) => setTimeout(r, 30)); await save(); }
 }
 window.addEventListener('pagehide', () => { if (state.cur?.dirty && !$('banner').dataset.kind) save(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+document.addEventListener('visibilitychange', async () => { if (document.hidden) { const c = state.cur; await flush(); await nameUntitled(c); } });
 
 // ---------- external edits ----------
 
@@ -612,7 +642,9 @@ $('theme').addEventListener('click', () => {
 
 // ---------- start ----------
 
-setInterval(() => { if (!document.hidden) refresh(false); }, 3000);
+// The app pushes its index revision on every change (GET changes, server-sent events); the
+// browser reconnects by itself. Each event fetches only what changed since the last revision.
+new EventSource('changes').onmessage = (e) => { if (Number(e.data) !== state.rev) refresh(false); };
 window.addEventListener('focus', () => refresh(false));
 setPane(state.pane);
 const cached = readCache();
