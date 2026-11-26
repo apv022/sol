@@ -12,6 +12,33 @@
   flight could arrive out of order and the older (without the service) won; offers are now
   numbered and an older one never replaces a newer one, and a failed push is retried on the
   current connection.
+- **Files: Trash and version history.** A delete anywhere (the Files app, `sol do files.delete`,
+  `rm` in a terminal, on any of your devices) now goes to a Trash that every device shows the
+  same: restore it (folders too), or delete it forever. Earlier contents of a file (edits, syncs
+  from another device, merges) are kept as versions you can download or restore. Kept 30 days and
+  10 versions per file by default (`sol do files.trash_settings`). "Delete forever", emptying the
+  Trash and expiry free the disk space on every device, the always-on one included.
+- **Connected Android apps in the Apps grid.** Raypass and other apps that connected to Sol on
+  your phone show next to Files and Notes with their own icon, and open when you tap them.
+- **Public onion services.** `sol do sol.onions.host --name blog --port 8080` publishes a local
+  port at a fixed `.onion` address anyone can reach (Tor must be on); `sol.onions.remove` takes it
+  down and deletes the address for good. Sol's own ports can't be published.
+- **Notes:** a tap below the text of a short note starts editing (on phones it did nothing). A
+  note started with "New note" is no longer saved as `Untitled.md`: leaving it names the file
+  after its first heading. `sol do notes.tidy_names` renames the `Untitled*.md` notes you already
+  have. The Notes app no longer checks for changes every 3 seconds; changes are pushed to it.
+- **App icons** have readable contrast (the white glyph on the lime and cyan icons was barely
+  visible), a bolder glyph and one distinct colour per app.
+- **Security: approvals no longer keep secrets on disk** (#4). When an agent's call needed your
+  approval, its arguments and the action's output stayed in `inbox.json`. Now only a digest and
+  the outcome are kept; the output is handed to the waiting app or agent once, from memory. Apps
+  can mark arguments `"secret"`, shown as `••••` when you approve.
+- Agents: Sol's own actions (turning a transport off, hosting an onion) now ask for your approval
+  in the Inbox when an agent calls them, like every app's actions; before, agents skipped it.
+- Sol starts when port 7777 is taken by another program (on a free port for that run) instead of
+  stopping.
+- Sharing: a device of a contact's that was behind could take back a share their other device
+  had just made; share announcements are now versioned.
 
 ## v0.2.0-beta.2 (beta)
 
