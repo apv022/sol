@@ -1,7 +1,9 @@
 package files
 
 import (
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -267,4 +269,28 @@ func TestIgnoredFilesAreNotSynced(t *testing.T) {
 	if got != ".solignore,real.txt,secret/a.txt" {
 		t.Fatalf("synced files: %s", got)
 	}
+}
+
+// A folder renamed in the instant a synced file lands in it stays renamed: the file is not
+// written again at the old path, and the move reaches the other device.
+func TestRenameRacingAnIncomingWrite(t *testing.T) {
+	w := newWorld()
+	a := startNode(t, w.a1, nil)
+	b := startNode(t, w.a2, nil)
+	a.write(t, "Notes/keep.md", "k")
+	waitFor(t, "b gets the folder", func() bool { return b.has("Notes/keep.md", "k") })
+	b.settle(t)
+
+	var once sync.Once
+	afterMaterialise = func(full string) {
+		if filepath.Base(full) == "ideas.md" && strings.HasPrefix(full, b.path("Notes")) {
+			once.Do(func() { _ = osRename(b.path("Notes"), b.path("Archive")) })
+		}
+	}
+	t.Cleanup(func() { afterMaterialise = nil })
+	a.write(t, "Notes/ideas.md", "new")
+	waitFor(t, "the move reaches a", func() bool { return a.has("Archive/ideas.md", "new") && a.gone("Notes") })
+	a.settle(t)
+	b.settle(t)
+	stays(t, "Notes stays gone", func() bool { return a.gone("Notes") && b.gone("Notes") })
 }

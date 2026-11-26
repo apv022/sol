@@ -669,6 +669,10 @@ func (a *App) removeEmptyParents(p string, v *view) {
 
 // materialise writes one tree file to disk: temp file in the same folder, mtime from the entry,
 // atomic rename, then the index (so the watcher sees nothing new). a.syncMu held.
+// afterMaterialise, set only by tests, runs right after a synced file lands on disk: the moment
+// a person's rename can race the write.
+var afterMaterialise func(full string)
+
 func (a *App) materialise(ctx context.Context, p string, f *vfile) error {
 	full := a.disk(p)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -695,18 +699,24 @@ func (a *App) materialise(ctx context.Context, p string, f *vfile) error {
 	if err == nil && "sha256:"+hex.EncodeToString(h.Sum(nil)) != f.Blob {
 		err = fmt.Errorf("blob content does not match its hash")
 	}
+	// What the index records is read from the temp file before the rename, not from full
+	// after it: if the person renames the folder in that instant, full no longer exists, the
+	// index would miss the file, and the next pass would write it again at the old path,
+	// undoing their rename. Size and mtime don't change with the rename.
+	var st os.FileInfo
 	if err == nil {
 		mt := time.UnixMilli(f.Mtime)
 		if err = os.Chtimes(tname, mt, mt); err == nil {
-			err = os.Rename(tname, full)
+			if st, err = os.Lstat(tname); err == nil {
+				err = os.Rename(tname, full)
+			}
+			if err == nil && afterMaterialise != nil {
+				afterMaterialise(full)
+			}
 		}
 	}
 	if err != nil {
 		os.Remove(tname)
-		return err
-	}
-	st, err := os.Lstat(full)
-	if err != nil {
 		return err
 	}
 	a.setIndex(p, idxEntry{Blob: f.Blob, Size: st.Size(), Mtime: st.ModTime().UnixNano()})
