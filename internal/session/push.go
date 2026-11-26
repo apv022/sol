@@ -68,6 +68,7 @@ func (m *Manager) announcer() {
 			return
 		case <-m.announce:
 		}
+		m.resignProfile() // a rotated P: my profile counts again once re-signed
 		b, err := m.myBundle()
 		if err != nil || bytes.Equal(b, last) {
 			continue

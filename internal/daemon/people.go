@@ -44,8 +44,17 @@ type ShareRef struct {
 
 // PersonInfo is one contact (GET /admin/v1/people).
 type PersonInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
+	ID string `json:"id"`
+	// Name is the name in their person certificate (as paired).
+	Name string `json:"name"`
+	// DisplayName is the name to show: my petname for them if I renamed them, else the name
+	// their profile chose, else Name; NameSource says which ("petname", "profile",
+	// "certificate"). ProfileName is their profile's name, if any.
+	DisplayName string `json:"display_name"`
+	NameSource  string `json:"name_source"`
+	ProfileName string `json:"profile_name,omitempty"`
+	// Avatar is the URL of their picture on the UI root, once this device holds it.
+	Avatar  string `json:"avatar,omitempty"`
 	Petname string `json:"petname"`
 	// Renamed is true when I gave this person a petname myself; otherwise Petname is the
 	// default address label derived from their name, and UIs show Name.
@@ -109,6 +118,7 @@ func (d *Daemon) person(id string) (PersonInfo, bool) {
 	pi := PersonInfo{ID: c.ID, Name: c.Name, Petname: c.Petname, Online: c.Online, Devices: c.Devices,
 		SharesWithMe: []ShareRef{}, IShare: []ShareRef{}}
 	pi.Renamed = d.pets.get(id) != ""
+	pi.DisplayName, pi.NameSource, pi.ProfileName, pi.Avatar = d.shownName(id, c.Name, c.Petname, pi.Renamed)
 	if pub, err := identity.ParseID(c.ID); err == nil {
 		pi.Anonymous = d.Contacts.Anonymous(pub)
 	}
@@ -156,7 +166,7 @@ func (d *Daemon) peerURL(name, petname string) string {
 	return "http://" + name + "." + petname + ".localhost:" + itoa(d.UIPort()) + "/"
 }
 
-// People lists my contacts, by name.
+// People lists my contacts, by shown name.
 func (d *Daemon) People() []PersonInfo {
 	out := []PersonInfo{}
 	for _, id := range d.Contacts.List() {
@@ -165,8 +175,8 @@ func (d *Daemon) People() []PersonInfo {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+		if a, b := strings.ToLower(out[i].DisplayName), strings.ToLower(out[j].DisplayName); a != b {
+			return a < b
 		}
 		return out[i].ID < out[j].ID
 	})
@@ -235,6 +245,7 @@ func (d *Daemon) dropContact(pub []byte) error {
 		}
 	}
 	d.ports.forget(id)
+	d.Sessions.ForgetProfile(pub)
 	_ = d.pets.set(id, "")
 	d.emit(EvPerson, removed("id", id))
 	return nil

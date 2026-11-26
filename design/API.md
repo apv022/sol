@@ -120,6 +120,12 @@ Apps decide by these headers, never by anything in the request body.
 Pairing, removing people and naming them are done by the person in the Sol app (admin API), not
 by apps. Apps see the result.
 
+`name` is the name in the person's certificate. Profiles (IDENTITY.md §Profile: the name and
+picture a person chose, shown by the Sol app) are not in the app API yet. When an app needs them,
+add `display_name` (petname, else profile name, else `name`) and `avatar` (the picture's hash)
+here together with a way for the app to fetch the bytes (`GET /v1/avatars/{hash}`, the `people`
+scope); a hash alone would be of no use to an app.
+
 ## 3. Feeds: synced, signed logs
 
 A feed is an append-only list of entries. The daemon signs each entry with the device key (stamped with the app ID),

@@ -332,6 +332,9 @@ sol-avatar { --size: 32px; position: relative; display: inline-grid; place-items
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) sol-avatar { color: var(--av-fg-dark, var(--tint-text)); } }
 :root[data-theme="dark"] sol-avatar { color: var(--av-fg-dark, var(--tint-text)); }
 /* presence ring: a green ring set off from the avatar by a gap of canvas */
+/* the picture covers the letter, which stays behind it while it loads (and when it fails) */
+sol-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+sol-avatar img[hidden] { display: none; }
 sol-avatar[online] { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--green); margin: 4px; }
 sol-app-icon { --size: 60px; --glyph: calc(var(--size) * .5); position: relative; display: inline-grid; place-items: center; flex: none; width: var(--size); height: var(--size); color: #fff;
   border-radius: var(--radius-icon); background: linear-gradient(160deg, var(--icon-a, var(--tint)), var(--icon-b, var(--tint-pressed)));

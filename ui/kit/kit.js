@@ -30,9 +30,14 @@ class SolIcon extends HTMLElement {
   }
 }
 
-/** <sol-avatar name="Ada" id="person-id" online size="40px">: initial on a disc tinted from the id; `online` adds the presence ring. */
+/**
+ * <sol-avatar name="Ada" id="person-id" src="/avatars/…" online size="40px">: initial on a disc tinted
+ * from the id; `src` shows the person's picture instead (an <img alt="">, the letter stays behind it
+ * while it loads and comes back if it fails); `online` adds the presence ring. Only a same-origin path,
+ * blob: or data:image/ URL is used as `src`.
+ */
 class SolAvatar extends HTMLElement {
-  static observedAttributes = ['name', 'id', 'online', 'size'];
+  static observedAttributes = ['name', 'id', 'online', 'size', 'src'];
   connectedCallback() { this.render(); }
   attributeChangedCallback() { if (this.isConnected) this.render(); }
   render() {
@@ -44,10 +49,33 @@ class SolAvatar extends HTMLElement {
     this.style.setProperty('--av-fg-light', `hsl(${h} 50% 32%)`);
     this.style.setProperty('--av-fg-dark', `hsl(${h} 60% 74%)`);
     if (this.hasAttribute('size')) this.style.setProperty('--size', this.getAttribute('size'));
-    this.textContent = [...name.trim()][0]?.toUpperCase() || '?';
+    const text = [...name.trim()][0]?.toUpperCase() || '?';
+    const letter = document.createTextNode(text);
+    const src = avatarSrc(this.getAttribute('src'));
+    const cur = this.querySelector('img');
+    if (src && cur && cur.getAttribute('src') === src && this.firstChild?.nodeType === Node.TEXT_NODE) {
+      this.firstChild.data = text; // the same picture: keep it (no reload, no flicker)
+    } else if (src) {
+      const img = el('img');
+      img.alt = ''; img.decoding = 'async'; img.draggable = false;
+      img.addEventListener('error', () => { img.hidden = true; this.toggleAttribute('data-picture', false); });
+      img.addEventListener('load', () => this.toggleAttribute('data-picture', true));
+      img.src = src;
+      this.replaceChildren(letter, img);
+    } else {
+      this.replaceChildren(letter);
+      this.toggleAttribute('data-picture', false);
+    }
     this.setAttribute('role', 'img');
     this.setAttribute('aria-label', name + (this.hasAttribute('online') ? ', online' : ''));
   }
+}
+
+/** The avatar picture URL to use, or '' for one that could load from elsewhere (or nothing). */
+export function avatarSrc(v) {
+  v = (v || '').trim();
+  if (/^\/(?![/\\])/.test(v) || /^blob:/.test(v) || /^data:image\/(png|jpeg|webp);/.test(v)) return v;
+  return '';
 }
 
 /** <sol-app-icon glyph="folder" hue="210" size="60px">: a squircle with a gradient and a glyph. No hue means the accent. */

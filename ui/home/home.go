@@ -8,5 +8,5 @@ import "embed"
 
 // FS holds the UI files at its root (index.html is the entry point).
 //
-//go:embed index.html setup.html setup.js icon.svg icon-192.png icon-512.png home.css wallpaper.css admin.js util.js grid.js app.js
+//go:embed index.html setup.html setup.js icon.svg icon-192.png icon-512.png home.css wallpaper.css admin.js util.js grid.js profile.js app.js
 var FS embed.FS

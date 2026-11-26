@@ -37,6 +37,10 @@ main { position: relative; min-width: 0; scrollbar-width: thin; scrollbar-color:
 /* a calm greeting and the date: small, not a clock */
 .hero { padding: var(--space-2) 0 var(--space-5); text-shadow: 0 1px 18px var(--wp-shadow); }
 .hero .greet { margin: 0; font-size: var(--fs-large-title); line-height: var(--lh-large-title); font-weight: 700; letter-spacing: var(--tr-large-title); color: var(--wp-ink); }
+.hero-avatar { margin-bottom: var(--space-2); box-shadow: 0 1px 18px var(--wp-shadow); }
+.profile-row { gap: var(--space-3); }
+.profile-name { font-size: var(--fs-headline); font-weight: 600; }
+.profile-actions { flex-wrap: wrap; gap: var(--space-2); }
 .hero .date { margin: var(--space-1) 0 0; font-size: var(--fs-headline); font-weight: 500; color: var(--wp-ink-2); }
 .widgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-6); }
 .widgets .widget { text-decoration: none; color: var(--label); min-height: 118px; position: relative; box-shadow: var(--shadow-float), inset 0 0 0 var(--hairline) var(--glass-edge); transition: transform var(--dur-press) var(--ease-spring); }

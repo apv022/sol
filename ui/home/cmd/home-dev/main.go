@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -40,6 +41,22 @@ type server struct {
 	agents  []m
 	subs    map[chan string]bool
 	nextID  int
+	// My profile (design/ADMIN.md §Profile): a name ("" shows the certificate's) and a picture.
+	meName string
+	avatar []byte
+	avType string
+}
+
+// me is GET /admin/v1/me. Callers hold s.mu.
+func (s *server) me() m {
+	out := m{"id": "alice", "name": "Alice Lindqvist", "name_source": "certificate", "cert_name": "Alice Lindqvist", "can_sign": true}
+	if s.meName != "" {
+		out["name"], out["name_source"] = s.meName, "profile"
+	}
+	if s.avatar != nil {
+		out["avatar"], out["avatar_hash"] = fmt.Sprintf("/avatars/fake%d", len(s.avatar)), "sha256:fake"
+	}
+	return out
 }
 
 // now and ago give RFC 3339 strings, the one time format of the admin API (design/ADMIN.md).
@@ -110,7 +127,7 @@ func write(w http.ResponseWriter, code int, v any) {
 
 func (s *server) status() m {
 	return m{
-		"me":            m{"person": m{"id": "alice", "name": "Alice Lindqvist"}, "device": m{"id": "alice-laptop", "name": "Alice's laptop"}},
+		"me":            m{"person": m{"id": "alice", "name": s.me()["name"]}, "device": m{"id": "alice-laptop", "name": "Alice's laptop"}, "profile": s.me()},
 		"endpoints":     []m{{"addr": "203.0.113.7:7777", "kind": "public"}, {"addr": "192.168.1.20:7777", "kind": "lan"}},
 		"transports":    []m{{"name": "clearnet", "state": "up"}, {"name": "relay", "state": "up"}, {"name": "tor", "state": "off"}},
 		"peer_sessions": []m{{"id": "s1", "peer": "Bob \u00b7 Bob's phone", "relation": "contact", "since": ago(20 * time.Minute)}},
@@ -124,6 +141,18 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	p := strings.TrimPrefix(r.URL.Path, "/admin/v1/")
 	parts := strings.Split(p, "/")
+	if p == "me/avatar" && r.Method == "PUT" {
+		b := make([]byte, 64<<10+1)
+		n, _ := io.ReadFull(r.Body, b)
+		if n == 0 || n > 64<<10 {
+			write(w, 400, m{"error": m{"code": "bad_request", "message": "the picture must be at most 64 KiB"}})
+			return
+		}
+		s.avatar, s.avType = b[:n], r.Header.Get("Content-Type")
+		s.publish("status", m{})
+		write(w, 200, s.me())
+		return
+	}
 	var body m
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -132,6 +161,16 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "status":
 		write(w, 200, s.status())
+	case p == "me" && r.Method == "PATCH":
+		s.meName, _ = body["name"].(string)
+		s.publish("status", m{})
+		write(w, 200, s.me())
+	case p == "me/avatar" && r.Method == "DELETE":
+		s.avatar = nil
+		s.publish("status", m{})
+		write(w, 200, s.me())
+	case p == "me":
+		write(w, 200, s.me())
 	case p == "people":
 		write(w, 200, s.people)
 	case parts[0] == "people" && len(parts) == 2:
@@ -306,6 +345,18 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin/v1/events", s.events)
 	mux.HandleFunc("/admin/v1/", s.admin)
+	mux.HandleFunc("/avatars/", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		b, t := s.avatar, s.avType
+		s.mu.Unlock()
+		if b == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", t)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(b)
+	})
 	mux.Handle("/kit/", http.StripPrefix("/kit/", http.FileServerFS(kit.FS)))
 	mux.Handle("/sol.js", http.FileServerFS(js.FS))
 	mux.HandleFunc("/_sol/theme.css", func(w http.ResponseWriter, r *http.Request) {

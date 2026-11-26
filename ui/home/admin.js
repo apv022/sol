@@ -43,6 +43,13 @@ export function createAdmin({ fetch: f, base = '/admin/v1', onUnauthorized, Even
 
   return {
     status: () => get('status'),
+    /** My profile: `{id, name, name_source, cert_name, avatar, avatar_hash, can_sign}`. */
+    me: () => get('me'),
+    /** Changes my name ("" shows my certificate's name again). Answers my profile. */
+    setName: (name) => req('PATCH', 'me', { name }),
+    /** Uploads my picture: a small square image Blob (encodeAvatar). Answers my profile. */
+    setAvatar: (blob) => req('PUT', 'me/avatar', undefined, { body: blob, type: blob.type || 'application/octet-stream' }),
+    clearAvatar: () => req('DELETE', 'me/avatar'),
     people: () => get('people'),
     renamePerson: (id, petname) => req('PATCH', `people/${enc(id)}`, { petname }),
     /** Anonymous: Tor only both ways, they only learn my onion; false makes them a buddy. */

@@ -118,6 +118,28 @@ their certificate name. The picture is fetched once per hash (`/p/avatar`) and c
 **anonymous** contact is never sent my picture (it could identify me) and gets a profile with
 `avatar` "" (signed separately, same `seq`, like the anonymous endpoint record).
 
+Settled when built (`internal/identity/profile.go`, `internal/session/profile.go`):
+
+- `name` "" means "no profile name": the certificate's name shows. `seq` is chosen like every
+  other (`max(previous + 1, unix seconds)`), above anything the signing device stored.
+- At an equal `seq`, the form with a picture replaces the form without one when the names agree
+  (both are signed by `P`), so a contact switched from anonymous to buddy gets my picture without
+  a re-sign; the reverse adds nothing (they already saw it). Anything else at an equal `seq` is a
+  conflict and ignored.
+- **Devices without P** (every joined device: P is never handed out yet) cannot sign. A change
+  made on one is **forwarded** to an admin device of mine over a session (`POST
+  /p/profile/edit`), which signs both forms, stores and pushes them, and answers them, so the
+  change shows on the forwarding device at once. With no admin device reachable the change fails
+  with `unavailable`, naming the admin devices ("only an admin device can sign your profile
+  (laptop), and none is reachable now"); nothing is queued, so a change never lands later by
+  surprise. The anonymous form travels with the full form between my devices, since a device
+  without P could not make it.
+- A profile left signed by a rotated `P` stops counting; the admin device holding the new `P`
+  re-signs it (next `seq`) when its bundle changes.
+- Storage: `profiles.json` (0600, atomic; my profile, its anonymous form and my previous avatar,
+  and each contact's newest profile) and `avatars/<hex>` (0600, directory 0700) in the data
+  directory. A picture is dropped once no stored profile (or my previous avatar) names it.
+
 ## The identity bundle
 
 What a device presents in a handshake, so the other side can check the whole chain in one go:
