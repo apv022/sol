@@ -97,6 +97,27 @@ both forms of one `seq`: making a contact anonymous or a buddy re-signs the reco
 `seq` first. The flag is `anonymous` on the contact's entry in my contacts feed, so every device of
 mine applies it.
 
+### Profile (signed by P)
+
+```
+lp("sol profile v1") | lp(R_pub) | u64(seq) | lp(name) | lp(avatar)
+```
+How I want to be shown: a display name (at most 256 bytes) and `avatar`, the `sha256:<hex>` of a
+small square picture (at most 64 KiB, JPEG, PNG or WebP; "" for none). It is signed by `P`, which
+every admin device holds, so changing my name or picture never needs the 24 words (the person
+certificate's `name` is signed by `R`, which a device keeps only until the backup is confirmed,
+and stays as the name of last resort). The highest `seq` wins; a profile signed by an older `P`
+is invalid once a newer person certificate is seen.
+
+The profile is **not part of the bundle**: devices on an older version parse a bundle as exactly
+three parts and would reject a fourth. It travels on its own (PROTOCOL.md, `/p/profile`), so an
+older device simply never asks for it and keeps showing the certificate's name.
+
+Shown name, everywhere: my own petname for the person if I set one, else their profile name, else
+their certificate name. The picture is fetched once per hash (`/p/avatar`) and cached; an
+**anonymous** contact is never sent my picture (it could identify me) and gets a profile with
+`avatar` "" (signed separately, same `seq`, like the anonymous endpoint record).
+
 ## The identity bundle
 
 What a device presents in a handshake, so the other side can check the whole chain in one go:

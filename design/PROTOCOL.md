@@ -225,6 +225,9 @@ The caller's verified person, device and relation (`self` or `contact`) are know
 |---|---|---|
 | `GET /p/bundle` | any | latest identity bundle (to pick up rotations) |
 | `POST /p/bundle` | any (see §Settled in C3) | push bundles: my changed bundle, or a contact's relayed between my devices; 204 |
+| `GET /p/profile` | self, contacts | my latest profile (IDENTITY.md §Profile); an anonymous contact gets the form without the avatar; 404 when I never set one |
+| `POST /p/profile` | self, contacts | push my changed profile, or (between my devices) a contact's, relayed like bundles; 204. Pushed to every open session when it changes, and fetched by the other side when a session comes up |
+| `GET /p/avatar/{hash}` | self, buddies (never anonymous contacts) | the picture my profile names, only if `hash` is my current or previous avatar |
 | `POST /p/sync` | self, contacts | feed replication: body is the list of feeds + `have` seqs; the response streams missing entries, then new ones live |
 | `GET /p/blobs/{hash}` | per API.md §4 rule; self always | blob bytes, `Range` supported |
 | `POST /p/actions/{name}` | per sharing + scopes | run an action on this device's app, caller headers attached |
@@ -251,7 +254,11 @@ verifies. A gap means fetch the missing range first. Two different entries with 
 from the owner (a fork, e.g. two devices appending offline) are both kept: feeds are per
 **device** under the hood (`<person>/<app>/<feed>@<device>`), and the API.md feed is the merge of
 a person's device feeds ordered by `(unix_ms, device)`. This keeps every chain linear and
-fork-free without coordination.
+fork-free without coordination. A device stamps a new entry after every entry of the feed it
+already holds (`unix_ms` is at least the newest one + 1, even if its own clock is behind), so an
+entry written knowing another one sorts after it; blob releases (API.md §4) rely on this. The
+wire format is unchanged: `release` is an ordinary body field that each daemon reads from the
+entries it stores.
 
 ### `/p/sync` format (settled in C4)
 
