@@ -42,6 +42,8 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIF = 2;
     /** Boolean extra: open Sol to ask for the Wi-Fi Direct permission (WifiDirect's notification). */
     static final String EXTRA_WIFI_DIRECT_ASK = "wifi_direct_ask";
+    /** Boolean extra: open Sol to ask for the Bluetooth permissions (Ble's notification). */
+    static final String EXTRA_BLE_ASK = "ble_ask";
     /** String extra: a local Sol URL to open (a notification's "Sol inbox"). */
     static final String EXTRA_URL = "url";
 
@@ -77,6 +79,16 @@ public class MainActivity extends Activity {
         if (in.getBooleanExtra(EXTRA_WIFI_DIRECT_ASK, false)) { // the permission notification
             in.removeExtra(EXTRA_WIFI_DIRECT_ASK);
             sw.setWifiDirect(true);
+        }
+        if (in.getBooleanExtra(EXTRA_BLE_ASK, false)) { // the Bluetooth permission notification
+            in.removeExtra(EXTRA_BLE_ASK);
+            sw.setBle(true);
+        }
+        // A debug build also takes `--ez ble true|false` (the SolAndroid.ble path).
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 && in.hasExtra("ble")) {
+            boolean on = in.getBooleanExtra("ble", false);
+            in.removeExtra("ble");
+            sw.setBle(on);
         }
         // A debug build also takes `--ez wifi_direct true|false` (the SolAndroid.wifiDirect path).
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 && in.hasExtra("wifi_direct")) {

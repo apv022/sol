@@ -11,9 +11,10 @@ import (
 	"github.com/apv022/sol/internal/daemon"
 )
 
-// nearbyCmd is `sol nearby ad|match|interfaces|report`: the Android shell's Wi-Fi Direct
-// plumbing (design/PROTOCOL.md §Nearby "Wi-Fi Direct (Android)"), not a person's operation
-// (that is `sol do sol.nearby --wifi_direct on|off`). Requests that carry a group passphrase
+// nearbyCmd is `sol nearby ad|match|interfaces|report|ble-ad|ble-match|ble-report`: the Android
+// shell's Wi-Fi Direct and Bluetooth LE plumbing (design/PROTOCOL.md §Nearby "Wi-Fi Direct",
+// "Bluetooth LE"), not a person's operation (that is `sol do sol.nearby --wifi_direct|--ble
+// on|off`). Requests that carry a group passphrase
 // come on stdin ("-"), never in argv; replies are JSON.
 func nearbyCmd(ctx context.Context, c *daemon.Client, cmd string, args []string, stdin io.Reader, out io.Writer) error {
 	readIn := func(v any) error {
@@ -49,6 +50,26 @@ func nearbyCmd(ctx context.Context, c *daemon.Client, cmd string, args []string,
 			return err
 		}
 		res = plan
+	case "nearby ble-ad", "nearby ble-match":
+		var in json.RawMessage
+		if err := readIn(&in); err != nil {
+			return err
+		}
+		var reply json.RawMessage
+		if err := c.Do(ctx, "POST", "/admin/v1/nearby/ble/"+strings.TrimPrefix(cmd, "nearby ble-"), in, &reply); err != nil {
+			return err
+		}
+		res = reply
+	case "nearby ble-report":
+		if len(args) == 0 {
+			return errors.New("usage: sol nearby ble-report <state> [detail]")
+		}
+		var st json.RawMessage
+		if err := c.Do(ctx, "POST", "/admin/v1/nearby/ble/report",
+			map[string]string{"state": args[0], "detail": strings.Join(args[1:], " ")}, &st); err != nil {
+			return err
+		}
+		res = st
 	case "nearby interfaces":
 		addrs := []netip.Addr{}
 		for _, a := range args {
@@ -74,7 +95,7 @@ func nearbyCmd(ctx context.Context, c *daemon.Client, cmd string, args []string,
 		}
 		res = st
 	default:
-		return errors.New("usage: sol nearby ad [-] | match - | interfaces [IPv4...] | report <state> [detail]")
+		return errors.New("usage: sol nearby ad [-] | match - | interfaces [IPv4...] | report <state> [detail] | ble-ad - | ble-match - | ble-report <state> [detail]")
 	}
 	enc := json.NewEncoder(out)
 	return enc.Encode(res)

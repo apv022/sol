@@ -26,6 +26,8 @@
 //	<dir>/run/             api.sock and the apps' sockets; a short temporary directory instead
 //	                       when <dir> is too deep for a unix socket path
 //	<dir>/tor/, wg.key     transport state
+//	<dir>/channels/        app channels: hosted channels, artifacts, installed apps' pins
+//	                       (channels.go); <dir>/channel-keys/ holds channel keys (0600)
 //
 // Invariants:
 //   - A first run creates the identity (Init); Start never does, so a typo in --dir cannot
@@ -104,6 +106,9 @@ type Config struct {
 	// WifiDirect: true lets the Android shell form Wi-Fi Direct groups with nearby kept
 	// devices (design/PROTOCOL.md §Nearby "Wi-Fi Direct"); absent means off.
 	WifiDirect *bool `json:"wifi_direct,omitempty"`
+	// BLE: true lets the Android shell advertise, scan and link over Bluetooth LE with nearby
+	// kept devices (design/PROTOCOL.md §Nearby "Bluetooth LE"); absent means off.
+	BLE *bool `json:"ble,omitempty"`
 }
 
 // InitOptions are the choices of a first run.
@@ -267,6 +272,9 @@ type Options struct {
 	// whenever that set changes, so `sol run` can keep the app-menu entries in step
 	// (internal/autostart). Tests leave it nil: they must never touch the real desktop.
 	OnApps func([]apphost.MenuApp)
+	// MirrorClient fetches app artifacts from channel mirrors over HTTPS (nil: a default
+	// client). Tests inject one that trusts their TLS server.
+	MirrorClient *http.Client
 	// NearbyNet, if set, carries nearby beacons instead of UDP multicast (tests: an in-memory
 	// nearby.Bus, on which loopback sources count as the LAN).
 	NearbyNet nearby.Network
@@ -321,8 +329,10 @@ type Daemon struct {
 	pets       *petnames
 	ports      *portShare
 	onions     *publicOnions   // public onion services (onions.go)
+	chans      *chanState      // app channels: hosting, following, installing (channels.go)
 	near       *nearby.Service // LAN discovery (nearby.go)
 	wd         wifiDirect      // the Android shell's Wi-Fi Direct (nearby.go)
+	bt         bleShell        // the Android shell's Bluetooth LE (nearby_ble.go)
 	admin      http.Handler
 	wg         sync.WaitGroup // background goroutines (the theme watcher, the folder measurement)
 	folder     folderSize     // cached size of the synced folder (foldersize.go)
@@ -427,7 +437,7 @@ func Start(o Options) (_ *Daemon, err error) {
 		return nil, err
 	}
 	if d.Blobnet, err = blobnet.New(blobnet.Config{Blobs: d.Blobs, Feeds: d.Store, Refs: d.Refs, Pins: d.Pins,
-		Sessions: func() []*session.Session { return d.Sessions.Sessions() }, Anchor: d.anchor, Log: d.log}); err != nil {
+		Sessions: d.blobSessions, Anchor: d.anchor, Log: d.log}); err != nil {
 		return nil, err
 	}
 	peerMux := http.NewServeMux()
@@ -437,6 +447,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	peerMux.HandleFunc("POST "+ServicesPushPath, func(w http.ResponseWriter, r *http.Request) { d.ports.peerPush(w, r) })
 	peerMux.HandleFunc("POST "+UnpairPath, d.peerUnpair)
 	d.transports = d.newTransports(cfg.Transports)
+	d.addBLE()
 	d.tokens, d.accessKick = pairing.NewTokens(), make(chan struct{}, 1)
 	d.tokens.OnChange = d.kickAccess
 	profiles, err := session.NewProfiles(o.Dir)
@@ -451,6 +462,9 @@ func Start(o Options) (_ *Daemon, err error) {
 		return nil, err
 	}
 	if d.onions, err = newPublicOnions(d); err != nil {
+		return nil, err
+	}
+	if d.chans, err = newChanState(d, o.MirrorClient); err != nil {
 		return nil, err
 	}
 	if d.ports, err = openPortShare(d, filepath.Join(o.Dir, "services.json"), filepath.Join(o.Dir, "tunnels.json")); err != nil {
@@ -513,6 +527,7 @@ func Start(o Options) (_ *Daemon, err error) {
 	d.watchNetwork()
 	d.watchContacts()
 	d.watchAccess()
+	d.chans.start()
 	return d, nil
 }
 

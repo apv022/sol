@@ -14,6 +14,15 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
     <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <!-- Nearby over Bluetooth LE (Ble): asked for only when the person turns it on. Android 12+
+         needs the three Nearby devices permissions (Sol never derives a location from a scan);
+         Android 10 and 11 need the install-time Bluetooth permissions and fine location (above). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- ConnectActivity hides other apps' overlays while it asks for approval. -->
     <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />

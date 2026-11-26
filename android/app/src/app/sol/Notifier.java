@@ -131,6 +131,7 @@ final class Notifier {
             item(data, false);
         } else if ("nearby".equals(type) && data != null) {
             svc.wifiDirect.onNearby(data); // the Wi-Fi Direct switch, from any device or agent
+            svc.ble.onNearby(data); // and the Bluetooth LE one
         }
     }
 

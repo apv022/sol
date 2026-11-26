@@ -48,6 +48,8 @@ final class SolWeb {
     static final int REQ_CALENDAR = 3;
     /** The Nearby devices (or, below Android 13, location) request (wifiDirect(true)). */
     static final int REQ_WIFI_DIRECT = 4;
+    /** The Bluetooth permissions request (ble(true)). */
+    static final int REQ_BLE = 5;
 
     private final Activity act;
     private final FrameLayout root;
@@ -387,6 +389,11 @@ final class SolWeb {
             else wifiDirectChanged(false, "the Nearby devices permission was refused");
             return;
         }
+        if (req == REQ_BLE) {
+            if (ok) setBle(true);
+            else bleChanged(false, "the Bluetooth permission was refused");
+            return;
+        }
         if (req != REQ_CALENDAR) return;
         if (ok) setCalendarSync(true);
         else calendarSyncChanged(false);
@@ -427,6 +434,33 @@ final class SolWeb {
             boolean ok = r[0].equals("0");
             act.runOnUiThread(() -> wifiDirectChanged(ok ? on : WifiDirect.wanted(app), ok ? "" : r[1]));
         }, "sol-wifi-direct-switch").start();
+    }
+
+    /**
+     * The Bluetooth LE switch: on asks for the permissions it needs first (Nearby devices on
+     * Android 12+, location below), then runs `sol do sol.nearby --ble on|off`; the outcome
+     * arrives as a "sol-ble" event on window (detail.on, detail.error).
+     */
+    void setBle(boolean on) {
+        if (on && !Ble.permitted(act)) {
+            act.requestPermissions(Ble.PERMISSIONS, REQ_BLE);
+            return;
+        }
+        if (on) Ble.permissionGiven(act);
+        android.content.Context app = act.getApplicationContext();
+        new Thread(() -> {
+            String[] r = NodeService.cli2(app, "do", "sol.nearby", "--ble", on ? "on" : "off", "--json");
+            boolean ok = r[0].equals("0");
+            act.runOnUiThread(() -> bleChanged(ok ? on : Ble.wanted(app), ok ? "" : r[1]));
+        }, "sol-ble-switch").start();
+    }
+
+    private void bleChanged(boolean on, String error) {
+        if (web == null) return;
+        String u = web.getUrl();
+        if (u == null || !isLocal(Uri.parse(u))) return;
+        web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sol-ble',{detail:{on:" + on
+                + ",error:" + org.json.JSONObject.quote(error == null ? "" : error) + "}}))", null);
     }
 
     private void wifiDirectChanged(boolean on, String error) {
@@ -563,6 +597,27 @@ final class SolWeb {
         /** Whether the Nearby devices permission Wi-Fi Direct needs is granted. */
         @android.webkit.JavascriptInterface
         public boolean wifiDirectPermitted() { return local() && WifiDirect.permitted(act); }
+
+        /**
+         * The Bluetooth LE switch (find nearby devices with Wi-Fi off; small syncs with no network
+         * at all): true asks for the Bluetooth permissions first, then turns it on; false turns it
+         * off. Answers at once whether the request was taken; the outcome is a "sol-ble" event on
+         * window (detail.on, detail.error).
+         */
+        @android.webkit.JavascriptInterface
+        public boolean ble(boolean on) {
+            if (!local()) return false;
+            act.runOnUiThread(() -> setBle(on));
+            return true;
+        }
+
+        /** Whether Bluetooth LE is switched on (config.json; state: `sol do sol.nearby`). */
+        @android.webkit.JavascriptInterface
+        public boolean bleEnabled() { return local() && Ble.wanted(act); }
+
+        /** Whether the permissions Bluetooth LE needs are granted. */
+        @android.webkit.JavascriptInterface
+        public boolean blePermitted() { return local() && Ble.permitted(act); }
 
         /** Whether Sol's calendars are in the phone's calendar apps now. */
         @android.webkit.JavascriptInterface

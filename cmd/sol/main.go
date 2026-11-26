@@ -27,7 +27,7 @@
 //	sol backup words|confirm          the 24 recovery words
 //	sol restore --words "..."         set up a fresh directory from the words
 //	sol network-changed [reason]      redial peers now (OS network callbacks)
-//	sol nearby ad|match|interfaces|report   the Android shell's Wi-Fi Direct plumbing (JSON)
+//	sol nearby ad|match|interfaces|report|ble-ad|ble-match|ble-report   the Android shell's Wi-Fi Direct and Bluetooth LE plumbing (JSON)
 //	sol open [--print] [app]          open the Sol app (or one app, e.g. `sol open files`) in the browser, logged in
 //	sol service add|list|remove       share a local port with people (port sharing)
 //	sol tunnel open|list|close        open a contact's service on a local port
@@ -158,10 +158,13 @@ const usage = `usage: sol <command> [flags]
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
   network-changed [reason]
   nearby ad [-] | nearby match - | nearby interfaces [IPv4...] | nearby report <state> [detail]
-                                    the Android app's Wi-Fi Direct plumbing (JSON; requests on stdin)
+  nearby ble-ad - | nearby ble-match - | nearby ble-report <state> [detail]
+                                    the Android app's Wi-Fi Direct and Bluetooth LE plumbing (JSON; requests on stdin)
   open [--print] [app]              open the Sol app, or one app (sol open files), in the browser; --print only prints the URL
   service add <name> <port> [--http] [--with PERSON]... | service list | service remove <name>
   tunnel open <person> <service> [--port N] | tunnel list | tunnel close <id>
+  channel new <name> | channel publish --key K --app ID --version V --artifact PLATFORM=FILE... | channel import <record> | channel list | channel remove <name>
+                                    publish app releases on this node's public onion (sol channel for more)
 
 Every command takes --dir DIR (default $SOL_DIR, else ~/.local/share/sol on Linux,
 ~/Library/Application Support/Sol on macOS, %LOCALAPPDATA%\Sol on Windows).`
@@ -179,6 +182,8 @@ func run(args []string) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "channel":
+		return channelCmd(rest)
 	case "transports", "people", "notifications":
 		if cmd == "notifications" && (len(rest) == 0 || strings.HasPrefix(rest[0], "-")) {
 			rest = append([]string{"status"}, rest...)
@@ -631,7 +636,7 @@ func run(args []string) error {
 		return portCmd(ctx, c, cmd, fs.Args(), *asJSON, *svcHTTP, people, *port)
 	case "transports list", "transports enable", "transports disable":
 		return transportsCmd(ctx, c, cmd, fs.Args(), *asJSON)
-	case "nearby ad", "nearby match", "nearby interfaces", "nearby report":
+	case "nearby ad", "nearby match", "nearby interfaces", "nearby report", "nearby ble-ad", "nearby ble-match", "nearby ble-report":
 		return nearbyCmd(ctx, c, cmd, fs.Args(), os.Stdin, os.Stdout)
 	case "people list", "people set":
 		return peopleCmd(ctx, c, cmd, fs.Args(), *asJSON, *inviteAnon, *buddy)

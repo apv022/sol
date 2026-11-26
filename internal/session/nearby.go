@@ -5,6 +5,8 @@ package session
 // device's newest signed endpoint record for a while (the record's keys stay, and the
 // handshake authenticates whoever answers); the device's keeper is woken so it redials, or
 // moves a session on a worse path (Tor) to the LAN, through the usual ranking and probation.
+// A Bluetooth LE link (§Nearby "Bluetooth LE") is a hint of the same kind: a "ble" endpoint
+// added while the link waits (NoteBLE).
 // Anonymous contacts never get here: they are not offered to the beacon (NearbyPeers), and a
 // hint for one is ignored.
 
@@ -32,6 +34,9 @@ type NearbyPeer struct {
 	Person, Device ed25519.PublicKey
 	// Connected: a live session with it exists.
 	Connected bool
+	// OverBLE: that session runs over Bluetooth LE (dialed over it, or accepted on the BLE
+	// listener), so an IP path is still worth finding.
+	OverBLE bool
 }
 
 // NearbyPeers returns the kept devices (my other devices, my buddies' devices) that nearby
@@ -42,7 +47,9 @@ func (m *Manager) NearbyPeers() []NearbyPeer {
 	var out []NearbyPeer
 	for _, k := range m.keepers {
 		s := m.sessions[string(k.device)]
-		out = append(out, NearbyPeer{Person: k.person, Device: k.device, Connected: s != nil && s.Alive()})
+		alive := s != nil && s.Alive()
+		out = append(out, NearbyPeer{Person: k.person, Device: k.device, Connected: alive,
+			OverBLE: alive && (s.path.Transport == "ble" || s.path.Via == "ble")})
 	}
 	m.mu.Unlock()
 	return slices.DeleteFunc(out, func(p NearbyPeer) bool { return m.Anonymous(p.Person) })
@@ -81,6 +88,26 @@ func (m *Manager) NoteNearby(device ed25519.PublicKey, addrs map[string]string) 
 	return true
 }
 
+// NoteBLE records that a Bluetooth LE link to device waits at addr (transport.BLEAddr) and wakes
+// its keeper, which dials it if no IP path answers (ble ranks last). It reports false, and does
+// nothing, for a device that isn't kept or is an anonymous contact's.
+func (m *Manager) NoteBLE(device ed25519.PublicKey, addr string) bool {
+	m.mu.Lock()
+	k := m.keepers[string(device)]
+	m.mu.Unlock()
+	if k == nil || m.Anonymous(k.person) {
+		return false
+	}
+	m.mu.Lock()
+	if m.bleHints == nil {
+		m.bleHints = map[string]nearbyHint{}
+	}
+	m.bleHints[string(device)] = nearbyHint{addrs: map[string]string{"ble": addr}, at: time.Now()}
+	m.mu.Unlock()
+	k.poke()
+	return true
+}
+
 // withNearby returns rec with a fresh nearby hint for its device folded in: the hinted address
 // first among the candidates of its WireGuard and TLS direct endpoints, and an extra clearnet
 // endpoint before the record's own. Transports the record lacks are not added (their keys
@@ -92,7 +119,15 @@ func (m *Manager) withNearby(rec identity.EndpointRecord) identity.EndpointRecor
 		delete(m.nearby, string(rec.Device))
 		ok = false
 	}
+	bh, bok := m.bleHints[string(rec.Device)]
+	if bok && time.Since(bh.at) >= NearbyTTL {
+		delete(m.bleHints, string(rec.Device))
+		bok = false
+	}
 	m.mu.Unlock()
+	if bok { // a waiting Bluetooth LE link: never in a signed record, only ever a hint
+		rec.Endpoints = append(slices.Clip(rec.Endpoints), identity.Endpoint{Transport: "ble", Address: bh.addrs["ble"]})
+	}
 	if !ok {
 		return rec
 	}

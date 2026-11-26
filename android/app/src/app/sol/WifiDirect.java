@@ -77,6 +77,7 @@ final class WifiDirect {
     private String ssid, pass;
     private long pendingUntil;
     private long lastMemberAt;
+    private long kickedAt;
     private String reported = "";
     private final Map<String, WifiDirectPolicy.Record> seen = new LinkedHashMap<>();
     private final Runnable rediscover = this::discover;
@@ -111,6 +112,20 @@ final class WifiDirect {
         JSONObject wd = st.optJSONObject("wifi_direct");
         boolean on = st.optBoolean("enabled", false) && wd != null && wd.optBoolean("enabled", false);
         main.post(() -> apply(on));
+    }
+
+    /**
+     * Bluetooth LE recognised a kept device that has Wi-Fi Direct on too (Ble): advertise and
+     * discover now rather than at the next round, at most every KICK_MS.
+     */
+    void kick() {
+        main.post(() -> {
+            long now = System.currentTimeMillis();
+            if (!running || now - kickedAt < WifiDirectPolicy.KICK_MS) return;
+            kickedAt = now;
+            advertise();
+            discover();
+        });
     }
 
     /** The node stops: leave the group and stop advertising. */

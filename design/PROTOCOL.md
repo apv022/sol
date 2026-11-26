@@ -538,6 +538,114 @@ client","seen":[{"id","txt"}]}` and prints `{"role","id","group","matched":[ids]
 interfaces [ipv4...]`; `sol nearby report <state> [detail]`. Endpoints: `POST
 /admin/v1/nearby/wifi-direct/{ad,match,report}`, `POST /admin/v1/nearby/interfaces`.
 
+### Bluetooth LE (Android, nearby step 3)
+
+Wi-Fi Direct needs Wi-Fi on and its discovery can take minutes; some phones have none. Bluetooth
+LE is on almost every phone and costs little to keep scanning, so on Android the shell also
+advertises and scans over BLE. It does two things: **discovery** (a recognised advert triggers
+the Wi-Fi Direct link above, or a session), and a **slow fallback carrier**: when no IP link can be
+formed at all, an L2CAP connection-oriented channel between the two phones carries one session,
+for the small syncs (notes, tasks, calendars, profiles). Files are not fetched over it (blobs skip
+sessions on BLE): a phone's Bluetooth moves tens of kilobytes a second at best. Android only:
+desktops answer `not_implemented`, and their status says `unavailable` (Linux would need BlueZ
+over D-Bus, macOS and Windows a native bridge; nothing is built).
+
+**Who does what.** As for Wi-Fi Direct: the shell drives the radio (`BluetoothLeAdvertiser`,
+`BluetoothLeScanner`, L2CAP sockets) and the daemon owns every key, tag and decision through
+short commands (`libsol.so nearby ble-...`, below). A match grants nothing: a link only carries
+bytes, and the session handshake on it authenticates both ends as on any other transport.
+
+**Advertising.** A connectable legacy advertising set (Android 8+ `AdvertisingSet`, interval
+250 ms) whose advertisement and scan response each carry one 128-bit service data structure under
+Sol's service UUID `36360d3f-85e7-4adb-8ab0-1a8849b5fa1b`. A legacy advertisement is 31 bytes: the
+flags (3) and the service data header (2 + 16 for the UUID) leave **10 bytes**, so an entry is:
+
+```
+out   = HMAC-SHA256(K, "ble" | D_sender | u64(w))        K and w as for beacons
+entry = u8 version (1) | out[0:6] | ([psm, flags, 0] XOR out[6:9])     10 bytes
+psm   = the LE PSM this phone's L2CAP server listens on (dynamic PSMs are 0x80-0xFF; 0: none)
+flags = bit 0: this phone's Wi-Fi Direct is on and working; other bits zero
+```
+
+One entry per kept device (the same set as beacons and Wi-Fi Direct ads), those without a session
+over an IP path first, at most 8, padded with random entries to a multiple of 4 and shuffled
+(`sol nearby ble-ad`). Two entries go out at a time (advertisement and scan response); the shell
+rotates to the next pair every 3 seconds. The label `"ble"` keeps adverts unlinkable to beacons
+and Wi-Fi Direct ads. When every kept device has a session over an IP path the list is empty and
+the shell stops advertising (it asks again when the window turns, `expires`). Extended advertising
+would fit every entry in one advert, but scanners in low-power mode, and many phones, only see
+legacy adverts; it is not used.
+
+**Scanning.** `BluetoothLeScanner` with a filter on Sol's service UUID (so Android keeps scanning
+with the screen off, and in hardware where it can) in `SCAN_MODE_LOW_POWER`, duty-cycled: 30 s on,
+30 s off. The shell collects the entries each advertiser sent in the last 5 minutes (it parses the
+raw advert bytes, since an advert and its scan response carry two service data structures under
+one UUID) and hands them, keyed by an opaque handle for the Bluetooth device, to `sol nearby
+ble-match`. Each entry is one lookup in a table of the tags kept devices send in windows `w-1`,
+`w`, `w+1`; the unmasked last byte must be zero and the flags' other bits too (15 check bits
+behind the 48-bit tag). The reply says, per recognised device:
+
+- nothing, if a session to it runs over an IP path;
+- `wifi-direct`: both phones have Wi-Fi Direct on and working; the shell makes Wi-Fi Direct
+  advertise and discover now (at most every 30 s) instead of waiting for its next round. This is
+  tried for the first 60 s after a device without a session is seen, and every 2 minutes for a
+  device whose only session runs over BLE (to move it to the faster link);
+- `connect` (with the device's `psm` and a `link` handle): no session at all, and either this
+  device's key sorts lower (so two phones don't both connect) or the device has been seen for
+  20 s without a link from it (its scans may miss my adverts). At most every 30 s per device.
+
+and `scan`: false when every kept device has a session over an IP path; the shell then stops
+scanning (and advertising) for 5 minutes before it looks again.
+
+**The link.** The shell listens with `BluetoothAdapter.listenUsingInsecureL2capChannel()` while
+BLE is on (its PSM goes into the entries), and for `connect` opens
+`BluetoothDevice.createInsecureL2capChannel(psm)` (Android 10+, API 29; older phones show the
+switch as unsupported). "Insecure" means no Bluetooth pairing dialog: the channel's own encryption
+is not relied on, the session's is. Each link is bridged to the daemon as one loopback TCP
+connection to the BLE transport's bridge port (`bridge` in `ble-ad`'s reply), which starts with one
+line: `SOLBLE1 out <link>\n` for a channel this phone opened, `SOLBLE1 in\n` for one it accepted.
+After the line the connection is the channel's bytes, both ways; either end closing closes both.
+
+- `in` connections go to a listener of their own that the session layer serves like the node
+  listener, so an inbound session knows it came over BLE (`PathInfo.Via`).
+- `out` connections are kept for 60 s under the address `ble:<device key, hex>` of the device the
+  `link` handle was issued for (an unknown or expired handle is closed without a word), and the
+  device's keeper is woken with that address as a hint (like a beacon's). It dials as usual; the
+  BLE transport's `Dial` hands over the waiting link, once.
+
+**Ranking.** `ble` is always ranked last, behind every IP path, healthy or failed, so it carries a
+session only when nothing else answers, and counts as slow (probe timeouts as for Tor). While a
+session runs on it the keeper keeps probing the better paths (§Liveness and healing) and moves it
+the moment one is stable; LAN beacons and Wi-Fi Direct treat a device whose only session is on BLE
+as not connected, so they keep looking for an IP path. No address for BLE is ever published in an
+endpoint record: it exists only as a hint, while a link waits.
+
+**Lifecycle and power.** Off by default (`"ble": true` in `config.json` turns it on), only while
+the node runs and nearby itself is on: switched with `sol do sol.nearby --ble on|off` (dry-run as
+usual) or the shell's `SolAndroid.ble(on)` bridge, which asks for the permissions first. Android 12+
+needs `BLUETOOTH_SCAN` (declared `neverForLocation`), `BLUETOOTH_ADVERTISE` and
+`BLUETOOTH_CONNECT`; Android 10 and 11 need the install-time `BLUETOOTH` and `BLUETOOTH_ADMIN` and
+`ACCESS_FINE_LOCATION`. Turned on by an agent without them, the shell posts a notification that
+opens Sol to ask. Off, nothing is advertised or scanned, the server socket is closed and every link
+is cut. `sol do sol.nearby` (and the `nearby` row) shows `ble`: `{enabled, state, detail}`, the
+state reported by the shell (`off`, `searching`, `connected`, `unsupported`, `needs_permission`,
+`bluetooth_off`, `failed`); on desktops `unavailable`.
+
+**What an observer in radio range learns.** That a Sol phone is there (the service UUID) and
+roughly how many kept devices it has (entries rounded up to 4). Not who: entries are per pair and
+window, as for beacons. Android randomises the advertising address (on Android 10+ it changes
+about every 15 minutes), so within one address period the adverts can be linked, as the address
+itself can; the entries change every 5 minutes regardless. An L2CAP link shows that two phones
+talk; what they say is the session's (encrypted, authenticated). Replay is the residual risk, as
+for beacons: a replayed advert can make a phone open a link to the replayer, which then fails the
+handshake.
+
+**Shell commands** (admin API, not user operations): `sol nearby ble-ad -` reads `{"psm":N}` and
+prints `{"adverts":[base64 entries],"expires":unix,"bridge":port}`; `sol nearby ble-match -` reads
+`{"seen":[{"id","data":[base64 entries]}]}` and prints `{"actions":[{"id","do","psm","link"}],
+"matched":[ids],"scan":bool}`; `sol nearby ble-report <state> [detail]`. Link handles are
+unguessable (128 bits) and never logged. Endpoints: `POST /admin/v1/nearby/ble/{ad,match,report}`.
+
 ## Anonymous contacts (built in C10)
 
 Per person, I choose how much of my network a contact may see. **Buddies** (every contact by

@@ -233,6 +233,20 @@ debug). The node restarts with the app and keeps its identity, contacts and file
   how it is); turned on without the permission (by an agent), a notification opens Sol to ask.
   The shell runs the node with `SOL_ANDROID_SHELL=1`, the only case in which the node accepts
   the switch. Android shows the phone's own Wi-Fi Direct name to anyone scanning while it runs.
+- **Bluetooth LE** (off until turned on; Android 10+; design/PROTOCOL.md §Nearby "Bluetooth LE"):
+  finds kept devices with Wi-Fi off, and carries small syncs (notes, tasks, profiles; never files)
+  when no IP link can be made. `Ble` advertises the 10-byte entries the node makes (`libsol.so
+  nearby ble-ad`: rotating tags under Sol's service UUID, the L2CAP server's PSM masked for each
+  kept device), two at a time, rotating every 3 s; scans in low-power mode, 30 s on and 30 s off,
+  with a filter on the UUID; and asks `libsol.so nearby ble-match` what to do with what it saw:
+  kick Wi-Fi Direct (both phones have it on) or open an insecure L2CAP channel (the lower device
+  key connects). Every channel is bridged to the node as one loopback TCP connection (first line
+  `SOLBLE1 in` or `SOLBLE1 out <link>`), and the session handshake on it authenticates as on any
+  path; it ranks behind every IP path. Scanning and advertising rest while every kept device has
+  an IP session. The switch is `sol do sol.nearby --ble on|off` or `SolAndroid.ble(on)` (asks for
+  Nearby devices on Android 12+, location below; the outcome is a `sol-ble` event;
+  `SolAndroid.bleEnabled()` / `blePermitted()`); turned on without the permissions, a
+  notification opens Sol to ask.
 - **Share**: Sol is a share target for text and files (one or many). They are copied into
   `SolDrive/Inbox-from-share` and Files opens.
 - **Edge to edge**: the WebView fills the screen under transparent status and navigation bars.
@@ -365,7 +379,13 @@ builds) is the page switch: Android asks for Nearby devices, then `sol.nearby` s
 `wifi_direct.state` `searching`. The emulator has a Wi-Fi Direct framework but no peer to find
 or radio to form a group with, so it checks the switch, the permission, advertising and
 discovery only; the link itself needs two real phones. `android/test/run.sh` runs the shell's
-pure-logic tests (`WifiDirectPolicy`) on a plain JDK.
+pure-logic tests (`WifiDirectPolicy`, `BlePolicy`) on a plain JDK.
+
+Bluetooth LE: `adb shell am start -n app.sol/.MainActivity --ez ble true|false` (debug builds) is
+the page switch: Android asks for Nearby devices (location below Android 12), then `sol.nearby`
+shows `ble.state`. Most emulator images have no Bluetooth radio (state `unsupported` or
+`bluetooth_off`), so the emulator checks the switch and the permission flow only; advertising,
+scanning and L2CAP links need two real phones.
 
 ### For Android developers: make your app a Sol app
 

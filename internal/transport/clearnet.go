@@ -127,7 +127,7 @@ func (c *Clearnet) Handles(addr string) bool {
 	// Not a direct-mode address either: "sol-direct:" alone parses as a
 	// host and an empty port, and would otherwise make direct mode look
 	// available to the node when only clearnet is on.
-	return err == nil && !IsOnion(addr) && !IsI2P(addr) && !IsDirect(addr) && !IsWG(addr)
+	return err == nil && !IsOnion(addr) && !IsI2P(addr) && !IsDirect(addr) && !IsWG(addr) && !IsBLE(addr)
 }
 
 // Dial opens a direct TCP connection.

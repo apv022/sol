@@ -18,6 +18,10 @@
 - **Wi-Fi Direct (Android, off by default):** two phones link with no Wi-Fi network or mobile data
   at all, privately (only your devices and contacts recognise each other). Settings > Advanced >
   Transports > Wi-Fi Direct. Needs Android 10 or later.
+- **Bluetooth (Android, off by default):** phones find your nearby devices over Bluetooth LE even
+  with Wi-Fi off (and start Wi-Fi Direct when both have it), and when nothing else connects, notes,
+  tasks and profiles still sync over a Bluetooth link, slowly; files wait for a faster link.
+  Settings > Advanced > Transports > Bluetooth. Needs Android 10 or later.
 - **Public onion services in the Sharing page:** host a local port on Tor, copy its address,
   remove it.
 - The "It is a website" switch in "Share a service" was squashed under its label.

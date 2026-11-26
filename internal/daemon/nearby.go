@@ -10,7 +10,7 @@ package daemon
 // and the daemon only answers its short commands (the ad to advertise, what to do with the ads
 // seen, the group's interface addresses for beacons, its state), so no key leaves the daemon.
 // The switch is accepted only under the shell (SOL_ANDROID_SHELL=1); elsewhere it is
-// not_implemented.
+// not_implemented. Bluetooth LE (step 3) works the same way: nearby_ble.go.
 
 import (
 	"crypto/ed25519"
@@ -62,6 +62,7 @@ func (d *Daemon) startNearby() {
 		Log:           d.log,
 	})
 	d.near.SetEnabled(d.nearbyOn())
+	d.serveBLE()
 }
 
 // nearbyOn reports whether nearby is switched on in the config.
@@ -71,12 +72,13 @@ func (d *Daemon) nearbyOn() bool {
 	return d.cfg.Nearby == nil || *d.cfg.Nearby
 }
 
-// nearbyPeers are the devices beacons are for: kept ones, without anonymous contacts'.
+// nearbyPeers are the devices beacons are for: kept ones, without anonymous contacts'. A device
+// whose only session runs over Bluetooth LE counts as not connected: an IP path is worth finding.
 func (d *Daemon) nearbyPeers() []nearby.Peer {
 	ps := d.Sessions.NearbyPeers()
 	out := make([]nearby.Peer, len(ps))
 	for i, p := range ps {
-		out[i] = nearby.Peer{Device: p.Device, Connected: p.Connected}
+		out[i] = nearby.Peer{Device: p.Device, Connected: p.Connected && !p.OverBLE}
 	}
 	return out
 }
@@ -132,6 +134,8 @@ func (d *Daemon) Nearby() nearby.Status {
 	}
 	wd := d.wifiDirectStatus()
 	st.WifiDirect = &wd
+	bs := d.bleStatus()
+	st.BLE = &bs
 	return st
 }
 
@@ -307,6 +311,9 @@ func (d *Daemon) SetNearby(on bool) (nearby.Status, error) {
 	if d.near != nil {
 		d.near.SetEnabled(on)
 	}
+	if !on && d.bt.t != nil {
+		d.bt.t.CloseLinks() // Bluetooth LE runs only while nearby is on
+	}
 	d.activity("sol.nearby", map[string]string{"state": map[bool]string{true: "on", false: "off"}[on]}, nil)
 	d.nearbyChanged()
 	return d.Nearby(), nil
@@ -320,6 +327,12 @@ func (d *Daemon) nearbyRow() TransportState {
 		row.Detail += "; Wi-Fi Direct " + wd.State
 		if wd.Detail != "" {
 			row.Detail += ": " + wd.Detail
+		}
+	}
+	if bs := st.BLE; bs != nil && bs.Enabled {
+		row.Detail += "; Bluetooth LE " + bs.State
+		if bs.Detail != "" {
+			row.Detail += ": " + bs.Detail
 		}
 	}
 	if st.Enabled {

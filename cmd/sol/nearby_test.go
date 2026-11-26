@@ -41,6 +41,9 @@ func TestNearbyCmd(t *testing.T) {
 	if _, err := run("nearby ad", ""); err == nil || !strings.Contains(err.Error(), "Android") {
 		t.Fatalf("without the shell: %v", err)
 	}
+	if _, err := run("nearby ble-ad", `{"psm":128}`, "-"); err == nil || !strings.Contains(err.Error(), "Android") {
+		t.Fatalf("ble-ad without the shell: %v", err)
+	}
 	t.Setenv("SOL_ANDROID_SHELL", "1")
 	out, err := run("nearby ad", "")
 	var ad daemon.WifiDirectAd
@@ -67,5 +70,21 @@ func TestNearbyCmd(t *testing.T) {
 	}
 	if out, err = run("nearby report", "", "unsupported", "needs", "Android 10"); err != nil || !strings.Contains(out, "needs Android 10") {
 		t.Fatalf("report: %q %v", out, err)
+	}
+	// Bluetooth LE: requests on stdin only; the reply is JSON.
+	if _, err := run("nearby ble-match", `{}`); err == nil {
+		t.Fatal("ble-match without -")
+	}
+	if out, err = run("nearby ble-match", `{"seen":[{"id":"x","data":["AQIDBAUGBwgJCg=="]}]}`, "-"); err != nil || !strings.Contains(out, `"actions":[]`) {
+		t.Fatalf("ble-match: %q %v", out, err)
+	}
+	if _, err := d.SetBLE(true); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = run("nearby ble-report", "", "bluetooth_off", "turn", "Bluetooth", "on"); err != nil || !strings.Contains(out, "turn Bluetooth on") {
+		t.Fatalf("ble-report: %q %v", out, err)
+	}
+	if _, err = run("nearby ble-report", ""); err == nil {
+		t.Fatal("ble-report without a state")
 	}
 }

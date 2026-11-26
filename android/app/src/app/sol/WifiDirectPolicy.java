@@ -19,6 +19,8 @@ final class WifiDirectPolicy {
     static final long DISCOVER_EVERY_MS = 2 * 60_000;
     /** A connect or create that has not formed a group by then is given up. */
     static final long PENDING_MS = 30_000;
+    /** Bluetooth LE may start a discovery round at most this often (WifiDirect.kick). */
+    static final long KICK_MS = 30_000;
     /** At most this many records are handed to the node. */
     static final int MAX_RECORDS = 64;
 

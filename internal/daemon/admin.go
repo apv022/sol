@@ -111,6 +111,12 @@ type AppInfo struct {
 	Package string `json:"package,omitempty"`
 	// External is true for an app Sol does not run (it connected from outside, M5).
 	External bool `json:"external,omitempty"`
+	// Channel is the channel key an app installed from a channel is pinned to, Policy how its
+	// updates are applied and Rollback the version sol.apps.rollback would put back
+	// (design/CHANNELS.md).
+	Channel  string `json:"channel,omitempty"`
+	Policy   string `json:"policy,omitempty"`
+	Rollback string `json:"rollback,omitempty"`
 }
 
 // Status describes this device.
@@ -206,6 +212,13 @@ func (d *Daemon) appInfo(s apphost.Status) AppInfo {
 		if _, mod, ok := d.Host.ExternalIcon(s.ID); ok {
 			a.Icon = externalIconURL(s.ID, mod)
 		}
+	}
+	if d.chans != nil {
+		d.chans.mu.Lock()
+		if b := d.chans.apps[s.ID]; b != nil {
+			a.Channel, a.Policy, a.Rollback = b.Channel, b.Policy, b.PrevVersion
+		}
+		d.chans.mu.Unlock()
 	}
 	return a
 }
@@ -531,6 +544,84 @@ func (d *Daemon) adminHandler() http.Handler {
 	j("DELETE /admin/v1/onions/{name}", "onions.remove", func(r *http.Request) (any, error) {
 		return nil, d.onions.Remove(r.PathValue("name"))
 	})
+	// App channels (channels.go, design/CHANNELS.md). Hosting: the CLI signs records where the
+	// channel key lives and hands them, and the artifacts, to this node.
+	j("GET /admin/v1/channels/hosted", "", func(r *http.Request) (any, error) { return d.chans.Hosted(), nil })
+	j("POST /admin/v1/channels/blobs", "channels.blob", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err
+		}
+		return d.chans.PutBlob(r)
+	})
+	j("POST /admin/v1/channels/hosted", "channels.publish", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil {
+			return nil, err
+		}
+		var b struct {
+			Name   string `json:"name"`
+			Record []byte `json:"record"` // the wire form; base64 in JSON
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.chans.Publish(b.Name, b.Record)
+	})
+	j("DELETE /admin/v1/channels/hosted/{name}", "channels.unhost", func(r *http.Request) (any, error) {
+		return nil, d.chans.Unhost(r.PathValue("name"))
+	})
+	// Following and installing: the same code as the sol.apps.* actions.
+	j("GET /admin/v1/channels", "", func(r *http.Request) (any, error) { return d.chans.Channels(), nil })
+	j("POST /admin/v1/channels", "apps.follow", func(r *http.Request) (any, error) {
+		var b struct {
+			Link string `json:"link"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.chans.Follow(b.Link, false)
+	})
+	j("DELETE /admin/v1/channels/{id}", "apps.unfollow", func(r *http.Request) (any, error) {
+		return d.chans.Unfollow(r.PathValue("id"), false)
+	})
+	j("POST /admin/v1/channels/records", "channels.import", func(r *http.Request) (any, error) {
+		var b struct {
+			Record []byte `json:"record"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		rec, err := d.chans.Offer(b.Record, nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"app": rec.App, "version": rec.Version, "seq": rec.Seq, "channel": identity.ID(rec.Channel)}, nil
+	})
+	j("GET /admin/v1/channels/apps", "", func(r *http.Request) (any, error) { return d.chans.Available(), nil })
+	j("GET /admin/v1/channels/updates", "", func(r *http.Request) (any, error) { return d.chans.Updates(), nil })
+	j("POST /admin/v1/channels/apps/{id}/install", "apps.install", func(r *http.Request) (any, error) {
+		var b struct {
+			Channel string `json:"channel"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.chans.Install(r.Context(), r.PathValue("id"), b.Channel, false)
+	})
+	j("POST /admin/v1/apps/{id}/update", "apps.update", func(r *http.Request) (any, error) {
+		return d.chans.Update(r.Context(), r.PathValue("id"), false)
+	})
+	j("POST /admin/v1/apps/{id}/rollback", "apps.rollback", func(r *http.Request) (any, error) {
+		return d.chans.Rollback(r.PathValue("id"), false)
+	})
+	j("POST /admin/v1/apps/{id}/policy", "apps.auto", func(r *http.Request) (any, error) {
+		var b struct {
+			Policy string `json:"policy"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.chans.SetPolicy(r.PathValue("id"), b.Policy, false)
+	})
 	j("GET /admin/v1/tunnels", "", func(r *http.Request) (any, error) { return d.ports.Tunnels(), nil })
 	j("POST /admin/v1/tunnels", "tunnels.open", func(r *http.Request) (any, error) {
 		var b struct {
@@ -791,6 +882,48 @@ func (d *Daemon) adminHandler() http.Handler {
 		}
 		return d.Nearby(), nil
 	})
+	// Nearby over Bluetooth LE: the Android shell's short commands (`sol nearby ble-...`,
+	// design/PROTOCOL.md §Nearby "Bluetooth LE"). Link handles travel in replies only.
+	j("POST /admin/v1/nearby/ble/ad", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			PSM int `json:"psm"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.BLEAdFor(b.PSM)
+	})
+	j("POST /admin/v1/nearby/ble/match", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			Seen []nearby.BLESeen `json:"seen"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.BLEMatch(b.Seen)
+	})
+	j("POST /admin/v1/nearby/ble/report", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			State  string `json:"state"`
+			Detail string `json:"detail"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		if err := d.ReportBLE(b.State, b.Detail); err != nil {
+			return nil, err
+		}
+		return d.Nearby(), nil
+	})
 	j("POST /admin/v1/nearby/interfaces", "", func(r *http.Request) (any, error) {
 		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
 			return nil, err
@@ -961,6 +1094,39 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		c.renewed(n)
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode/100 != 2 {
+		var w struct {
+			Error *sol.Error `json:"error"`
+		}
+		if json.Unmarshal(b, &w) == nil && w.Error != nil {
+			return w.Error
+		}
+		return fmt.Errorf("daemon: %s", resp.Status)
+	}
+	if out != nil {
+		return json.Unmarshal(b, out)
+	}
+	return nil
+}
+
+// Upload sends body as the raw request body of an admin endpoint (an artifact for
+// POST /admin/v1/channels/blobs) and decodes the JSON reply into out. Admin token only.
+func (c *Client) Upload(ctx context.Context, path string, body io.Reader, out any) error {
+	if c.agent != nil {
+		return errors.New("daemon: uploads need the admin token")
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, body)
+	if err != nil {
+		return err
+	}
+	r.Header.Set("Content-Type", "application/octet-stream")
+	r.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.hc.Do(r)
+	if err != nil {
+		return ErrNotRunning
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		var w struct {
 			Error *sol.Error `json:"error"`

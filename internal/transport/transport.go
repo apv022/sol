@@ -8,6 +8,7 @@
 //	direct.go    Direct mode over TLS, for networks that block UDP.
 //	clearnet.go  Plain TCP for LAN and testing. Not encrypted or anonymous.
 //	i2p.go       I2P via i2pd. Registered stub, see docs/EXTENDING.md.
+//	ble.go       the Android shell's Bluetooth LE links (nearby step 3): a slow last resort.
 //
 // A transport "publishes" a local target address (host:port on 127.0.0.1)
 // under a stable ID and returns the public address that reaches it. The node

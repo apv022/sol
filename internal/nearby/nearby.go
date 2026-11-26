@@ -15,6 +15,9 @@
 //     still authenticates. Nothing is ever sent to a beacon's source.
 //   - Off (SetEnabled(false)), or with no port reachable on the LAN, no socket is open: nothing
 //     is sent or received.
+//   - The Android shell's radios get the same treatment with their own HMAC labels, so the
+//     forms are unlinkable: Wi-Fi Direct ads (wifidirect.go) and Bluetooth LE entries (ble.go).
+//     The shell passes what it saw in and gets decisions out; no key reaches it.
 //   - Beacons go out at start, on network changes (and once more after they settle), every
 //     Interval (jittered), and at most every ReplyEvery when a peer without a session was
 //     recognised. That timer is the protocol, not polling: no state is polled.
@@ -55,7 +58,8 @@ const dupFor = 2 * time.Second
 // Peer is a device this device keeps a session with and may be recognised by.
 type Peer struct {
 	Device ed25519.PublicKey
-	// Connected: a live session with it exists (a recognised beacon then needs no reply).
+	// Connected: a live session with it runs over an IP path (a recognised beacon then needs no
+	// reply). A session only over Bluetooth LE doesn't count: an IP path is still worth finding.
 	Connected bool
 }
 
@@ -95,6 +99,8 @@ type Status struct {
 	Seen int `json:"seen"`
 	// WifiDirect is the Android shell's Wi-Fi Direct (the daemon fills it in).
 	WifiDirect *WifiDirectStatus `json:"wifi_direct,omitempty"`
+	// BLE is the Android shell's Bluetooth LE (the daemon fills it in).
+	BLE *BLEStatus `json:"ble,omitempty"`
 }
 
 // Service sends and receives beacons. Safe for concurrent use.
@@ -121,6 +127,8 @@ type Service struct {
 	budget    int
 	budgetAt  time.Time
 	settle    *time.Timer
+
+	ble BLEDecider // Bluetooth LE decisions (ble.go)
 }
 
 // New returns a Service, off until SetEnabled(true).

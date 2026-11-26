@@ -95,6 +95,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `GET wallpapers` · `POST wallpapers` (raw image body, `Content-Type` png, jpeg or webp, at most 15 MB) · `DELETE wallpapers/{id}` | the person's own wallpapers (below) |
 | `POST network-changed` | re-dial now |
 | `POST nearby/wifi-direct/ad` `{group?}` · `POST nearby/wifi-direct/match` `{state, seen}` · `POST nearby/wifi-direct/report` `{state, detail}` · `POST nearby/interfaces` `{addrs}` | the Android shell's Wi-Fi Direct plumbing (`sol nearby ...`, PROTOCOL.md §Nearby "Wi-Fi Direct"); CLI token only, never a browser session; the ad and match answer `not_implemented` outside the Android app |
+| `POST nearby/ble/ad` `{psm}` · `POST nearby/ble/match` `{seen}` · `POST nearby/ble/report` `{state, detail}` | the Android shell's Bluetooth LE plumbing (`sol nearby ble-...`, PROTOCOL.md §Nearby "Bluetooth LE"); CLI token only, never a browser session; `not_implemented` outside the Android app; match replies carry link handles, never logged |
 | `GET transports` · `POST transports/{name}` `{enabled}` | the transports (`wg`, `direct`, `tor`, and any other configured): `{name, enabled, state: up\|starting\|stopped\|failed, detail, listen}`; turning one on or off applies now and is kept in `config.json` (the last one stays on). Also `sol transports` and the `sol.transports.*` actions. The last row is `nearby` (LAN discovery, PROTOCOL.md §Nearby; state may also be `idle`, with why in `detail`), switched the same way (or with `sol do sol.nearby`), and never counted as the last transport |
 | `GET sessions` · `DELETE sessions/{id}` | browser sessions (list, revoke) |
 | `GET events` | SSE: `status`, `person`, `device`, `session`, `app`, `inbox`, `service`, `tunnel`, `theme` with `Last-Event-ID` resume. The page never polls |
@@ -205,10 +206,46 @@ server, a game server); for chosen people, share the port instead (above). Tor m
   listeners) and any app's port. They trust callers on loopback, and Tor delivers strangers
   from loopback.
 - Kept in `publicservices.json` (0600) and re-published whenever Tor (re)starts.
+- Names starting `channel-` are kept for hosted app channels (`pub-channel-<name>`, §App channels).
 - Actions: `sol.onions.list`, `sol.onions.host --name blog --port 8080 [--onion-port 80]`,
   `sol.onions.remove --name blog`. Hosting and removing need the person's approval when an agent
   asks: like every built-in `sol.*` action, an agent's call goes through the app API's approval
   policy and Inbox (`appapi.Builtin`), and runs once the person approves.
+
+## App channels
+
+Installing and updating apps from channels (design/CHANNELS.md). Following and installing are
+also the built-in actions `sol.apps.follow --link`, `sol.apps.unfollow --channel`,
+`sol.apps.channels`, `sol.apps.available`, `sol.apps.install --id [--channel]`,
+`sol.apps.updates`, `sol.apps.update --id`, `sol.apps.auto --id --policy auto|ask|off` and
+`sol.apps.rollback --id`; follow, install, update, auto and rollback need the person's approval
+when an agent asks. The endpoints below run the same code.
+
+- `GET /admin/v1/channels` lists the followed channels: `channel`, `onion`, `link`, `apps`, and
+  `stream` ("live", "connecting", "retrying: …", "via my other devices", "tor is off").
+- `POST /admin/v1/channels` `{link}` follows a `sol://channel?k=…&o=…` link on all my devices;
+  `DELETE /admin/v1/channels/{channel}` stops (installed apps stay).
+- `GET /admin/v1/channels/apps`: the latest release of each app of the followed channels (`id`,
+  `version`, `seq`, `channel`, `time`, `notes`, `platforms`, `installable` here, `installed`
+  version). `GET /admin/v1/channels/updates`: installed apps with a newer release (`id`,
+  `installed`, `version`, `kind`, `policy`, `notes`).
+- `POST /admin/v1/channels/apps/{id}/install` `{channel?}`, `POST /admin/v1/apps/{id}/update`,
+  `POST /admin/v1/apps/{id}/rollback`, `POST /admin/v1/apps/{id}/policy` `{policy}`.
+- `POST /admin/v1/channels/records` `{record}` (base64 wire form) offers a record for a followed
+  channel, as if it came over the stream (an offline copy, a USB stick).
+- `GET /admin/v1/apps` gives an app installed from a channel its `channel`, `policy` and
+  `rollback` (the version a rollback puts back).
+
+Hosting a channel (the developer's node; `sol channel …`). The channel key stays with the CLI:
+- `POST /admin/v1/channels/blobs` (admin token only), the raw artifact as the body (at most
+  512 MiB) → `{sha256, size}`, stored content-addressed in `<dir>/channels/blobs/` (0600).
+- `POST /admin/v1/channels/hosted` (admin token only) `{name, record}`: a signed record, newer
+  than the one held for its app. A channel new here is served on a public onion
+  `pub-channel-<name>` (Tor must be on) and listed in `<dir>/channels/hosted.json` (0600); every
+  open follower stream gets the record at once.
+- `GET /admin/v1/channels/hosted`: `name`, `channel`, `address`, `link` (once Tor published the
+  onion), `apps` (`app`, `version`, `seq`, `blobs`: every artifact stored here).
+- `DELETE /admin/v1/channels/hosted/{name}` stops hosting and deletes the onion key.
 
 ## The Sol app (UI)
 

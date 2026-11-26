@@ -69,6 +69,9 @@ func (d *Daemon) targetFor(t transport.Transport) string {
 	if identity.AnonymousTransport(t.Name()) && d.anonLn != nil {
 		return d.anonLn.Addr().String()
 	}
+	if t.Name() == "ble" && d.bt.ln != nil {
+		return d.bt.ln.Addr().String() // inbound sessions know they came over BLE
+	}
 	return d.nodeLn.Addr().String()
 }
 
@@ -91,9 +94,15 @@ func (d *Daemon) startTransport(t transport.Transport) (identity.Endpoint, bool)
 	addr, err := t.Publish(d.ctx, p)
 	if tor, ok := t.(*transport.Tor); ok && d.onions != nil {
 		d.onions.publishAll(tor) // public onion services ride along (onions.go)
+		if d.chans != nil {
+			d.chans.publishAll(tor) // and hosted app channels (channels.go)
+		}
 	}
 	if err != nil {
 		d.log.Info("transport did not publish yet", "transport", t.Name(), "err", err)
+		return identity.Endpoint{}, false
+	}
+	if addr == "" { // nothing to sign (Bluetooth LE has no public address)
 		return identity.Endpoint{}, false
 	}
 	return endpointOf(t, addr), true

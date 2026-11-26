@@ -507,7 +507,7 @@ function settingsView() {
     <section class="section"><h3 class="group-title">This device</h3><div class="list"><div data-item><span class="grow">Remove Sol from this device<span class="row-sub">${inApp ? 'Erases Sol and its files on this phone. You can then start new, add it to your Sol again, or restore from your backup words.' : 'Your identity is moved aside (not deleted) and the synced folder stays. You can then start new, add this computer to your Sol, or restore from your backup words.'}</span></span><button type="button" class="danger" data-act="reset">Remove…</button></div></div></section>
     <section class="section"><details class="adv"><summary class="group-title">Advanced</summary>
       <h3 class="group-title">Addresses</h3><div class="list">${list(st.endpoints).map((e) => html`<div data-item><span class="grow"><code>${e.addr}</code></span><span class="badge">${e.kind}</span></div>`)}</div>
-      <h3 class="group-title">Transports</h3><div class="list">${transportRows(list(st.transports))}${wifiDirectRow()}</div>
+      <h3 class="group-title">Transports</h3><div class="list">${transportRows(list(st.transports))}${wifiDirectRow()}${bleRow()}</div>
       <h3 class="group-title">Connections</h3><div class="list">${list(st.peer_sessions).length ? list(st.peer_sessions).map((x) => html`<div data-item><span class="grow"><span class="row-title">${x.peer}</span><span class="row-sub">${x.relation || ''} · since ${relTime(x.since)}</span></span></div>`) : html`<div data-item class="muted">None</div>`}</div>
       <p class="group-footer"><button type="button" class="tinted" data-act="network">${ic('refresh')}Check network now</button></p></details></section></div>`;
 }
@@ -521,8 +521,17 @@ function wifiDirectRow() {
   try { on = !!bridge.wifiDirectEnabled(); } catch { /* an older shell */ }
   return html`<div data-item><span class="grow">Wi-Fi Direct<span class="row-sub">Link two phones with no Wi-Fi network or mobile data at all</span></span><input type="checkbox" role="switch" data-wifidirect aria-label="Wi-Fi Direct" ${on ? raw('checked') : ''}></div>`;
 }
-// The shell answers a switch (after the permission prompt) with this event.
+/** Bluetooth LE (Android only): the shell asks for the Bluetooth permissions when it is turned on. */
+function bleRow() {
+  const bridge = window.SolAndroid;
+  if (!bridge?.ble) return '';
+  let on = false;
+  try { on = !!bridge.bleEnabled(); } catch { /* an older shell */ }
+  return html`<div data-item><span class="grow">Bluetooth<span class="row-sub">Find nearby devices with Wi-Fi off; sync notes and tasks when nothing else connects</span></span><input type="checkbox" role="switch" data-ble aria-label="Bluetooth" ${on ? raw('checked') : ''}></div>`;
+}
+// The shell answers a switch (after the permission prompt) with these events.
 addEventListener('sol-wifi-direct', (e) => { if (e.detail?.error) toast(e.detail.error, { kind: 'error' }); draw(); });
+addEventListener('sol-ble', (e) => { if (e.detail?.error) toast(e.detail.error, { kind: 'error' }); draw(); });
 
 function transportRows(ts) {
   // Nearby only finds devices; it carries nothing, so it never counts as the last one on.
@@ -692,6 +701,7 @@ document.addEventListener('change', (e) => {
   else if (t.dataset.toggle) setSetting({ [t.dataset.toggle]: t.checked ? 'on' : 'off' });
   else if (t.dataset.transport) act(async () => { await admin.setTransport(t.dataset.transport, t.checked); await load('status'); }, t.checked ? 'Turned on' : 'Turned off').then(() => draw());
   else if (t.dataset.wifidirect !== undefined) { try { window.SolAndroid.wifiDirect(t.checked); } catch (err) { fail(err); } }
+  else if (t.dataset.ble !== undefined) { try { window.SolAndroid.ble(t.checked); } catch (err) { fail(err); } }
   else if (t.dataset.anon) setAnonymous(t);
   else if (t.dataset.select === 'font') setSetting({ font: t.value });
   else if (t.dataset.select === 'theme') act(async () => { await admin.setTheme(t.value); swapThemeCss(); }, 'Theme changed');

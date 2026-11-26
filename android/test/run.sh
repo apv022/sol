@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 TC=${TC:-$HOME/sol-mobile/.toolchain}
 [ -x "$TC/jdk/bin/javac" ] && export PATH=$TC/jdk/bin:$PATH
-SRC="../app/src/app/sol/WifiDirectPolicy.java"
+SRC="../app/src/app/sol/WifiDirectPolicy.java ../app/src/app/sol/BlePolicy.java"
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 javac -Xlint:-options -source 11 -target 11 -d "$OUT" $SRC $(find app -name '*Test.java')

@@ -18,6 +18,8 @@ package session
 //     the session moves back to it. Any failure meanwhile doubles the backoff, so a flaky
 //     path drifts towards being tried rarely instead of flapping.
 //   - Network changes make every backoff due at once (NetworkChanged).
+//   - Bluetooth LE ("ble", Android) is ranked behind every IP path, healthy or failed: it carries
+//     a session only when nothing else answers, and the keeper keeps probing the better paths.
 //
 // A session we dialed knows its path; one the peer dialed only knows it came in (the
 // transports forward to one local listener). Only the side that dialed a session moves it,
@@ -75,6 +77,9 @@ type PathInfo struct {
 	Transport string `json:"transport,omitempty"`
 	// Inbound: the peer dialed this device, so only it knows the path.
 	Inbound bool `json:"inbound,omitempty"`
+	// Via is what carried an inbound session when this device can tell ("ble": the session layer
+	// served it on the Bluetooth LE listener, ServeVia); empty otherwise.
+	Via string `json:"via,omitempty"`
 	// Reason says in a few words why this path: "best path", "wg failed: ...", "wg was
 	// slower; tor answered first", "wg is stable again".
 	Reason string `json:"reason"`
@@ -127,12 +132,15 @@ func preference(name string) int {
 		return 5
 	case "i2p":
 		return 6
+	case "ble":
+		return 9 // Bluetooth LE (Android): tens of KB/s, only when no IP path answers
 	}
 	return 4
 }
 
-// slow reports whether name is an anonymous transport whose round trips take seconds.
-func slow(name string) bool { return name == "tor" || name == "i2p" }
+// slow reports whether name is a transport whose round trips may take seconds (the anonymous
+// ones, and Bluetooth LE).
+func slow(name string) bool { return name == "tor" || name == "i2p" || name == "ble" }
 
 // jitter spreads d by ±20%, so peers don't probe in lockstep.
 func jitter(d time.Duration) time.Duration {
@@ -188,6 +196,8 @@ func (m *Manager) rank(rec identity.EndpointRecord) []identity.Endpoint {
 	sort.SliceStable(cs, func(i, j int) bool {
 		a, b := cs[i], cs[j]
 		switch {
+		case (a.ep.Transport == "ble") != (b.ep.Transport == "ble"): // behind every IP path, even a failed one
+			return b.ep.Transport == "ble"
 		case a.bad != b.bad:
 			return !a.bad
 		case a.bad: // both failed: by preference only

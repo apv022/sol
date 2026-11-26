@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -137,4 +142,115 @@ func TestAddCandidate(t *testing.T) {
 	if _, ok := transport.AddCandidate("127.0.0.1:7", "127.0.0.1:8"); ok {
 		t.Fatal("clearnet address merged")
 	}
+}
+
+// relayBLE plays the Android shells and the radio between them: an L2CAP channel a opened
+// (bridged "out" with a handle a's transport issued for b's device) joined to the one b accepted
+// (bridged "in").
+func relayBLE(t *testing.T, a, b *transport.BLE, bDevice ed25519.PublicKey) {
+	t.Helper()
+	dial := func(tr *transport.BLE, line string) net.Conn {
+		c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(tr.BridgePort())))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(c, line); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	out := dial(a, "SOLBLE1 out "+a.Expect(transport.BLEAddr(bDevice))+"\n")
+	in := dial(b, "SOLBLE1 in\n")
+	go func() { io.Copy(out, in); out.Close() }()
+	go func() { io.Copy(in, out); in.Close() }()
+}
+
+// withBLE gives n a BLE transport whose accepted links are served as BLE sessions.
+func withBLE(t *testing.T, n *node, cl *transport.Clearnet) *transport.BLE {
+	t.Helper()
+	b := transport.NewBLE()
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Publish(context.Background(), transport.Publication{ID: "node", Target: ln.Addr().String()})
+	go n.m.ServeVia(ln, "ble")
+	b.OnLink = func(addr string) {
+		raw, _ := hex.DecodeString(strings.TrimPrefix(addr, "ble:"))
+		n.m.NoteBLE(ed25519.PublicKey(raw), addr)
+	}
+	n.m.SetTransports([]transport.Transport{cl, b})
+	t.Cleanup(func() { b.Stop() })
+	return b
+}
+
+// Bluetooth LE ranks behind every IP path (healthy, last good or failed), and a BLE link carries
+// a real session when no IP path answers: the dialer knows its path is ble, the callee that it
+// came in over BLE, both see the device as only on BLE, and requests flow.
+func TestBLEPathAndSession(t *testing.T) {
+	a, _, clA := nearbyNode(t, "Alice")
+	b, _, clB := nearbyNode(t, "Bob")
+	pairNodes(t, a, b)
+	bp, bd := b.kr.Person(), b.kr.DevicePublic()
+	eventually(t, "connected", func() bool { _, ok := a.m.Session(bd); return ok })
+	bleA, bleB := withBLE(t, a, clA), withBLE(t, b, clB)
+
+	if a.m.NoteBLE(make([]byte, 32), "ble:00") {
+		t.Fatal("a BLE hint for a device that isn't kept")
+	}
+	if !a.m.NoteBLE(bd, transport.BLEAddr(bd)) {
+		t.Fatal("BLE hint refused")
+	}
+	rec, _ := a.m.endpointsFor(bp, bd)
+	r := a.m.rank(rec)
+	if len(r) != 2 || r[1].Transport != "ble" {
+		t.Fatalf("ranked %+v", r)
+	}
+	a.m.pathWorked(bd, r[1]) // even as the last good path
+	a.m.pathFailed(bd, r[0], "test")
+	if r := a.m.rank(rec); r[len(r)-1].Transport != "ble" {
+		t.Fatalf("ranked after a failure %+v", r)
+	}
+	if signed, _ := a.m.cache.Endpoints(bp, bd); slices.ContainsFunc(signed.Endpoints, func(e identity.Endpoint) bool { return e.Transport == "ble" }) {
+		t.Fatal("a BLE address reached the signed record")
+	}
+	a.m.mu.Lock()
+	delete(a.m.links, string(bd))
+	a.m.mu.Unlock()
+
+	// No IP path any more: a BLE link carries the session.
+	clA.Stop()
+	clB.Stop()
+	if s, ok := a.m.Session(bd); ok {
+		s.Close()
+	}
+	relayBLE(t, bleA, bleB, bd)
+	var s *Session
+	eventually(t, "a session over BLE", func() bool {
+		var ok bool
+		s, ok = a.m.Session(bd)
+		return ok && s.Alive() && s.Path().Transport == "ble"
+	})
+	eventually(t, "b sees it came over BLE", func() bool {
+		sb, ok := b.m.Session(a.kr.DevicePublic())
+		return ok && sb.Path().Via == "ble"
+	})
+	if got := get(t, s, "/"); !strings.Contains(got, identity.ID(a.kr.DevicePublic())) {
+		t.Fatalf("request over BLE: %q", got)
+	}
+	for _, p := range a.m.NearbyPeers() {
+		if bytes.Equal(p.Device, bd) && (!p.Connected || !p.OverBLE) {
+			t.Fatalf("NearbyPeers: %+v", p)
+		}
+	}
+	if bleA.Links() != 1 || bleB.Links() != 1 {
+		t.Fatalf("links %d %d", bleA.Links(), bleB.Links())
+	}
+	// Switched off: the links are cut and the session ends.
+	bleA.CloseLinks()
+	eventually(t, "the session ended", func() bool { return !s.Alive() })
 }

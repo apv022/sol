@@ -75,6 +75,8 @@ public class NodeService extends Service {
     private final Notifier notifier = new Notifier(this);
     /** Nearby over Wi-Fi Direct (off unless switched on; it follows the node's "nearby" events). */
     final WifiDirect wifiDirect = new WifiDirect(this);
+    /** Nearby over Bluetooth LE (off unless switched on; it follows the node's "nearby" events). */
+    final Ble ble = new Ble(this);
 
     /** Where the node keeps its identity and config. */
     static File dataDir(Context c) { return new File(c.getFilesDir(), "sol"); }
@@ -148,6 +150,7 @@ public class NodeService extends Service {
         ready = false;
         notifier.stop();
         wifiDirect.stop();
+        ble.stop();
         CalendarSync.nodeStopped(this);
         Process p = node;
         if (p != null) p.destroy(); // SIGTERM: the node closes cleanly
@@ -222,6 +225,7 @@ public class NodeService extends Service {
                         new Thread(() -> CalendarSync.onNodeReady(this), "sol-calendar-ready").start();
                         // Wi-Fi Direct starts if it is switched on.
                         wifiDirect.nodeReady();
+                        ble.nodeReady();
                     }
                 }
             }

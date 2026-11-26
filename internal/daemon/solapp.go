@@ -40,7 +40,7 @@ func solActions() ActionApp {
 		return &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
 			"name": {Type: "string", Enum: enumOf(names)}}}
 	}
-	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: my profile, appearance, transports, people's privacy and opening apps", Actions: []sol.ActionSpec{
+	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: my profile, appearance, transports, people's privacy, opening apps and installing them from channels", Actions: []sol.ActionSpec{
 		{Name: "sol.profile.show", Description: "Show my profile: the name and picture my devices and contacts see", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}},
 		{Name: "sol.profile.set", Description: "Change my name, on all my devices and for my contacts (an empty name shows the name I started with)",
@@ -70,6 +70,26 @@ func solActions() ActionApp {
 			Input: &sol.Schema{Type: "object", Properties: props}},
 		{Name: "sol.apps.open", Description: "Open an app's UI in this computer's browser (an Android app connected to Sol opens from Sol's Apps grid on the phone)",
 			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Required: []string{"id"}, Properties: map[string]*sol.Schema{"id": {Type: "string"}}}},
+		{Name: "sol.apps.follow", Description: "Follow an app channel (a sol://channel?k=...&o=... link) on all my devices: its releases arrive as they are published, and its apps can be installed",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"link"}, Properties: map[string]*sol.Schema{"link": {Type: "string"}}}},
+		{Name: "sol.apps.unfollow", Description: "Stop following an app channel on all my devices (apps installed from it stay)",
+			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Required: []string{"channel"}, Properties: map[string]*sol.Schema{"channel": {Type: "string"}}}},
+		{Name: "sol.apps.channels", Description: "List the app channels I follow, their apps and how this device gets their releases", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}, Columns: []string{"channel", "apps", "stream"}},
+		{Name: "sol.apps.available", Description: "List the apps of the channels I follow: the latest release of each, and the version installed here", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}, Columns: []string{"id", "version", "installed", "installable", "channel"}},
+		{Name: "sol.apps.install", Description: "Install an app from a followed channel (channel: which one, when several offer it); its channel key is pinned for updates",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"id"}, Properties: map[string]*sol.Schema{
+				"id": {Type: "string"}, "channel": {Type: "string"}}}},
+		{Name: "sol.apps.updates", Description: "List the apps installed from channels that have a newer release", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}, Columns: []string{"id", "installed", "version", "policy"}},
+		{Name: "sol.apps.update", Description: "Update an app installed from a channel to its newest release (the version it replaces is kept for rollback)",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"id"}, Properties: map[string]*sol.Schema{"id": {Type: "string"}}}},
+		{Name: "sol.apps.auto", Description: "Set how an app's updates are applied: auto (installed as they arrive), ask (an Inbox item to approve) or off",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"id", "policy"}, Properties: map[string]*sol.Schema{
+				"id": {Type: "string"}, "policy": {Type: "string", Enum: enumOf([]string{PolicyAuto, PolicyAsk, PolicyOff})}}}},
+		{Name: "sol.apps.rollback", Description: "Put back the version of an app its last update replaced",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"id"}, Properties: map[string]*sol.Schema{"id": {Type: "string"}}}},
 		{Name: "sol.onions.list", Description: "List the public onion services: local ports anyone with the .onion address can reach", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "port", "onion_port", "address"}},
 		{Name: "sol.onions.host", Description: "Publish a local port as a public Tor onion service (anyone with the address can connect; the service must do its own login). Tor must be on.",
@@ -81,10 +101,11 @@ func solActions() ActionApp {
 			Effect: sol.EffectDestructive, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.notifications", Description: "Show or set desktop notifications for Inbox items on this device (desktop: on|off; no arguments shows the state)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"desktop": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
-		{Name: "sol.nearby", Description: "Show or set LAN discovery: private beacons that let my devices and my buddies' devices on the same network find each other without the internet (state: on|off), and on Android Wi-Fi Direct, which links two phones with no network at all (wifi_direct: on|off; Android asks for the Nearby devices permission); no arguments shows both",
+		{Name: "sol.nearby", Description: "Show or set LAN discovery: private beacons that let my devices and my buddies' devices on the same network find each other without the internet (state: on|off), and on Android Wi-Fi Direct, which links two phones with no network at all (wifi_direct: on|off; Android asks for the Nearby devices permission), and on Android Bluetooth LE, which finds nearby devices with Wi-Fi off and carries small syncs when no network link can be made (ble: on|off; Android asks for the Bluetooth permissions); no arguments shows all three",
 			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{
 				"state":       {Type: "string", Enum: enumOf([]string{"on", "off"})},
-				"wifi_direct": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
+				"wifi_direct": {Type: "string", Enum: enumOf([]string{"on", "off"})},
+				"ble":         {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
 	}}
 }
 
@@ -205,6 +226,36 @@ func (d *Daemon) callSol(ctx context.Context, c sol.ActionCall) (out json.RawMes
 		if res, err = d.openAppAction(args["id"], c.DryRun); err != nil {
 			return nil, true, err
 		}
+	case "sol.apps.follow":
+		if res, err = d.chans.Follow(args["link"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.apps.unfollow":
+		if res, err = d.chans.Unfollow(args["channel"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.apps.channels":
+		res = d.chans.Channels()
+	case "sol.apps.available":
+		res = d.chans.Available()
+	case "sol.apps.install":
+		if res, err = d.chans.Install(ctx, args["id"], args["channel"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.apps.updates":
+		res = d.chans.Updates()
+	case "sol.apps.update":
+		if res, err = d.chans.Update(ctx, args["id"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.apps.auto":
+		if res, err = d.chans.SetPolicy(args["id"], args["policy"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.apps.rollback":
+		if res, err = d.chans.Rollback(args["id"], c.DryRun); err != nil {
+			return nil, true, err
+		}
 	case "sol.onions.list":
 		res = d.onions.List()
 	case "sol.onions.host":
@@ -237,15 +288,21 @@ func (d *Daemon) callSol(ctx context.Context, c sol.ActionCall) (out json.RawMes
 		}
 	case "sol.nearby":
 		switch {
-		case args["state"] == "" && args["wifi_direct"] == "":
+		case args["state"] == "" && args["wifi_direct"] == "" && args["ble"] == "":
 			res = d.Nearby()
 		case args["wifi_direct"] != "" && !AndroidShell():
 			return nil, true, errNoWifiDirect()
+		case args["ble"] != "" && !AndroidShell():
+			return nil, true, errNoBLE()
 		case c.DryRun:
-			res = map[string]any{"dry_run": true, "would_set": args["state"]}
+			m := map[string]any{"dry_run": true, "would_set": args["state"]}
 			if args["wifi_direct"] != "" {
-				res = map[string]any{"dry_run": true, "would_set": args["state"], "would_set_wifi_direct": args["wifi_direct"]}
+				m["would_set_wifi_direct"] = args["wifi_direct"]
 			}
+			if args["ble"] != "" {
+				m["would_set_ble"] = args["ble"]
+			}
+			res = m
 		default:
 			if args["state"] != "" {
 				if res, err = d.SetNearby(args["state"] == "on"); err != nil {
@@ -254,6 +311,11 @@ func (d *Daemon) callSol(ctx context.Context, c sol.ActionCall) (out json.RawMes
 			}
 			if args["wifi_direct"] != "" {
 				if res, err = d.SetWifiDirect(args["wifi_direct"] == "on"); err != nil {
+					return nil, true, err
+				}
+			}
+			if args["ble"] != "" {
+				if res, err = d.SetBLE(args["ble"] == "on"); err != nil {
 					return nil, true, err
 				}
 			}

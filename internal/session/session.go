@@ -143,6 +143,7 @@ type Manager struct {
 	auth                  clientAuth            // client-auth keys installed for peers' onions (toraccess.go)
 	peerAddrs             map[string]string     // "<device>|<transport>" -> address given to a PeerSetter
 	nearby                map[string]nearbyHint // LAN addresses from beacons, by device (nearby.go)
+	bleHints              map[string]nearbyHint // Bluetooth LE links waiting, by device (nearby.go)
 
 	trMu sync.RWMutex
 	ts   []transport.Transport // Config.Transports, replaced by SetTransports
@@ -302,13 +303,17 @@ func (s *Session) HTTPClient() *http.Client { return s.client }
 
 // Serve accepts connections on ln (the local target the transports publish)
 // until ln is closed or the Manager is.
-func (m *Manager) Serve(ln net.Listener) error { return m.serve(ln, false) }
+func (m *Manager) Serve(ln net.Listener) error { return m.serve(ln, false, "") }
+
+// ServeVia is Serve for a listener only one transport forwards to (the Bluetooth LE bridge):
+// inbound sessions accepted here say so in PathInfo.Via.
+func (m *Manager) ServeVia(ln net.Listener, via string) error { return m.serve(ln, false, via) }
 
 // ServeAnonymous is Serve for the local target of the anonymous transports (the onion): only
 // connections accepted here may carry a session with an anonymous contact.
-func (m *Manager) ServeAnonymous(ln net.Listener) error { return m.serve(ln, true) }
+func (m *Manager) ServeAnonymous(ln net.Listener) error { return m.serve(ln, true, "") }
 
-func (m *Manager) serve(ln net.Listener, anon bool) error {
+func (m *Manager) serve(ln net.Listener, anon bool, via string) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -338,7 +343,7 @@ func (m *Manager) serve(ln net.Listener, anon bool) error {
 		}
 		go func() {
 			defer func() { <-m.slots }()
-			m.answer(conn, anon)
+			m.answer(conn, anon, via)
 		}()
 	}
 }
@@ -589,7 +594,7 @@ func (m *Manager) RemoveDevice(device ed25519.PublicKey) (identity.DeviceList, e
 }
 
 // answer runs the callee side of one inbound connection.
-func (m *Manager) answer(conn net.Conn, anon bool) {
+func (m *Manager) answer(conn net.Conn, anon bool, via string) {
 	var peer Peer
 	var recovered []byte
 	decide := func(r *wire.Request) ([]byte, error) {
@@ -633,7 +638,7 @@ func (m *Manager) answer(conn net.Conn, anon bool) {
 	if req.Op == wire.OpJoin {
 		m.BundleChanged() // the device list grew: tell everyone
 	}
-	s := m.start(conn, false, peer, req.Device, PathInfo{Inbound: true, Reason: "the peer dialed this device"}, "", anon)
+	s := m.start(conn, false, peer, req.Device, PathInfo{Inbound: true, Via: via, Reason: "the peer dialed this device"}, "", anon)
 	if s != nil {
 		m.Keep(peer.Person, peer.Device)
 	}

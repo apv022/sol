@@ -186,6 +186,14 @@ func (d *Daemon) emit(kind string, v any) {
 	if d.events != nil {
 		d.events.add(kind, v)
 	}
+	switch kind {
+	case EvDevice, EvSession, EvStatus, EvApp:
+		// A device came or went, or a transport changed: the channel stream holder may change.
+		// An app came or went: an Android app that connected may have an update waiting.
+		if d.chans != nil {
+			d.chans.Kick()
+		}
+	}
 }
 
 // emitStatus pushes the current Status (sessions, endpoints) to the admin stream.
