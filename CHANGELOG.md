@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0-beta.4 (beta, unreleased)
+## v0.2.0-beta.4 (beta)
 
 - **Your name and picture.** Settings has a profile card: change your name or picture, and your
   devices and contacts see it. Anonymous contacts get your name but never your picture. A phone
