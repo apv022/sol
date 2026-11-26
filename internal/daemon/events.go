@@ -42,7 +42,9 @@ const (
 	EvInbox   = "inbox"
 	EvService = "service"
 	EvTunnel  = "tunnel"
-	EvTheme   = "theme"
+	// EvOnion: the public onion services changed, or one got its address (onions.go).
+	EvOnion = "onion"
+	EvTheme = "theme"
 )
 
 type adminEvent struct {

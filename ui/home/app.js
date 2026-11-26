@@ -20,7 +20,7 @@ const phoneQ = matchMedia('(max-width: 760px)');
 
 // ---------- state ----------
 
-const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents', 'wallpapers', 'notifications'];
+const KEYS = ['status', 'people', 'devices', 'apps', 'services', 'onions', 'tunnels', 'inbox', 'theme', 'themes', 'backup', 'agents', 'wallpapers', 'notifications'];
 const state = Object.fromEntries(KEYS.map((k) => [k, null]));
 let locked = false;
 let route = parseRoute(location.hash);
@@ -33,7 +33,7 @@ const saveCache = () => { try { localStorage.setItem(CACHE, JSON.stringify(Objec
 const admin = createAdmin({ onUnauthorized: () => { locked = true; draw(); } });
 const fetchers = {
   status: () => admin.status(), people: () => admin.people(), devices: () => admin.devices(), apps: () => admin.apps(),
-  services: () => admin.services(), tunnels: () => admin.tunnels(), inbox: () => admin.inbox(), theme: () => admin.theme(),
+  services: () => admin.services(), onions: () => admin.onions(), tunnels: () => admin.tunnels(), inbox: () => admin.inbox(), theme: () => admin.theme(),
   themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(), wallpapers: () => admin.wallpapers(), notifications: () => admin.notifications(),
 };
 async function load(key) {
@@ -44,7 +44,7 @@ async function load(key) {
   } catch (e) { if (e.status !== 401) console.warn('load', key, e.message); }
 }
 const loadAll = () => Promise.all(KEYS.map(load));
-const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices'], session: ['status'], app: ['apps'], inbox: ['inbox'], service: ['services'], tunnel: ['tunnels'], theme: ['theme', 'wallpapers'] };
+const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices'], session: ['status'], app: ['apps'], inbox: ['inbox'], service: ['services'], onion: ['onions'], tunnel: ['tunnels'], theme: ['theme', 'wallpapers'] };
 
 // ---------- helpers ----------
 
@@ -204,6 +204,22 @@ function serviceDialog() {
       const f = new FormData(ev.target);
       const s = { name: f.get('name').trim(), port: Number(f.get('port')), http: f.has('http'), people: f.getAll('p') };
       close(); await act(() => admin.addService(s), 'Shared');
+    };
+  });
+}
+
+function onionDialog() {
+  dialog('Host on Tor', html`<form class="form"><p class="muted">Anyone who has the address can reach this port, without a Sol login: the service must protect itself. Tor must be on.</p>
+    <label>Name<input name="name" placeholder="blog" required pattern="[a-z0-9][a-z0-9-]*" maxlength="32" autocomplete="off"></label>
+    <label>Local port<input name="port" type="number" min="1" max="65535" placeholder="8080" required></label>
+    <label>Port on the .onion (optional)<input name="onion_port" type="number" min="1" max="65535" placeholder="80"></label>
+    <div class="dlg-actions"><button type="button" data-no>Cancel</button><button class="primary" type="submit">Host</button></div></form>`, (d, close) => {
+    d.querySelector('[data-no]').onclick = close;
+    d.querySelector('form').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const s = { name: f.get('name').trim(), port: Number(f.get('port')), onion_port: Number(f.get('onion_port')) || 0 };
+      close(); await act(async () => { await admin.addOnion(s); await load('onions'); }, 'Hosting; the address appears once Tor publishes it');
     };
   });
 }
@@ -429,11 +445,13 @@ function inboxView() {
 }
 
 function sharingView() {
-  const svcs = list(state.services), tns = list(state.tunnels);
+  const svcs = list(state.services), tns = list(state.tunnels), onions = list(state.onions);
   const who = (id) => { const p = list(state.people).find((x) => x.id === id); return p ? nameOf(p) : id; };
   return html`<div class="page">${pageHead('Sharing', '', phoneQ.matches ? '#/settings' : '')}
     <section class="section"><h3 class="group-title">Services I share</h3>${svcs.length ? html`<div class="list">${svcs.map((s) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${s.name}</span><span class="row-sub">Port ${s.port}${s.http ? ' · website' : ''} · ${list(s.people).length ? list(s.people).map(who).join(', ') : 'nobody yet'}</span></span><button class="danger" type="button" data-act="rm-service" data-id="${s.name}">Stop sharing</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">Nothing shared</div></div>`}
       <p class="group-footer"><button type="button" class="tinted" data-act="add-service">${ic('plus')}Share a service</button></p></section>
+    <section class="section"><h3 class="group-title">Public onion services</h3>${onions.length ? html`<div class="list">${onions.map((o) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${o.name}</span><span class="row-sub">Port ${o.port} · ${o.address ? html`<code>${o.address}${o.onion_port && o.onion_port !== 80 ? ':' + o.onion_port : ''}</code>` : 'getting its address from Tor…'}</span></span>${o.address ? html`<button type="button" data-act="copy-onion" data-id="${o.address}${o.onion_port && o.onion_port !== 80 ? ':' + o.onion_port : ''}">Copy</button>` : ''}<button class="danger" type="button" data-act="rm-onion" data-id="${o.name}">Remove</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">None. Anyone with a public onion's address can reach it, contact or not.</div></div>`}
+      <p class="group-footer"><button type="button" class="tinted" data-act="add-onion">${ic('plus')}Host on Tor</button></p></section>
     <section class="section"><h3 class="group-title">Tunnels I opened</h3>${tns.length ? html`<div class="list">${tns.map((t) => html`<div data-item><span class="row-icon">${ic('link')}</span><span class="grow"><span class="row-title">${t.service} from ${who(t.person)}</span><span class="row-sub"><code>127.0.0.1:${t.port}</code> · ${t.state}</span></span>${t.http ? html`<a class="btn tinted" href="http://127.0.0.1:${t.port}/">Open</a>` : ''}<button type="button" data-act="close-tunnel" data-id="${t.id}">Close</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No tunnels open</div></div>`}
       <p class="group-footer"><button type="button" class="tinted" data-act="open-tunnel">${ic('plus')}Open a service</button></p></section></div>`;
 }
@@ -582,7 +600,9 @@ function tick() {
 
 const personOf = (id) => list(state.people).find((p) => p.id === id);
 const ACTIONS = {
-  'add-person': addPerson, 'add-device': addDevice, 'add-service': serviceDialog, 'open-tunnel': tunnelDialog, backup: backupFlow,
+  'add-person': addPerson, 'add-device': addDevice, 'add-service': serviceDialog, 'add-onion': onionDialog,
+  'copy-onion': (el) => act(() => navigator.clipboard.writeText(el.dataset.id), 'Address copied'),
+  'rm-onion': (el) => confirmDialog({ title: `Remove ${el.dataset.id}?`, text: 'Its .onion address is gone for good: hosting it again gives a new one.', action: 'Remove', run: async () => { await admin.removeOnion(el.dataset.id); await load('onions'); toast('Removed'); } }), 'open-tunnel': tunnelDialog, backup: backupFlow,
   device: (el) => { const d = list(state.devices).find((x) => x.id === el.dataset.id); if (d) deviceDialog(d); },
   'rename-person': (el) => { const p = personOf(el.dataset.id); if (p) renameDialog('Rename', nameOf(p), (v) => admin.renamePerson(p.id, v)); },
   unpair: (el) => { const p = personOf(el.dataset.id); if (p) confirmDialog({ title: `Unpair from ${nameOf(p)}?`, text: 'You both lose the connection. Things you already shared stay with whoever has them.', action: 'Unpair', run: async () => { await admin.unpair(p.id); location.hash = '#/people'; toast('Unpaired'); } }); },

@@ -209,6 +209,7 @@ func (po *publicOnions) Add(s PublicService) (PublicService, error) {
 	}
 	s.Address = addr
 	po.d.log.Info("public onion service added", "service", s.Name, "port", s.Port)
+	po.d.emit(EvOnion, po.List())
 	return s, nil
 }
 
@@ -226,6 +227,7 @@ func (po *publicOnions) Remove(name string) error {
 	if err != nil {
 		return err
 	}
+	defer po.d.emit(EvOnion, po.List())
 	if tor := po.d.tor(); tor != nil {
 		return tor.Forget(publicIDPrefix + name)
 	}

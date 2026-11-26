@@ -36,6 +36,7 @@ type server struct {
 	inbox   []m
 	svcs    []m
 	tunnels []m
+	onions  []m
 	theme   m
 	backup  m
 	agents  []m
@@ -90,6 +91,7 @@ func newServer() *server {
 		},
 		svcs:    []m{{"name": "blog", "port": 8080, "http": true, "people": []string{"carol"}}},
 		tunnels: []m{{"id": "t1", "person": "bob", "service": "jellyfin", "port": 18096, "state": "open", "http": true}},
+		onions:  []m{{"name": "wiki", "port": 8081, "address": "q5x7m2lkzv4tq3pnwnfdq6rbb3kf2tqmh5jz7wxv4ayyb4cbhrsfldqd.onion"}},
 		theme:   m{"name": "sol", "settings": m{"scheme": "auto", "accent": "", "density": "comfortable", "radius": "rounded", "glass": "on", "font": "system", "wallpaper": "dusk"}},
 		backup: m{"words": strings.Fields("orchard velvet anchor candle meadow harbor lantern pepper quiet ribbon silver timber " +
 			"unfold violet whisper yellow zephyr acorn bridge copper dolphin ember falcon garden"), "confirmed": false},
@@ -225,6 +227,19 @@ func (s *server) admin(w http.ResponseWriter, r *http.Request) {
 			s.svcs = append(s.svcs[:i], s.svcs[i+1:]...)
 		}
 		s.publish("service", m{})
+		ok()
+	case p == "onions" && r.Method == "GET":
+		write(w, 200, s.onions)
+	case p == "onions":
+		body["address"] = "" // the fake Tor never publishes it, as a real one does a little later
+		s.onions = append(s.onions, body)
+		s.publish("onion", m{})
+		write(w, 200, body)
+	case parts[0] == "onions" && len(parts) == 2:
+		if i := s.find(s.onions, "name", parts[1]); i >= 0 {
+			s.onions = append(s.onions[:i], s.onions[i+1:]...)
+		}
+		s.publish("onion", m{})
 		ok()
 	case p == "tunnels" && r.Method == "GET":
 		write(w, 200, s.tunnels)

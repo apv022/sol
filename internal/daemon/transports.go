@@ -123,6 +123,9 @@ func (d *Daemon) hookTransport(t transport.Transport) {
 		tor.OnAddress = func() {
 			if d.ctx.Err() == nil {
 				d.refreshEndpoints()
+				if d.onions != nil {
+					d.emit(EvOnion, d.onions.List()) // a public service may have its address now
+				}
 			}
 		}
 	}
