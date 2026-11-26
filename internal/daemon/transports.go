@@ -88,6 +88,9 @@ func (d *Daemon) startTransport(t transport.Transport) (identity.Endpoint, bool)
 		p.ClientAuth = auth // never an open onion, not even for a moment
 	}
 	addr, err := t.Publish(d.ctx, p)
+	if tor, ok := t.(*transport.Tor); ok && d.onions != nil {
+		d.onions.publishAll(tor) // public onion services ride along (onions.go)
+	}
 	if err != nil {
 		d.log.Info("transport did not publish yet", "transport", t.Name(), "err", err)
 		return identity.Endpoint{}, false

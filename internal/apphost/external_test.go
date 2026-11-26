@@ -1,8 +1,11 @@
 package apphost
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"image"
+	"image/png"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +41,7 @@ func TestExternalRegisterBindAndReload(t *testing.T) {
 	dir := t.TempDir()
 	h, tok := extHost(t, dir)
 	m := &sol.Manifest{ID: "music", Name: "Music", Scopes: []string{"people", "blobs"}, Exec: "./evil"}
-	got, token, err := h.RegisterExternal(m, "org.example.music", strings.ToUpper("AA:"+certA[2:]))
+	got, token, err := h.RegisterExternal(m, "org.example.music", strings.ToUpper("AA:"+certA[2:]), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +80,7 @@ func TestExternalRegisterBindAndReload(t *testing.T) {
 		{sol.Manifest{ID: "x"}, "org.x.y", "short"},
 		{sol.Manifest{ID: "x"}, "org.x.y", ""},
 	} {
-		if _, _, err := h.RegisterExternal(&c.m, c.pkg, c.cert); err == nil {
+		if _, _, err := h.RegisterExternal(&c.m, c.pkg, c.cert, nil); err == nil {
 			t.Errorf("%+v %s %s: accepted", c.m, c.pkg, c.cert)
 		}
 	}
@@ -85,7 +88,7 @@ func TestExternalRegisterBindAndReload(t *testing.T) {
 		t.Error("restart of an external app")
 	}
 	// Re-approval of the same binding: a new token, the old one revoked.
-	_, token2, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA)
+	_, token2, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, nil)
 	if err != nil || granted(tok, token) != "" || granted(tok, token2) != "music" {
 		t.Fatalf("re-register: %v old=%q new=%q", err, granted(tok, token), granted(tok, token2))
 	}
@@ -121,3 +124,70 @@ func TestExternalRegisterBindAndReload(t *testing.T) {
 
 // runtime0600 reports whether a secret file's mode is wrong (Windows has no Unix modes).
 func runtime0600(m os.FileMode) bool { return m != 0o600 && os.PathSeparator == '/' }
+
+// testPNG is a w×h PNG.
+func testPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestExternalIcon: an external app's icon is validated (PNG, size, dimensions), stored as
+// icon.png beside the binding, replaced or removed by the next registration and gone with the app.
+func TestExternalIcon(t *testing.T) {
+	big := append(testPNG(t, 8, 8), make([]byte, MaxExternalIconBytes)...)
+	for name, b := range map[string][]byte{
+		"not a png":  []byte("GIF89a......"),
+		"bad header": append(append([]byte{}, pngMagic...), "garbage"...),
+		"too wide":   testPNG(t, 513, 16),
+		"too big":    big,
+	} {
+		if err := ValidateIconPNG(b); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	dir := t.TempDir()
+	h, _ := extHost(t, dir)
+	if _, _, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, []byte("nope")); err == nil {
+		t.Fatal("bad icon accepted")
+	}
+	if _, ok := h.External("music"); ok {
+		t.Fatal("registered despite a bad icon")
+	}
+	icon := testPNG(t, 192, 192)
+	if _, _, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, icon); err != nil {
+		t.Fatal(err)
+	}
+	p, _, ok := h.ExternalIcon("music")
+	if b, _ := os.ReadFile(p); !ok || !bytes.Equal(b, icon) || filepath.Base(p) != ExternalIconFile {
+		t.Fatalf("icon %q %v", p, ok)
+	}
+	if _, _, ok := h.ExternalIcon("echo"); ok {
+		t.Fatal("icon for an app that is not external")
+	}
+	icon2 := testPNG(t, 96, 96)
+	if _, _, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, icon2); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); !bytes.Equal(b, icon2) {
+		t.Fatal("re-connect kept the old icon")
+	}
+	if _, _, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := h.ExternalIcon("music"); ok {
+		t.Fatal("re-connect without an icon kept the old one")
+	}
+	if _, _, err := h.RegisterExternal(&sol.Manifest{ID: "music", Name: "Music"}, "org.example.music", certA, icon); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Remove("music"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("icon survives remove")
+	}
+}

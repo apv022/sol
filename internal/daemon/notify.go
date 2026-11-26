@@ -195,10 +195,11 @@ func (d *Daemon) openAppURL(app string) {
 	}
 }
 
-// openURL starts the default browser on u; SOL_NO_BROWSER=1 never opens one.
-func openURL(u string) {
+// openURL starts the default browser on u and reports whether it could; SOL_NO_BROWSER=1
+// never opens one. A variable so tests can see what would open.
+var openURL = func(u string) bool {
 	if os.Getenv("SOL_NO_BROWSER") == "1" {
-		return
+		return false
 	}
 	var cmd *exec.Cmd
 	switch notifyGOOS {
@@ -209,9 +210,11 @@ func openURL(u string) {
 	default:
 		cmd = exec.Command("xdg-open", u)
 	}
-	if cmd.Start() == nil {
-		go cmd.Wait()
+	if cmd.Start() != nil {
+		return false
 	}
+	go cmd.Wait()
+	return true
 }
 
 var (

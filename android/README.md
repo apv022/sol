@@ -240,6 +240,14 @@ debug). The node restarts with the app and keeps its identity, contacts and file
     "Files") to the home screen with its icon; the launcher shows its own confirmation. Returns
     false when refused (not a local page, a bad id, or a launcher without pinned shortcuts).
     Guard it with `window.SolAndroid?.addToHomeScreen`; the Apps page (`#/apps`) does.
+  - `SolAndroid.openApp(appId)` opens an Android app connected to Sol (an external app, below)
+    from the Apps grid. The page passes only the Sol app id; the shell looks the package up in
+    the node's own list (`libsol.so apps --json`, an external app with that id) and starts its
+    launcher activity (`getLaunchIntentForPackage`; the manifest's `<queries>` for launcher
+    activities makes it visible on Android 11+), so a page can launch nothing the person did
+    not connect. Returns at once whether the request was taken; a failure shows a toast. Guard
+    it with `window.SolAndroid?.openApp`; in a browser the grid shows the app as "Android app",
+    not clickable.
   - `SolAndroid.calendarSync(on)` is the "Show in phone's calendar apps" switch: `true` turns
     calendar sync on (Android asks for the calendar permissions the first time), `false` turns it
     off and removes Sol's calendars from the phone. It returns at once whether the request was
@@ -369,16 +377,22 @@ Your app needs `INTERNET` and cleartext HTTP to `127.0.0.1` (a network security 
 - **Who you are** comes from Android, not your extras: Sol shows your label and icon from
   PackageManager and binds the id to your package and the SHA-256 of your original signing
   certificate. The same id from another package or certificate is refused.
+- **In Sol's Apps grid** your app appears next to Files and Notes with your launcher icon (read
+  from PackageManager at connect, drawn full bleed as a 192 px PNG; an adaptive icon without the
+  launcher's mask) and tapping it starts your launcher activity. Connecting again refreshes the
+  icon. There is no icon extra: what Sol shows is what Android says your app looks like.
 - **Connecting again** shows the approval again and gives you a new token; the old one stops
   working. A `401` means the person removed you (Settings > Connected apps, or
   `sol app remove <id>`): connect again.
 - **Not available to you:** `folders` (use blobs), a UI served by Sol, and being called: actions
   in your manifest answer `not_implemented`, because Sol cannot reach into your app.
 - **Inside Sol** (`ConnectActivity`): the approval runs `libsol.so app connect` with the request
-  on stdin (`NodeService.cli2In`), never in argv or logcat; the node stores only the token's
+  (`{manifest, package, cert, icon_png}`, the icon base64) on stdin (`NodeService.cli2In`), never
+  in argv or logcat; the node stores only the token's
   hash and serves `/v1/` on a loopback port kept in `files/sol/external-api.addr`.
 
 Test it with the client in `android/testclient/` (never shipped): `android/testclient/build.sh`
 (after one `android/build.sh`), `adb install -r android/testclient/build/sol-testclient.apk`,
 open "Sol test client", tap Connect to Sol, Allow; it calls `/v1/whoami` and shows the answer.
+It then shows in Sol's Apps grid with its icon, and tapping it opens the test client.
 Revoke with Settings > Connected apps and tap Call whoami again: `401`.

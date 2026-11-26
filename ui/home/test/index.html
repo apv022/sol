@@ -1,10 +1,12 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>running</title>
+<!-- The Sol app imports by its served paths (/sol.js, /kit/, /util.js); map them to the repo. -->
+<script type="importmap">{"imports": {"/sol.js": "/sdk/js/sol.js", "/kit/": "/ui/kit/", "/util.js": "/ui/home/util.js"}}</script>
 <body>
 <h1 id="summary">running</h1>
 <ul id="results"></ul>
 <script type="module">
 import { run } from '../../kit/testing.js';
-run(() => import('./home.test.js'));
+run(async () => { await import('./home.test.js'); await import('./grid.test.js'); });
 </script>

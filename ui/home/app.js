@@ -7,7 +7,8 @@ import { applySettings, toast } from '/kit/kit.js';
 import { icons } from '/kit/icons.js';
 import '/kit/qr.js';
 import { createAdmin } from '/admin.js';
-import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, appIconSpec, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand, callText } from '/util.js';
+import { gridApps, appArt, appTile, sideApp } from '/grid.js';
+import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand, callText } from '/util.js';
 
 const $ = (id) => document.getElementById(id);
 // The UI root forbids inline styles (CSP style-src 'self'): markup uses classes and data-var-*
@@ -441,7 +442,7 @@ function settingsView() {
     <section class="section"><h3 class="group-title">Agents</h3>${list(state.agents).length ? html`<div class="list">${list(state.agents).map((a) => html`<div data-item><span class="row-icon">${ic('agent')}</span><span class="grow"><span class="row-title">${a.name}</span><span class="row-sub">${list(a.scopes).join(', ') || 'no scopes'} · expires ${relTime(a.expires)}</span></span><button type="button" class="danger" data-act="revoke-agent" data-id="${a.name}">Revoke</button></div>`)}</div>` : html`<div class="list"><div data-item class="muted">No agent keys</div></div>`}
       <p class="group-footer"><button type="button" class="tinted" data-act="new-agent">${ic('plus')}New agent key</button></p>
       <p class="group-footer">Agents run <code class="inline">sol do</code> with a key you issued, limited to its scopes.</p></section>
-    ${list(state.apps).some((a) => a.external) ? html`<section class="section"><h3 class="group-title">Connected apps</h3><div class="list">${list(state.apps).filter((a) => a.external).map((a) => html`<div data-item><span class="row-icon">${ic('grid')}</span><span class="grow"><span class="row-title">${a.name || a.id}</span><span class="row-sub">${a.package || a.id} · ${list(a.scopes).join(', ') || 'no scopes'}</span></span><button type="button" class="danger" data-act="rm-ext-app" data-id="${a.id}" data-name="${a.name || a.id}">Remove</button></div>`)}</div>
+    ${list(state.apps).some((a) => a.external) ? html`<section class="section"><h3 class="group-title">Connected apps</h3><div class="list">${list(state.apps).filter((a) => a.external).map((a) => html`<div data-item><span class="row-icon ext-icon">${appArt(a)}</span><span class="grow"><span class="row-title">${a.name || a.id}</span><span class="row-sub">${a.package || a.id} · ${list(a.scopes).join(', ') || 'no scopes'}</span></span><button type="button" class="danger" data-act="rm-ext-app" data-id="${a.id}" data-name="${a.name || a.id}">Remove</button></div>`)}</div>
       <p class="group-footer">Apps on this device that you allowed to use Sol. Removing one ends its access at once.</p></section>` : ''}
     <section class="section"><h3 class="group-title">Browser sessions</h3><div class="list">${list(st.sessions).map((b) => html`<div data-item><span class="row-icon">${ic('globe')}</span><span class="grow"><span class="row-title">${b.client || b.name || 'Browser'}</span><span class="row-sub">Last used ${relTime(b.last_used)}</span></span>${b.current ? html`<span class="badge tint">This browser</span>${inApp ? '' : html`<button type="button" data-act="logout">Sign out of this browser</button>`}` : html`<button type="button" class="danger" data-act="revoke-session" data-id="${b.id}">Revoke</button>`}</div>`)}</div></section>
     <section class="section"><h3 class="group-title">About</h3><div class="list"><div data-item><span class="grow">Version</span><span class="muted">${st.version ? `Sol ${st.version}` : 'Unknown'}</span></div></div></section>
@@ -465,22 +466,13 @@ function transportRows(ts) {
 
 // Home: a calm overview on the wallpaper: greeting and date, glass widgets, app grid, Inbox preview.
 let firstPaint = true;
-/** An app's icon: its manifest image, or a glyph on a gradient. */
-function appArt(a) {
-  const spec = appIconSpec(a, icons);
-  return spec.kind === 'img' ? html`<span class="app-img"><img src="${spec.src}" alt=""></span>` : html`<sol-app-icon glyph="${spec.glyph}" hue="${spec.hue}"></sol-app-icon>`;
-}
 /** The installed apps that have a UI to open. */
 const uiApps = () => list(state.apps).filter((a) => a.url);
-function appTile(a, i) {
-  const art = appArt(a);
-  return html`<a class="app" data-var-i="${i}" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${art}<span>${a.name}</span></a>`;
-}
 function homeView() {
   const now = new Date();
   const ppl = list(state.people), online = ppl.filter(isOnline), ds = list(state.devices);
   const st = storageView(state.status?.storage);
-  const items = list(state.inbox), apps = uiApps();
+  const items = list(state.inbox), apps = gridApps(state.apps);
   return html`<div class="home">
     <header class="hero"><h1 class="greet" id="greet">${greetingFor(meName(), now)}</h1><p class="date" id="date">${dateText(now)}</p></header>
     <div class="widgets">
@@ -490,16 +482,16 @@ function homeView() {
       ${st ? html`<a class="widget" data-var-i="2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><span class="widget-body"><span class="widget-value">${st.value}</span><span class="widget-sub">${st.sub}</span></span></a>` : ''}
     </div>
     <div class="home-cols">
-      <section aria-label="Apps">${apps.length ? html`<div class="app-grid">${apps.map(appTile)}</div>` : html`<p class="home-empty">No apps installed yet.</p>`}</section>
+      <section aria-label="Apps">${apps.length ? html`<div class="app-grid">${apps.map((a, i) => appTile(a, i))}</div>` : html`<p class="home-empty">No apps installed yet.</p>`}</section>
       <aside class="inbox-card glass" aria-label="Inbox"><h2>Inbox <a href="#/inbox">See all</a></h2>${items.length ? items.slice(0, 3).map((i) => inboxItem(i, true)) : html`<div class="empty-sm">All caught up</div>`}</aside>
     </div></div>`;
 }
 
 function appsView() {
-  const apps = uiApps();
+  const apps = gridApps(state.apps), web = uiApps();
   // Android app only: pin an app to the phone's home screen (window.SolAndroid, android/README.md).
-  const pin = window.SolAndroid?.addToHomeScreen && apps.length ? html`<section class="section"><div class="list">${apps.map((a) => html`<button type="button" data-item data-act="pin-app" data-id="${a.id}" data-name="${a.name}">${ic('plus')}Add ${a.name} to home screen</button>`)}</div></section>` : '';
-  return html`<div class="page">${pageHead('Apps')}${apps.length ? html`<div class="app-grid in-page">${apps.map(appTile)}</div>` : html`<div class="empty"><h3>No apps yet</h3><p>Apps you install show up here.</p></div>`}${pin}</div>`;
+  const pin = window.SolAndroid?.addToHomeScreen && web.length ? html`<section class="section"><div class="list">${web.map((a) => html`<button type="button" data-item data-act="pin-app" data-id="${a.id}" data-name="${a.name}">${ic('plus')}Add ${a.name} to home screen</button>`)}</div></section>` : '';
+  return html`<div class="page">${pageHead('Apps')}${apps.length ? html`<div class="app-grid in-page">${apps.map((a, i) => appTile(a, i))}</div>` : html`<div class="empty"><h3>No apps yet</h3><p>Apps you install show up here.</p></div>`}${pin}</div>`;
 }
 
 const NAV = [['home', 'Home', 'home', '#/'], ['people', 'People', 'people', '#/people'], ['devices', 'Devices', 'device', '#/devices'], ['inbox', 'Inbox', 'inbox', '#/inbox'], ['sharing', 'Sharing', 'share', '#/sharing'], ['settings', 'Settings', 'settings', '#/settings']];
@@ -510,9 +502,9 @@ const badge = (n, cls) => (n ? html`<span class="${cls}">${n}</span>` : '');
 const current = (name) => (route.name === name || (name === 'settings' && ['devices', 'sharing'].includes(route.name)) ? 'page' : 'false');
 
 function chrome() {
-  const apps = uiApps();
+  const apps = gridApps(state.apps);
   render($('side'), html`<a class="brand" href="#/" aria-label="Sol home" aria-current="${route.name === 'home' ? 'page' : 'false'}"><img class="brand-sun" src="/icon.svg" alt="" width="28" height="28">Sol</a>
-    <div class="side-group" role="group" aria-label="Apps"><div class="side-label">Apps</div>${apps.length ? apps.map((a) => html`<a class="side-item side-app" href="${a.url}" ${a.running === false ? raw('data-off') : ''}>${appArt(a)}${a.name}</a>`) : html`<span class="side-none">None installed</span>`}</div>
+    <div class="side-group" role="group" aria-label="Apps"><div class="side-label">Apps</div>${apps.length ? apps.map((a) => sideApp(a)) : html`<span class="side-none">None installed</span>`}</div>
     <div class="side-sep"></div>
     ${NAV.filter((n) => SIDE.includes(n[0])).map(([n, l, i, h]) => html`<a class="side-item" href="${h}" aria-current="${n === route.name ? 'page' : 'false'}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge tint') : ''}</a>`)}<span class="spacer"></span>
     <div class="me"><sol-avatar name="${meName() || '?'}" id="me"></sol-avatar><span><strong>${meName()}</strong><small class="muted">${state.status?.me?.device?.name || ''}</small></span></div>`);
@@ -592,6 +584,13 @@ function setAnonymous(input) {
     run: async () => { input.checked = true; await run(); toast(`${nameOf(p)} is anonymous`); } });
 }
 
+/** Opens a connected Android app through the shell, which checks the id against the node's apps. */
+function openNative(id) {
+  let ok = false;
+  try { ok = !!window.SolAndroid?.openApp?.(id); } catch { /* not in the Android app */ }
+  if (!ok) toast('Could not open the app', { kind: 'error' });
+}
+
 /** Saves an appearance setting: updates the screen first, then tells the daemon. */
 async function setSetting(patch) {
   const prev = state.theme;
@@ -605,6 +604,7 @@ document.addEventListener('click', (e) => {
   if (!t) return;
   if (t.dataset.set) { setSetting({ [t.dataset.set]: t.dataset.v }); return; }
   if (t.dataset.act === 'pin-app') { window.SolAndroid?.addToHomeScreen?.(t.dataset.id, t.dataset.name); return; }
+  if (t.dataset.act === 'open-native') { e.preventDefault(); openNative(t.dataset.id); return; }
   ACTIONS[t.dataset.act]?.(t);
 });
 document.addEventListener('change', (e) => {

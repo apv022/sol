@@ -88,7 +88,21 @@ type Config struct {
 	Tap func(kind, id string)
 	// Petname, if set, returns the local petname I gave a contact ("" for the default).
 	Petname func(id string) string
+	// Builtin, if set, is a pseudo-app whose actions the daemon runs itself (Sol's own
+	// "sol.*" actions). Its calls get the same approval policy, Inbox approvals and activity log
+	// as an installed app's.
+	Builtin *Builtin
 	Log     *slog.Logger
+}
+
+// Builtin is an app with no process: the daemon answers its actions in process.
+type Builtin struct {
+	// ID is the app id its actions are named under ("sol").
+	ID string
+	// Spec returns an action's spec.
+	Spec func(action string) (sol.ActionSpec, bool)
+	// Call runs an action (approval, if needed, was already given).
+	Call func(ctx context.Context, c sol.ActionCall) (json.RawMessage, error)
 }
 
 // principal is who a token belongs to.

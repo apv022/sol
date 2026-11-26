@@ -97,7 +97,9 @@ type Storage struct {
 // AppInfo is one row of GET /admin/v1/apps (sol apps).
 type AppInfo struct {
 	apphost.Status
-	URL         string   `json:"url,omitempty"`
+	URL string `json:"url,omitempty"`
+	// Icon is the manifest's icon; for an external app a kit glyph name or the URL of the icon
+	// it connected with (/app-icons/<id>?v=..., on the UI root, which needs the session).
 	Icon        string   `json:"icon,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Scopes      []string `json:"scopes"`
@@ -182,13 +184,22 @@ func (d *Daemon) appInfo(s apphost.Status) AppInfo {
 	if s.UI {
 		a.URL = apphost.AppURL(s.ID, d.UIPort())
 	}
-	if b, ok := d.Host.External(s.ID); ok {
-		a.External, a.Package = true, b.Package
-	}
 	if m, ok := d.Host.Manifest(s.ID); ok {
 		a.Icon, a.Description = m.Icon, m.Description
 		if m.Scopes != nil {
 			a.Scopes = m.Scopes
+		}
+	}
+	if b, ok := d.Host.External(s.ID); ok {
+		a.External, a.Package = true, b.Package
+		// An external app's manifest is its own claim: its icon may only name a kit glyph,
+		// never a path or URL the home page would load. Its real icon is the one the Android
+		// shell read from PackageManager, served from the UI root.
+		if !glyphName.MatchString(a.Icon) {
+			a.Icon = ""
+		}
+		if _, mod, ok := d.Host.ExternalIcon(s.ID); ok {
+			a.Icon = externalIconURL(s.ID, mod)
 		}
 	}
 	return a
@@ -447,11 +458,13 @@ func (d *Daemon) adminHandler() http.Handler {
 			Manifest *sol.Manifest `json:"manifest"`
 			Package  string        `json:"package"`
 			Cert     string        `json:"cert"`
+			// IconPNG is the app's launcher icon, a base64 PNG (encoding/json decodes it).
+			IconPNG []byte `json:"icon_png"`
 		}
 		if err := body(r, &b); err != nil {
 			return nil, err
 		}
-		return d.RegisterExternal(b.Manifest, b.Package, b.Cert)
+		return d.RegisterExternal(b.Manifest, b.Package, b.Cert, b.IconPNG)
 	})
 	j("POST /admin/v1/apps/{id}/remove", "apps.remove", func(r *http.Request) (any, error) {
 		return nil, d.Host.Remove(r.PathValue("id"))
@@ -478,6 +491,18 @@ func (d *Daemon) adminHandler() http.Handler {
 	})
 	j("DELETE /admin/v1/services/{name}", "services.remove", func(r *http.Request) (any, error) {
 		return nil, d.ports.RemoveService(r.PathValue("name"))
+	})
+	// Public onion services (onions.go): open to anyone with the address.
+	j("GET /admin/v1/onions", "", func(r *http.Request) (any, error) { return d.onions.List(), nil })
+	j("POST /admin/v1/onions", "onions.add", func(r *http.Request) (any, error) {
+		var s PublicService
+		if err := body(r, &s); err != nil {
+			return nil, err
+		}
+		return d.onions.Add(s)
+	})
+	j("DELETE /admin/v1/onions/{name}", "onions.remove", func(r *http.Request) (any, error) {
+		return nil, d.onions.Remove(r.PathValue("name"))
 	})
 	j("GET /admin/v1/tunnels", "", func(r *http.Request) (any, error) { return d.ports.Tunnels(), nil })
 	j("POST /admin/v1/tunnels", "tunnels.open", func(r *http.Request) (any, error) {

@@ -197,3 +197,8 @@ select.fit { width: auto; }
 .setup-card .err:empty { display: none; }
 .setup-card .hint { font-size: var(--fs-footnote); }
 .dlg-body .warn, sol-dialog .warn { color: var(--red); }
+
+/* A connected Android app seen from a browser: shown, but nothing here can open it (grid.js). */
+.app[data-native][aria-disabled="true"], .side-app[data-native] { opacity: .6; cursor: default; }
+.app .app-where { font-size: var(--fs-caption); font-weight: 400; opacity: .85; margin-top: calc(-1 * var(--space-1)); }
+.ext-icon sol-app-icon, .ext-icon .app-img { --size: 28px; }

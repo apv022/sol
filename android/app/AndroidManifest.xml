@@ -12,6 +12,14 @@
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
+    <!-- Package visibility (Android 11+) for launcher apps only: the Apps grid opens a connected
+         app (SolWeb Bridge.openApp) with getLaunchIntentForPackage, which needs to see it. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <!-- allowBackup=false: the device key must not reach cloud backups. extractNativeLibs=true:
          libsol.so is a program and must exist as a file to be executed. -->

@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/apv022/sol/sdk/go/sol"
@@ -37,7 +39,7 @@ func solActions() ActionApp {
 		return &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
 			"name": {Type: "string", Enum: enumOf(names)}}}
 	}
-	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance, transports and people's privacy", Actions: []sol.ActionSpec{
+	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance, transports, people's privacy and opening apps", Actions: []sol.ActionSpec{
 		{Name: "sol.transports.list", Description: "List the transports, whether each is on and how it is doing", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "enabled", "state", "detail"}},
 		{Name: "sol.transports.enable", Description: "Turn a transport on (wg, direct, tor), now and after restarts", Effect: sol.EffectWrite, Input: name(KnownTransports)},
@@ -54,9 +56,30 @@ func solActions() ActionApp {
 			Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.theme.settings", Description: "Show or change appearance settings (an empty value resets one; no arguments shows them)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: props}},
+		{Name: "sol.apps.open", Description: "Open an app's UI in this computer's browser (an Android app connected to Sol opens from Sol's Apps grid on the phone)",
+			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Required: []string{"id"}, Properties: map[string]*sol.Schema{"id": {Type: "string"}}}},
+		{Name: "sol.onions.list", Description: "List the public onion services: local ports anyone with the .onion address can reach", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "port", "onion_port", "address"}},
+		{Name: "sol.onions.host", Description: "Publish a local port as a public Tor onion service (anyone with the address can connect; the service must do its own login). Tor must be on.",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name", "port"}, Properties: map[string]*sol.Schema{
+				"name":       {Type: "string"},
+				"port":       {Type: "integer"},
+				"onion_port": {Type: "integer"}}}},
+		{Name: "sol.onions.remove", Description: "Stop a public onion service and delete its key: its .onion address is gone for good",
+			Effect: sol.EffectDestructive, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.notifications", Description: "Show or set desktop notifications for Inbox items on this device (desktop: on|off; no arguments shows the state)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"desktop": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
 	}}
+}
+
+// solSpec returns the spec of a built-in action.
+func solSpec(action string) (sol.ActionSpec, bool) {
+	for _, s := range solActions().Actions {
+		if s.Name == action {
+			return s, true
+		}
+	}
+	return sol.ActionSpec{}, false
 }
 
 // callSol runs a built-in action. handled is false when the action is not Sol's own.
@@ -79,10 +102,22 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 	if err := spec.Input.Validate(c.Args); err != nil {
 		return nil, true, err
 	}
-	var args map[string]string
+	// Every built-in action takes flat scalar arguments (the schema checked them above).
+	var raw map[string]any
 	if len(c.Args) > 0 {
-		if err := json.Unmarshal(c.Args, &args); err != nil {
-			return nil, true, sol.Errorf("bad_request", "args are not a JSON object of strings")
+		if err := json.Unmarshal(c.Args, &raw); err != nil {
+			return nil, true, sol.Errorf("bad_request", "args are not a JSON object")
+		}
+	}
+	args := map[string]string{}
+	for k, v := range raw {
+		switch v := v.(type) {
+		case string:
+			args[k] = v
+		case float64, bool:
+			args[k] = fmt.Sprint(v)
+		default:
+			return nil, true, sol.Errorf("bad_request", "argument "+k+" must be a string, number or boolean")
 		}
 	}
 	var res any
@@ -123,6 +158,29 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 			}
 			res = p
 		}
+	case "sol.apps.open":
+		if res, err = d.openAppAction(args["id"], c.DryRun); err != nil {
+			return nil, true, err
+		}
+	case "sol.onions.list":
+		res = d.onions.List()
+	case "sol.onions.host":
+		port, _ := strconv.Atoi(args["port"])
+		oport, _ := strconv.Atoi(args["onion_port"])
+		ps := PublicService{Name: args["name"], Port: port, OnionPort: oport}
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "would_host": ps, "warning": PublicOnionWarning}
+		} else if res, err = d.onions.Add(ps); err != nil {
+			return nil, true, err
+		}
+	case "sol.onions.remove":
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "would_remove": args["name"], "warning": "its .onion address is gone for good"}
+		} else if err := d.onions.Remove(args["name"]); err != nil {
+			return nil, true, err
+		} else {
+			res = map[string]string{"removed": args["name"]}
+		}
 	case "sol.notifications":
 		switch {
 		case args["desktop"] == "":
@@ -150,4 +208,33 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 	}
 	b, err := json.Marshal(res)
 	return b, true, err
+}
+
+// openAppAction is sol.apps.open: an app with a UI opens in the default browser of this
+// computer (what `sol open <app>` does). The daemon has no channel to the Android shell, so on
+// Android, and for an external app (a native program, M5), it answers not_implemented and says
+// where the app opens instead: the shell's Apps grid launches a connected Android app itself.
+func (d *Daemon) openAppAction(id string, dry bool) (any, error) {
+	var app *AppInfo
+	for _, a := range d.Apps() {
+		if strings.EqualFold(a.ID, id) || strings.EqualFold(a.Name, id) {
+			app = &a
+			break
+		}
+	}
+	switch {
+	case app == nil:
+		return nil, sol.Errorf("not_found", "no app "+id)
+	case app.External && app.Package != "":
+		return nil, sol.Errorf("not_implemented", app.Name+" is an Android app: open it from Sol's Apps grid on the phone it is connected on")
+	case app.External:
+		return nil, sol.Errorf("not_implemented", app.Name+" runs outside Sol and has no UI Sol can open")
+	case app.URL == "":
+		return nil, sol.Errorf("bad_request", app.Name+" has no UI to open")
+	case isAndroid():
+		return nil, sol.Errorf("not_implemented", "on Android, open "+app.Name+" from Sol's Apps grid")
+	case dry:
+		return map[string]any{"dry_run": true, "id": app.ID, "url": app.URL}, nil
+	}
+	return map[string]any{"id": app.ID, "url": app.URL, "opened": openURL(app.URL)}, nil
 }

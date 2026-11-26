@@ -308,3 +308,35 @@ func TestRestoreFromWords(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestAgentBuiltinApproval: Sol's own actions follow their approval policy for agents like any
+// app's: a read runs at once; one that declares approval files an Inbox item, runs only when
+// the person approves it, and its result is recorded.
+func TestAgentBuiltinApproval(t *testing.T) {
+	d := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, nil)
+	admin, err := sold.Connect(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag, err := sold.ConnectAgent(d.Dir(), newAgent(t, d, "helper", "sol.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := do(t, ag, "sol.transports.list", "--json"); code != 0 || !strings.Contains(out, "clearnet") {
+		t.Fatalf("a read as agent: %d %s", code, out)
+	}
+	code, id := do(t, ag, "sol.onions.remove", "--name", "blog")
+	id, _, _ = strings.Cut(id, "\n")
+	if code != cli.ExitApproval || !strings.HasPrefix(id, "in-") {
+		t.Fatalf("an approval action as agent: %d %s", code, id)
+	}
+	var it sol.InboxItem
+	// It runs on approval: there is no "blog" service, so the action itself answers not_found.
+	if err := admin.Do(context.Background(), "POST", "/admin/v1/inbox/"+id+"/approve", nil, &it); err != nil || it.Answer != "approved" || it.Error == nil || it.Error.Code != "not_found" {
+		t.Fatalf("approve: %+v %v", it, err)
+	}
+	var items []sol.InboxItem
+	if err := ag.Do(context.Background(), "GET", "/agent/v1/inbox", nil, &items); err != nil || len(items) != 1 || items[0].Answer != "approved" || items[0].Error == nil || items[0].Error.Code != "not_found" {
+		t.Fatalf("agent's inbox after approval: %+v %v", items, err)
+	}
+}

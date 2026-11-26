@@ -311,6 +311,7 @@ type Daemon struct {
 	browser    *browserAuth
 	pets       *petnames
 	ports      *portShare
+	onions     *publicOnions // public onion services (onions.go)
 	admin      http.Handler
 	wg         sync.WaitGroup // background goroutines (the theme watcher, the folder measurement)
 	folder     folderSize     // cached size of the synced folder (foldersize.go)
@@ -433,6 +434,9 @@ func Start(o Options) (_ *Daemon, err error) {
 		Log: d.log}); err != nil {
 		return nil, err
 	}
+	if d.onions, err = newPublicOnions(d); err != nil {
+		return nil, err
+	}
 	if d.ports, err = openPortShare(d, filepath.Join(o.Dir, "services.json"), filepath.Join(o.Dir, "tunnels.json")); err != nil {
 		return nil, err
 	}
@@ -441,6 +445,10 @@ func Start(o Options) (_ *Daemon, err error) {
 	if d.API, err = appapi.New(appapi.Config{Node: appapi.Node{Keyring: kr, Cache: d.Cache, Store: d.Store,
 		Contacts: d.Contacts, Shares: d.Shares, Pins: d.Pins, Blobs: d.Blobs, Blobnet: d.Blobnet, Sessions: d.Sessions},
 		Apps: apps, DataDir: o.Dir, Admin: d.admin, Agent: d.agentHandler(), Tap: d.tap, Petname: d.pets.get,
+		Builtin: &appapi.Builtin{ID: SolAppID, Spec: solSpec, Call: func(ctx context.Context, c sol.ActionCall) (json.RawMessage, error) {
+			out, _, err := d.callSol(ctx, c)
+			return out, err
+		}},
 		Log: d.log}); err != nil {
 		return nil, err
 	}

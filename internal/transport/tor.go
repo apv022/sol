@@ -776,11 +776,28 @@ func addOnionCommand(keyArg string, p Publication) string {
 	if len(p.ClientAuth) > 0 {
 		cmd += " Flags=V3Auth"
 	}
-	cmd += fmt.Sprintf(" Port=%d,%s", onionVirtualPort, p.Target)
+	port := onionVirtualPort
+	if p.Port > 0 {
+		port = p.Port
+	}
+	cmd += fmt.Sprintf(" Port=%d,%s", port, p.Target)
 	for _, k := range p.ClientAuth {
 		cmd += " ClientAuthV3=" + k
 	}
 	return cmd
+}
+
+// Forget unpublishes the onion for id and deletes its key, so its address is gone for good:
+// publishing the same ID again makes a new address.
+func (t *Tor) Forget(id string) error {
+	if strings.ContainsAny(id, `/\.`) || id == "" {
+		return fmt.Errorf("invalid publication id %q", id)
+	}
+	uerr := t.Unpublish(id)
+	if err := os.Remove(t.keyPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return uerr
 }
 
 // Unpublish removes the onion for id. Its key is kept, so publishing the

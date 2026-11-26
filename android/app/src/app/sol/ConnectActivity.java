@@ -6,12 +6,16 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Typeface;
+import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -25,6 +29,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -42,7 +47,9 @@ import java.util.List;
  * logcat) bound to the package and the SHA-256 of its original signing certificate, and the
  * caller gets RESULT_OK with extras token, api and app_id. Anything else is RESULT_CANCELED
  * with an "error" extra (denied, not_for_result, not_set_up, bad_request, failed). The token
- * is never logged or kept here: the node stores only its hash.
+ * is never logged or kept here: the node stores only its hash. The app's launcher icon, also
+ * from PackageManager, goes with the request as a 192 px PNG (icon_png) so Sol's Apps grid can
+ * show it; reconnecting refreshes it.
  */
 public class ConnectActivity extends Activity {
     /** The intent action third-party apps send. */
@@ -77,6 +84,43 @@ public class ConnectActivity extends Activity {
             return;
         }
         show(null, null, null);
+    }
+
+    /** The size of the icon sent to the node: the Apps grid shows it at up to 60 CSS px. */
+    static final int ICON_PX = 192;
+
+    /**
+     * The package's launcher icon from PackageManager as a base64 PNG of ICON_PX square, or null.
+     * An adaptive icon is drawn full bleed (its background and foreground layers, without the
+     * launcher's mask), so the grid's own rounded square shapes it like every other Sol app.
+     */
+    private String iconPng(String pkg) {
+        try {
+            Drawable d = getPackageManager().getApplicationIcon(pkg);
+            Bitmap bm = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(bm);
+            if (Build.VERSION.SDK_INT >= 26 && d instanceof AdaptiveIconDrawable) {
+                // The layers are 108 dp, of which the middle 72 dp is the icon: inset by 1/4 of
+                // the visible size on every side (AdaptiveIconDrawable.EXTRA_INSET_PERCENTAGE).
+                int in = ICON_PX / 4;
+                AdaptiveIconDrawable a = (AdaptiveIconDrawable) d;
+                for (Drawable layer : new Drawable[]{a.getBackground(), a.getForeground()}) {
+                    if (layer == null) continue;
+                    layer.setBounds(-in, -in, ICON_PX + in, ICON_PX + in);
+                    layer.draw(c);
+                }
+            } else {
+                d.setBounds(0, 0, ICON_PX, ICON_PX);
+                d.draw(c);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (!bm.compress(Bitmap.CompressFormat.PNG, 100, out)) return null;
+            bm.recycle();
+            // The node refuses icons over 256 KB; a 192 px PNG is far smaller.
+            return out.size() > 256 * 1024 ? null : Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+        } catch (Exception e) {
+            return null; // no icon: the grid shows a glyph
+        }
     }
 
     /** The SHA-256 of the package's original signing certificate (rotation keeps it). */
@@ -221,7 +265,10 @@ public class ConnectActivity extends Activity {
         startForegroundService(new Intent(this, NodeService.class));
         final String req;
         try {
-            req = new JSONObject().put("manifest", manifest).put("package", caller).put("cert", cert).toString();
+            JSONObject o = new JSONObject().put("manifest", manifest).put("package", caller).put("cert", cert);
+            String icon = iconPng(caller);
+            if (icon != null) o.put("icon_png", icon);
+            req = o.toString();
         } catch (JSONException e) { fail("bad_request", e.getMessage()); return; }
         new Thread(() -> {
             for (int i = 0; i < 300 && !NodeService.isReady(); i++) {

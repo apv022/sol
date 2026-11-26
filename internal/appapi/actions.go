@@ -165,6 +165,9 @@ func (s *Server) run(ctx context.Context, requester string, c sol.ActionCall, wh
 	if err != nil {
 		return nil, err
 	}
+	if b := s.cfg.Builtin; b != nil && appID == b.ID {
+		return s.runBuiltin(ctx, b, requester, c, who, approved)
+	}
 	a, ok := s.cfg.Apps.App(appID)
 	if !ok {
 		return nil, sol.Errorf("not_found", "no app "+appID)
@@ -191,6 +194,23 @@ func (s *Server) run(ctx context.Context, requester string, c sol.ActionCall, wh
 	out, err := s.dispatch(ctx, a.Addr, c, who)
 	if spec.Effect != sol.EffectRead && !c.DryRun {
 		s.logActivity(who, appID, c, err)
+	}
+	return out, err
+}
+
+// runBuiltin is run for the built-in app: the same approval rules, then the daemon's own code.
+func (s *Server) runBuiltin(ctx context.Context, b *Builtin, requester string, c sol.ActionCall, who caller, approved bool) (json.RawMessage, error) {
+	spec, ok := b.Spec(c.Action)
+	if !ok {
+		return nil, sol.Errorf("not_found", "no such action "+c.Action)
+	}
+	crossApp := requester != b.ID && spec.Effect != sol.EffectRead
+	if !approved && !c.DryRun && (needsApproval(spec, who.agent) || crossApp) {
+		return s.fileApproval(requester, sol.ActionCall{Action: c.Action, Args: c.Args}, who.agent)
+	}
+	out, err := b.Call(ctx, c)
+	if spec.Effect != sol.EffectRead && !c.DryRun {
+		s.logActivity(who, b.ID, c, err)
 	}
 	return out, err
 }

@@ -590,6 +590,7 @@ func (d *Daemon) rootHandler() http.Handler {
 	mx.HandleFunc("GET /_sol/open", d.openApp)
 	mx.HandleFunc("POST /_sol/signin", d.signIn)
 	mx.HandleFunc("GET /wallpapers/{id}", d.serveWallpaper)
+	mx.HandleFunc("GET /app-icons/{id}", d.serveExternalIcon)
 	mx.HandleFunc("/admin/", d.browserAdmin)
 	files := http.FileServerFS(home.FS)
 	mx.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

@@ -513,11 +513,55 @@ final class SolWeb {
         @android.webkit.JavascriptInterface
         public boolean calendarSyncEnabled() { return local() && CalendarSync.wanted(act); }
 
+        /**
+         * Opens an Android app connected to Sol (the Apps grid's tile for an external app). The
+         * page names it by its Sol app id only; the package comes from the node's own app list
+         * (`sol apps --json`), never from the page, so a page can launch only apps the person
+         * connected. Answers at once whether the request was taken; failures show a toast.
+         */
+        @android.webkit.JavascriptInterface
+        public boolean openApp(String appId) {
+            if (!local() || !Shortcuts.validId(appId)) return false;
+            new Thread(() -> launchExternal(appId), "sol-open-app").start();
+            return true;
+        }
+
         @android.webkit.JavascriptInterface
         public boolean addToHomeScreen(String appId, String name) {
             if (!local() || appId == null || !Shortcuts.validId(appId)) return false;
             return Shortcuts.pin(act, appId, name == null || name.trim().isEmpty() ? appId : name.trim());
         }
+    }
+
+    // ---- connected apps ----
+
+    /** Launches external app appId: its package from the node's app list, then its launcher activity. */
+    private void launchExternal(String appId) {
+        String pkg = null;
+        String[] r = NodeService.cli(act, "apps", "--json");
+        if ("0".equals(r[0])) {
+            try {
+                org.json.JSONArray apps = new org.json.JSONArray(r[1]);
+                for (int i = 0; i < apps.length(); i++) {
+                    org.json.JSONObject a = apps.getJSONObject(i);
+                    if (appId.equals(a.optString("id")) && a.optBoolean("external") && !a.optString("package").isEmpty()) {
+                        pkg = a.optString("package");
+                    }
+                }
+            } catch (org.json.JSONException ignored) { }
+        }
+        final String p = pkg;
+        act.runOnUiThread(() -> {
+            Intent in = p == null ? null : act.getPackageManager().getLaunchIntentForPackage(p);
+            if (in == null) {
+                Toast.makeText(act, p == null ? "That app is not connected to Sol" : "That app is not installed on this phone", Toast.LENGTH_LONG).show();
+                return;
+            }
+            try { act.startActivity(in.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+            catch (android.content.ActivityNotFoundException e) {
+                Toast.makeText(act, "That app is not installed on this phone", Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     // ---- downloads ----

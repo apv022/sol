@@ -120,6 +120,9 @@ type Publication struct {
 	ID string
 	// Target is the local host:port that inbound connections are forwarded to.
 	Target string
+	// Port is the port on the public address (an onion's virtual port), where the transport
+	// has one; 0 is the transport's default (80 for Tor).
+	Port int
 	// ClientAuth lists the Access.Authorize values this transport issued
 	// (for Tor: client-auth public keys, base32 x25519). If non-empty, only
 	// holders of a matching Access.Secret can even find the publication.

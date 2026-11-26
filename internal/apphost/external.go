@@ -1,15 +1,18 @@
 package apphost
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/apv022/sol/internal/fsutil"
 	"github.com/apv022/sol/sdk/go/sol"
@@ -23,9 +26,45 @@ import (
 // stored: at every start the host grants its hash again (Tokens.Grant). An external app has no
 // UI and no folders (it cannot reach the synced folder's path) and is never started or
 // supervised; removing it revokes the token.
+//
+// An external app may also have icon.png beside its binding: its launcher icon as the Android
+// shell read it from PackageManager (never from what the app claims), validated here and
+// replaced, or removed, at every registration, so it is always the icon of the last connect.
 
 // ExternalFile is the binding file of an external app, inside its app directory.
 const ExternalFile = "external.json"
+
+// ExternalIconFile is an external app's icon, inside its app directory.
+const ExternalIconFile = "icon.png"
+
+// Limits of an external app's icon (the Android shell sends 192 px).
+const (
+	MaxExternalIconBytes = 256 << 10
+	MaxExternalIconSide  = 512
+)
+
+// pngMagic starts every PNG file.
+var pngMagic = []byte("\x89PNG\r\n\x1a\n")
+
+// ValidateIconPNG checks an external app's icon: a PNG of at most MaxExternalIconBytes whose
+// header decodes to a size within MaxExternalIconSide on each side. Only the header is decoded:
+// the bytes are served as they are, with the PNG type and nosniff.
+func ValidateIconPNG(b []byte) error {
+	if len(b) > MaxExternalIconBytes {
+		return sol.Errorf("bad_request", "the icon is larger than 256 KB")
+	}
+	if !bytes.HasPrefix(b, pngMagic) {
+		return sol.Errorf("bad_request", "the icon is not a PNG")
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return sol.Errorf("bad_request", "the icon is not a valid PNG")
+	}
+	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > MaxExternalIconSide || cfg.Height > MaxExternalIconSide {
+		return sol.Errorf("bad_request", "the icon must be at most 512 by 512 pixels")
+	}
+	return nil
+}
 
 // ExternalBinding is what an external app is bound to (external.json).
 type ExternalBinding struct {
@@ -50,13 +89,20 @@ func isExternal(exec string) bool { return exec == "external" || strings.HasPref
 // manifest and returns the manifest as stored and a new token, the only time the token exists
 // outside the caller. pkg and cert bind it to an Android package and signing certificate
 // (both, or neither for a non-Android program). Exec, UI and folders of m are ignored or
-// refused: exec is set to "external[:android:<pkg>]", a UI or folders are an error.
+// refused: exec is set to "external[:android:<pkg>]", a UI or folders are an error. icon is
+// the app's launcher icon as a PNG (ValidateIconPNG) or nil; it replaces the stored one, and
+// nil removes it.
 //
 // It refuses the id of an installed app that is not external, the id of an external app
 // bound to another package or certificate, and a package already bound under another
 // certificate (a different signer is a different app). Re-registering revokes every earlier
 // token of the app.
-func (h *Host) RegisterExternal(m *sol.Manifest, pkg, cert string) (*sol.Manifest, string, error) {
+func (h *Host) RegisterExternal(m *sol.Manifest, pkg, cert string, icon []byte) (*sol.Manifest, string, error) {
+	if len(icon) > 0 {
+		if err := ValidateIconPNG(icon); err != nil {
+			return nil, "", err
+		}
+	}
 	if (pkg == "") != (cert == "") {
 		return nil, "", sol.Errorf("bad_request", "package and cert go together")
 	}
@@ -131,6 +177,13 @@ func (h *Host) RegisterExternal(m *sol.Manifest, pkg, cert string) (*sol.Manifes
 	if err := fsutil.WriteFileAtomic(filepath.Join(dir, "app.json"), raw, 0o600); err != nil {
 		return nil, "", err
 	}
+	if len(icon) > 0 {
+		if err := fsutil.WriteFileAtomic(filepath.Join(dir, ExternalIconFile), icon, 0o600); err != nil {
+			return nil, "", err
+		}
+	} else if err := os.Remove(filepath.Join(dir, ExternalIconFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
 	_ = os.Remove(RemovedMarker(h.cfg.AppsDir, m.ID))
 	if h.apps[m.ID] != nil {
 		h.cfg.Tokens.Revoke(m.ID) // the earlier token (and bridge token) go
@@ -153,6 +206,23 @@ func (h *Host) External(id string) (ExternalBinding, bool) {
 	}
 	b, err := readBinding(a.dir)
 	return b, err == nil
+}
+
+// ExternalIcon returns the path and modification time of external app id's icon.png; ok is
+// false when the app is not external or has no icon.
+func (h *Host) ExternalIcon(id string) (path string, mod time.Time, ok bool) {
+	h.mu.Lock()
+	a := h.apps[id]
+	h.mu.Unlock()
+	if a == nil || !isExternal(a.m.Exec) {
+		return "", time.Time{}, false
+	}
+	p := filepath.Join(a.dir, ExternalIconFile)
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", time.Time{}, false
+	}
+	return p, fi.ModTime(), true
 }
 
 // HasExternal reports whether any external app is registered.

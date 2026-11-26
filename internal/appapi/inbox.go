@@ -337,6 +337,9 @@ func (s *Server) localSpec(c sol.ActionCall) (sol.ActionSpec, bool) {
 	if err != nil {
 		return sol.ActionSpec{}, false
 	}
+	if b := s.cfg.Builtin; b != nil && appID == b.ID {
+		return b.Spec(c.Action)
+	}
 	a, ok := s.cfg.Apps.App(appID)
 	if !ok {
 		return sol.ActionSpec{}, false

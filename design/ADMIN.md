@@ -78,7 +78,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `DELETE devices/{id}` | remove from my device list (admin devices only) |
 | `POST invite` `{join, anonymous}` | a one-time link `{link, expires}` (pair a person, or join a device of mine); `anonymous` makes a pair link with only the onion, whose redeemer becomes an anonymous contact (an error while there is no onion yet; never with `join`) |
 | `POST pair` `{link}` | redeem a link |
-| `GET apps` | installed apps: id, name, version, running, url, icon, description, scopes |
+| `GET apps` | installed apps: id, name, version, running, url, icon, description, scopes; an external app (API.md "Apps Sol does not run") also `external`, `package`, and `icon` `/app-icons/<id>?v=…` when it connected with one |
 | `POST apps/install` `{dir}` · `POST apps/{id}/remove` · `POST apps/{id}/restart` | manage apps |
 | `GET services` | shared local services (port sharing): name, port, http, people |
 | `POST services` `{name, port, http, people}` · `PATCH services/{name}` · `DELETE services/{name}` | share a local port with people |
@@ -89,6 +89,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `GET backup` (pending words, if any) · `POST backup/confirm` | the 24 words |
 | `GET agents` · `POST agents/{name}/revoke` | agent keys issued on this device |
 | `POST agents/new` `{name, scopes, days, person?}` | makes an agent key for the Sol app (browser or CLI): the daemon makes the key pair, signs the certificate, saves the key file as `<dir>/agents/<name>.key` (0600, where `sol agent new` keeps it) and answers `{agent, key_file, path}`; `key_file` is the key file's text, returned this once only (never logged, never kept by the UI). `GET actions` lists the scopes to offer |
+| `GET /app-icons/{id}` (UI root, not under `/admin/v1/`) | an external app's icon (session cookie; `image/png`, `nosniff`) |
 | `GET wallpapers` · `POST wallpapers` (raw image body, `Content-Type` png, jpeg or webp, at most 15 MB) · `DELETE wallpapers/{id}` | the person's own wallpapers (below) |
 | `POST network-changed` | re-dial now |
 | `GET transports` · `POST transports/{name}` `{enabled}` | the transports (`wg`, `direct`, `tor`, and any other configured): `{name, enabled, state: up\|starting\|stopped\|failed, detail, listen}`; turning one on or off applies now and is kept in `config.json` (the last one stays on). Also `sol transports` and the `sol.transports.*` actions |
@@ -160,6 +161,28 @@ PoC's tunnel lifecycle (`~/solbak/internal/node/tunnels.go`): lasting tunnels, r
 tunnel status. HTTP services can also be opened in the browser as `http://<service>.<petname>.localhost:<port>/`
 (the same router as peer app UIs, C6b).
 
+## Public onion services
+
+A local port published as an **open** Tor onion service: anyone who has its `.onion` address can
+connect, contact or not, with no Sol login. It is for things meant to be public (a blog, a git
+server, a game server); for chosen people, share the port instead (above). Tor must be on.
+
+- `GET /admin/v1/onions` lists them: `name`, `port` (local, on 127.0.0.1), `onion_port` (on the
+  `.onion`, 80 when omitted, so a browser needs no port) and `address` once Tor published it.
+- `POST /admin/v1/onions` `{name, port, onion_port?}` publishes one. Each has its own onion key
+  (kept by the Tor transport as `onions/pub-<name>.key`), so its address is stable across
+  restarts and unlinkable to this device's own onion. It is never client-auth restricted.
+- `DELETE /admin/v1/onions/{name}` unpublishes it and **deletes its key**: the address is gone for
+  good, and the same name later gets a new one.
+- Refused: Sol's own loopback ports (the UI, the app API, the external app API, the node
+  listeners) and any app's port. They trust callers on loopback, and Tor delivers strangers
+  from loopback.
+- Kept in `publicservices.json` (0600) and re-published whenever Tor (re)starts.
+- Actions: `sol.onions.list`, `sol.onions.host --name blog --port 8080 [--onion-port 80]`,
+  `sol.onions.remove --name blog`. Hosting and removing need the person's approval when an agent
+  asks: like every built-in `sol.*` action, an agent's call goes through the app API's approval
+  policy and Inbox (`appapi.Builtin`), and runs once the person approves.
+
 ## The Sol app (UI)
 
 Per design/UI.md: a plain sidebar app, not a desktop OS.
@@ -169,7 +192,12 @@ Per design/UI.md: a plain sidebar app, not a desktop OS.
   shell gets a way back (Home and the other apps) from `GET /_sol/nav` (API.md §10).
 - **Home:** the wallpaper, a greeting and the date, widgets (people online, my devices, the
   Sol folder's size and the device's free space), the apps, and the Inbox preview. Tapping an
-  app opens its origin.
+  app opens its origin. Android apps connected to Sol (external apps) are in the grid and the
+  sidebar too, with the launcher icon they connected with (the kit glyph when none): in the
+  Android app a tap launches them natively (`SolAndroid.openApp`, android/README.md); in a
+  browser they show as "Android app" and are not links. The action `sol.apps.open {id}` (also
+  `sol open <app>`) opens a web app's origin in this computer's browser; for an external app,
+  or on Android, it answers `not_implemented` and says where the app opens.
 - **People:** contacts with presence; a person's page shows their devices, what they share with
   me (open it), what I share with them and an **Anonymous** switch (turning it on warns that an
   IP address they already saw can't be taken back); **Add a person** shows a QR code

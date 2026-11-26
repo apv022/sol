@@ -1,8 +1,12 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -138,5 +142,109 @@ func TestExternalApp(t *testing.T) {
 	}
 	if code, _ := extGet(t, "GET", got.API+"/v1/whoami", got.Token, ""); code != http.StatusUnauthorized {
 		t.Fatalf("whoami after remove: %d", code)
+	}
+}
+
+// TestExternalAppIcon: the icon an external app connects with is listed as a URL on the UI
+// root and served there to a signed-in browser only, as image/png; a bad icon refuses the
+// connect, a path in the manifest's own icon never reaches the list, and removal ends it.
+func TestExternalAppIcon(t *testing.T) {
+	d := testDaemon(t)
+	ctx := context.Background()
+	c := adminClient(t, d)
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 192, 192)))
+	icon := buf.Bytes()
+	if err := c.Do(ctx, "POST", "/admin/v1/apps/external", map[string]any{"manifest": sol.Manifest{ID: "raypass", Name: "Raypass"},
+		"package": "app.raypass", "cert": extCert, "icon_png": []byte("<svg/>")}, nil); err == nil {
+		t.Fatal("a non-PNG icon accepted")
+	}
+	m := sol.Manifest{ID: "raypass", Name: "Raypass", Icon: "/admin/v1/status"}
+	if err := c.Do(ctx, "POST", "/admin/v1/apps/external", map[string]any{"manifest": m, "package": "app.raypass", "cert": extCert, "icon_png": icon}, nil); err != nil {
+		t.Fatal(err)
+	}
+	find := func() (AppInfo, bool) {
+		var apps []AppInfo
+		if err := c.Do(ctx, "GET", "/admin/v1/apps", nil, &apps); err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range apps {
+			if a.ID == "raypass" {
+				return a, true
+			}
+		}
+		return AppInfo{}, false
+	}
+	a, ok := find()
+	if !ok || !a.External || !strings.HasPrefix(a.Icon, "/app-icons/raypass?v=") {
+		t.Fatalf("listed %+v", a)
+	}
+	root := "localhost:" + strconv.Itoa(d.UIPort())
+	if r := uiReq(t, d, "GET", root, a.Icon, "", "", "", nil); r.StatusCode == http.StatusOK {
+		t.Fatal("icon served without a session")
+	}
+	cookie := login(t, d)
+	r := uiReq(t, d, "GET", root, a.Icon, "", cookie, "", nil)
+	got, _ := io.ReadAll(r.Body)
+	if r.StatusCode != 200 || r.Header.Get("Content-Type") != "image/png" || r.Header.Get("X-Content-Type-Options") != "nosniff" || !bytes.Equal(got, icon) {
+		t.Fatalf("icon %d %q %d bytes", r.StatusCode, r.Header.Get("Content-Type"), len(got))
+	}
+	if r := uiReq(t, d, "GET", root, "/app-icons/nope", "", cookie, "", nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown icon %d", r.StatusCode)
+	}
+	// Without an icon, a manifest path is dropped (a glyph name would stay).
+	if err := c.Do(ctx, "POST", "/admin/v1/apps/external", map[string]any{"manifest": m, "package": "app.raypass", "cert": extCert}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := find(); a.Icon != "" {
+		t.Fatalf("icon %q", a.Icon)
+	}
+	if err := c.Do(ctx, "POST", "/admin/v1/apps/raypass/remove", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r := uiReq(t, d, "GET", root, "/app-icons/raypass", "", cookie, "", nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("icon after remove %d", r.StatusCode)
+	}
+}
+
+// TestSolAppsOpen: sol.apps.open opens a web app's URL in the browser (dry run says which),
+// and answers not_implemented for a connected Android app, which opens from the phone's grid.
+func TestSolAppsOpen(t *testing.T) {
+	d := testDaemon(t)
+	ctx := context.Background()
+	c := adminClient(t, d)
+	if _, err := d.Host.Attach(&sol.Manifest{ID: "notes", Name: "Notes", Version: "1", Exec: "x", UI: "/", Scopes: []string{}}, "127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Do(ctx, "POST", "/admin/v1/apps/external", map[string]any{"manifest": sol.Manifest{ID: "raypass", Name: "Raypass"}, "package": "app.raypass", "cert": extCert}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var opened []string
+	old := openURL
+	openURL = func(u string) bool { opened = append(opened, u); return true }
+	t.Cleanup(func() { openURL = old })
+	call := func(args string, dry bool) (map[string]any, error) {
+		var out map[string]any
+		err := c.Do(ctx, "POST", "/admin/v1/actions/call", sol.ActionCall{Action: "sol.apps.open", Args: json.RawMessage(args), DryRun: dry}, &out)
+		return out, err
+	}
+	out, err := call(`{"id":"notes"}`, true)
+	if err != nil || out["dry_run"] != true || !strings.HasPrefix(out["url"].(string), "http://notes.localhost:") || len(opened) != 0 {
+		t.Fatalf("dry run %v %v %v", out, err, opened)
+	}
+	if out, err = call(`{"id":"Notes"}`, false); err != nil || out["opened"] != true || len(opened) != 1 || opened[0] != out["url"] {
+		t.Fatalf("open %v %v %v", out, err, opened)
+	}
+	if _, err = call(`{"id":"raypass"}`, false); err == nil || !strings.Contains(err.Error(), "phone") || !errors.Is(err, sol.Errorf("not_implemented", "")) {
+		t.Fatalf("external: %v", err)
+	}
+	if _, err = call(`{"id":"nope"}`, false); err == nil {
+		t.Fatal("unknown app opened")
+	}
+	if _, err = call(`{}`, false); err == nil {
+		t.Fatal("no id accepted")
+	}
+	if len(opened) != 1 {
+		t.Fatalf("opened %v", opened)
 	}
 }

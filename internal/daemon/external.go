@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,8 +103,8 @@ func (d *Daemon) closeExternalAPI() {
 }
 
 // RegisterExternal registers an external app (POST /admin/v1/apps/external) and returns its
-// token, shown this once, and the API URL it uses.
-func (d *Daemon) RegisterExternal(m *sol.Manifest, pkg, cert string) (ExternalApp, error) {
+// token, shown this once, and the API URL it uses. icon is the app's launcher icon (PNG) or nil.
+func (d *Daemon) RegisterExternal(m *sol.Manifest, pkg, cert string, icon []byte) (ExternalApp, error) {
 	if m == nil {
 		return ExternalApp{}, sol.Errorf("bad_request", "manifest is required")
 	}
@@ -109,9 +112,43 @@ func (d *Daemon) RegisterExternal(m *sol.Manifest, pkg, cert string) (ExternalAp
 	if err != nil {
 		return ExternalApp{}, err
 	}
-	got, token, err := d.Host.RegisterExternal(m, pkg, cert)
+	got, token, err := d.Host.RegisterExternal(m, pkg, cert, icon)
 	if err != nil {
 		return ExternalApp{}, err
 	}
 	return ExternalApp{ID: got.ID, Token: token, API: api}, nil
+}
+
+// glyphName is a kit glyph name, the only kind of icon an external app's manifest may name.
+var glyphName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// externalIconURL is where the UI root serves external app id's icon (serveExternalIcon). The
+// version (the icon's modification time) changes the URL when a re-connect brings a new icon.
+func externalIconURL(id string, mod time.Time) string {
+	return "/app-icons/" + url.PathEscape(id) + "?v=" + strconv.FormatInt(mod.UnixNano(), 36)
+}
+
+// serveExternalIcon serves GET /app-icons/<id> on the UI root: an external app's icon.png. It
+// needs the session cookie like the wallpapers (the home page's own request carries it); the
+// bytes were validated as a PNG when the app connected and go out as image/png with nosniff.
+func (d *Daemon) serveExternalIcon(w http.ResponseWriter, r *http.Request) {
+	if !d.hasSession(r) {
+		sol.WriteError(w, sol.Errorf("unauthorized", "This browser isn't signed in to Sol."))
+		return
+	}
+	p, mod, ok := d.Host.ExternalIcon(r.PathValue("id"))
+	if !ok {
+		sol.WriteError(w, sol.Errorf("not_found", "no such icon"))
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		sol.WriteError(w, sol.Errorf("not_found", "no such icon"))
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	http.ServeContent(w, r, "", mod, f)
 }

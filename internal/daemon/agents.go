@@ -586,9 +586,8 @@ func (d *Daemon) agentHandler() http.Handler {
 			d.log.Info("refused an agent action outside its scopes", "agent", c.Name, "action", call.Action)
 			return nil, sol.Errorf("forbidden", "the agent's scopes do not cover "+call.Action+" for that person")
 		}
-		if out, ok, err := d.callSol(r.Context(), call); ok {
-			return out, err
-		}
+		// Sol's own actions go through the app API too (appapi.Builtin), so an agent's call
+		// gets the same approval policy, Inbox approval and activity log as an app's.
 		return d.API.CallAs(r.Context(), identity.ID(c.Agent), call)
 	})
 	j("GET /agent/v1/inbox", func(c identity.AgentCert, _ []byte, _ *http.Request) (any, error) {
