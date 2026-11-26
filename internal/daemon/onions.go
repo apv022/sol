@@ -177,6 +177,10 @@ func (po *publicOnions) Add(s PublicService) (PublicService, error) {
 	if !publicNameRe.MatchString(s.Name) {
 		return PublicService{}, sol.Errorf("bad_request", "a service name is lowercase letters, digits and dashes (at most 32)")
 	}
+	if strings.HasPrefix(s.Name, "channel-") {
+		// pub-channel-<name> is a hosted app channel's onion (channels.go).
+		return PublicService{}, sol.Errorf("bad_request", "names starting with channel- are kept for app channels")
+	}
 	if s.Port < 1 || s.Port > 65535 {
 		return PublicService{}, sol.Errorf("bad_request", "port must be 1-65535")
 	}

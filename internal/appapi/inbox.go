@@ -485,3 +485,22 @@ func (s *Server) Dismiss(id string) error {
 	}
 	return sol.Errorf("not_found", "no inbox item "+id)
 }
+
+// PostApproval files an approval in the person's inbox on behalf of app (the daemon's own
+// built-in "sol", say): approving it runs c as that app, like any approval. It returns the
+// item's ID. Used when Sol itself asks before doing something (an app update under the "ask"
+// policy, design/CHANNELS.md).
+func (s *Server) PostApproval(app, title, body string, c sol.ActionCall) (string, error) {
+	res, err := s.postApproval(item{App: app, Kind: "approval", Title: title, Body: body}, c)
+	return res.ID, err
+}
+
+// PostNotice files a notice in the person's inbox on behalf of app and returns its ID.
+func (s *Server) PostNotice(app, title, body string) (string, error) {
+	id, err := s.inbox.post(item{App: app, Kind: "notice", Title: title, Body: body}, nil)
+	if err != nil {
+		return "", err
+	}
+	s.inboxEvent(app, id)
+	return id, nil
+}

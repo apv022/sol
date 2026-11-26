@@ -1,6 +1,8 @@
 # App channels: installing and updating apps over Sol
 
-Status: design, agreed direction (APV, 2026-11-26: "Sol-native channel"), not built yet.
+Status: agreed direction (APV, 2026-11-26: "Sol-native channel"). First version built
+2026-11-26 (daemon, CLI, actions; desktop installs): see "As built" at the end for what it settles
+and what is left (the UI, APK installs by the Android shell).
 
 Today an app is installed by hand (`sol app install <dir>`) and an Android app that connects to
 Sol (Raypass) is installed and updated outside Sol. Every update means downloading again, and
@@ -57,6 +59,67 @@ No app store server and no account: the channel is a key, and the releases are s
   when an agent asks.
 - **UI.** The Apps page gains "Get more apps": the apps of followed channels with Install, and
   an Updates section; Settings › Apps shows each app's channel, version, policy and Rollback.
+
+## As built (first version)
+
+Code: `internal/identity/release.go` (the record), `internal/channels` (key files, links, the
+artifact store, the HTTP surface and its stream, safe unpacking), `internal/daemon/channels.go`
+(hosting, following, installing), `cmd/sol/channels.go` (`sol channel`). Admin endpoints:
+ADMIN.md §App channels. What the first version settles, and where it differs from the text above:
+
+- **Encoding.** `lp(sha256)` is the 32 raw digest bytes (shown as hex everywhere else). `time` is
+  unix seconds. Bounds: notes 8 KiB, 8 artifacts (one per platform and kind), 4 mirrors each
+  (`https://` only, no user info, 512 bytes), version 1-64 of `[0-9A-Za-z.+_-]`, a record 40 KiB
+  in all, so it fits a feed entry base64-encoded.
+- **Ordering is per channel and app.** "The highest seq wins" is per `(C_pub, app_id)`: one channel
+  can carry several apps. A different record at an equal seq is refused (the first seen stays).
+  `sol channel publish` picks `max(prev+1, now in unix seconds)`, so a record signed offline in CI
+  (`--out`, no daemon to ask for prev) still moves forward.
+- **The key never reaches a daemon.** `sol channel new` writes `<dir>/channel-keys/<name>.key`
+  (0600, never overwritten); `sol channel publish` signs in the CLI and hands the record and the
+  artifacts to the node (`POST /admin/v1/channels/blobs`, `/admin/v1/channels/hosted`). CI signs
+  with `--out FILE` and hands over with `sol channel import FILE --blob ...`, or uploads the
+  artifacts only to mirrors. Hosting needs Tor on.
+- **The wire.** The channel's onion is a public onion `pub-channel-<name>` on port 80 (public
+  service names starting `channel-` are therefore refused). `GET /channel` is
+  `{"channel": ID, "records": [base64 wire form, ...]}`, the latest per app. `GET /channel/stream`
+  is server-sent events, `event: release` / `data: <base64>` for every current record first, then a
+  `: ready` comment, then each new record as it is published, and `: keepalive` every 30 s.
+  `GET /blob/{sha256 hex}` serves the bytes.
+- **Following.** My internal feed `sol/channels` holds `follow`/`unfollow` entries (last writer
+  wins, in the feeds' order) and `release` entries (the record, base64). Every device re-verifies
+  a replicated record before using it. The stream holder is the lowest-ID anchor among my devices
+  that are up as this device sees them, else the lowest-ID device that is up; it is re-elected on
+  every session, device and transport change. Two devices that cannot see each other may both
+  hold it, which is harmless: a record already held is not written again. A broken stream is
+  retried with jittered exponential backoff (1 s to 5 min). Unfollowing keeps the installed apps
+  and their pins.
+- **Not built: devices serving blobs to each other.** Records reach my devices over the feed, but
+  each device downloads an artifact itself (the onion, then the mirrors). Relaying blobs between my
+  devices over sessions is a follow-up.
+- **Installing (desktop).** The artifact is the `sol-app` for `GOOS-GOARCH`. A tar may be gzipped
+  and may hold one top-level directory. Unpacking refuses absolute names, `..`, backslashes,
+  symlinks, hard links, devices and duplicates, and is bounded at 1 GiB and 20 000 entries. The
+  manifest's `id` and `version` must equal the record's, and its `exec` must be a file of its
+  own (`builtin:` and `external` are refused). An app already installed by other means is never
+  replaced: remove it first. One automatic attempt per release; a failure is logged and waits for
+  the next release or a manual `sol.apps.update`.
+- **Rollback** keeps one previous version (`<dir>/channels/prev/<id>/`); rolling back twice goes
+  forward again. The pinned seq stays at the newest installed, so the release rolled back from is
+  not reinstalled automatically, only a newer one.
+- **Ask** files an Inbox approval of `sol.apps.update --id <app>` (title "<Name> <version> is
+  ready", the notes as body), once per release.
+- **Android, not built: the install.** For an Android app connected to Sol (an external app) the
+  daemon pins the one followed channel that offers an APK for that app id (trust on first use,
+  policy `ask`), lists newer releases in `sol.apps.updates` and files a notice "<Name> <version>
+  is available" once per release. `sol.apps.install` and `sol.apps.update` of an APK answer
+  `not_implemented`. The record carries no package name, so the match is by app id; the Android
+  shell, when it installs, must download the APK (onion or mirror), check its SHA-256 against the
+  record, check that its package and signing certificate equal the app's binding (API.md
+  §External Android apps), hand it to `PackageInstaller`, and then report the installed release
+  to the daemon so the pinned seq moves (an admin endpoint to add with it).
+- **Not built: "busy".** The app API has no way for an app to report a call in progress, so an
+  update does not wait for one yet.
 
 ## Why not GitHub releases checked daily
 

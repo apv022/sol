@@ -483,6 +483,18 @@ func (h *Host) Manifest(id string) (*sol.Manifest, bool) {
 	return a.m, true
 }
 
+// Dir returns an installed app's directory (false for an attached or external app, which has
+// none of its own Sol could copy).
+func (h *Host) Dir(id string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	a := h.apps[id]
+	if a == nil || a.attached || a.dir == "" || isExternal(a.m.Exec) {
+		return "", false
+	}
+	return a.dir, true
+}
+
 // env builds the environment of one run of a, with a fresh token.
 func (h *Host) env(a *app, token string) (Env, error) {
 	data := filepath.Join(h.cfg.DataDir, a.m.ID)
