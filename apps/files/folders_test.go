@@ -81,9 +81,10 @@ func TestFullFolderRenameAndDelete(t *testing.T) {
 	a.settle(t)
 	b.settle(t)
 	stays(t, "Box stays gone", func() bool { return a.gone("Box") && b.gone("Box") })
-	if err := os.RemoveAll(b.path("Crate")); err != nil {
-		t.Fatal(err)
-	}
+	// On Windows a file the scanner has open for a moment can't be deleted ("used by another
+	// process"), as with any program reading it: retry, as a person would.
+	var rmErr error
+	waitFor(t, "the folder deleted on b", func() bool { rmErr = os.RemoveAll(b.path("Crate")); return rmErr == nil })
 	waitFor(t, "delete reaches a", func() bool { return a.gone("Crate") })
 	a.settle(t)
 	b.settle(t)
