@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +41,175 @@ func TestBlobRefsIn(t *testing.T) {
 	if len(got) != 2 || got[0] != a || got[1] != b {
 		t.Fatalf("BlobRefsIn = %v", got)
 	}
+}
+
+func TestScanBodyRelease(t *testing.T) {
+	a, b, c := hashOfString("a"), hashOfString("b"), hashOfString("c")
+	hexes := func(ds [][32]byte) []string {
+		var out []string
+		for _, d := range ds {
+			out = append(out, hex.EncodeToString(d[:]))
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		body       string
+		refs, rels []string
+	}{
+		// Only the top-level release field releases; what it names is not a reference.
+		{`{"op":"purge","release":["sha256:` + a + `","sha256:` + b + `"]}`, nil, []string{a, b}},
+		// A reference elsewhere in the same entry wins over its release.
+		{`{"blob":"sha256:` + a + `","release":["sha256:` + a + `","sha256:` + c + `"]}`, []string{a}, []string{c}},
+		// A nested "release" is an ordinary field.
+		{`{"x":{"release":["sha256:` + a + `"]}}`, []string{a}, nil},
+		{`{"release":"sha256:` + b + `"}`, nil, []string{b}},
+	} {
+		refs, rels := scanBody([]byte(tc.body))
+		if g, w := fmt.Sprint(hexes(refs)), fmt.Sprint(tc.refs); g != w {
+			t.Errorf("%s: refs %v, want %v", tc.body, g, w)
+		}
+		if g, w := fmt.Sprint(hexes(rels)), fmt.Sprint(tc.rels); g != w {
+			t.Errorf("%s: releases %v, want %v", tc.body, g, w)
+		}
+	}
+	if got := BlobRefsIn([]byte(`{"blob":"sha256:` + a + `","release":["sha256:` + b + `"]}`)); len(got) != 1 || got[0] != a {
+		t.Fatalf("BlobRefsIn = %v", got)
+	}
+}
+
+func TestBlobRelease(t *testing.T) {
+	fx := newFixture(t)
+	laptop := fx.open(fx.laptop, t.TempDir())
+	bob, _ := identity.Create(t.TempDir(), "Bob", "pc", time.Now())
+	bobID := identity.ID(bob.Person())
+	c := NewContacts(laptop)
+	c.AddContact(bob.Person(), "Bob")
+	sh, _ := NewShares(laptop, c)
+	refs, err := NewBlobRefs(laptop, sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hooked []string
+	refs.OnRelease(func(hs []string) { hooked = append(hooked, hs...) })
+	pins := NewPins(laptop)
+	put := func(feed, h string) {
+		t.Helper()
+		if _, err := laptop.Append("files", feed, []byte(`{"op":"put","blob":"sha256:`+h+`"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := func(feed string, hs ...string) {
+		t.Helper()
+		var rs []string
+		for _, h := range hs {
+			rs = append(rs, `"sha256:`+h+`"`)
+		}
+		if _, err := laptop.Append("files", feed, []byte(`{"op":"purge","release":[`+strings.Join(rs, ",")+`]}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gone, again, shared, pinned := hashOfString("gone"), hashOfString("again"), hashOfString("shared"), hashOfString("pinned")
+	put("tree", gone)
+	put("tree", again)
+	put("tree", shared)
+	put("tree", pinned)
+	put("other", shared)
+	if err := sh.Share("files", "tree", []string{bobID}, ModeRead); err != nil {
+		t.Fatal(err)
+	}
+	if !refs.MayFetch(bobID, gone) {
+		t.Fatal("Bob cannot fetch a referenced blob")
+	}
+	release("tree", gone, again, shared, pinned)
+	if err := pins.Pin([]string{pinned}); err != nil {
+		t.Fatal(err)
+	}
+	// Released: no longer mine, no longer fetchable through the feed, listed for the collector.
+	if refs.Mine(gone) || refs.MayFetch(bobID, gone) || len(refs.Feeds(gone)) != 0 {
+		t.Fatal("a released blob is still referenced")
+	}
+	// Released in one feed, still referenced by another.
+	if !refs.Mine(shared) || fmt.Sprint(refs.Feeds(shared)) != "["+Address(identity.ID(fx.laptop.Person()), "files", "other")+"]" {
+		t.Fatalf("Feeds(shared) = %v", refs.Feeds(shared))
+	}
+	// A pinned blob is unreferenced too: pins are the collector's business, not the index's.
+	if refs.Mine(pinned) || !pins.Pinned(pinned) {
+		t.Fatal("pinned")
+	}
+	if fmt.Sprint(hooked) != fmt.Sprint([]string{gone, again, shared, pinned}) {
+		t.Fatalf("OnRelease saw %v", hooked)
+	}
+	if got := fmt.Sprint(refs.Released()); got != fmt.Sprint(sorted(gone, again, pinned)) {
+		t.Fatalf("Released = %v", got)
+	}
+	// Re-uploading the same bytes after the release references them again.
+	put("tree", again)
+	if !refs.Mine(again) || !refs.MayFetch(bobID, again) {
+		t.Fatal("a reference after the release does not count")
+	}
+	// The rebuilt index agrees.
+	re, err := NewBlobRefs(laptop, sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if re.Mine(gone) || !re.Mine(again) || !re.Mine(shared) || fmt.Sprint(re.Released()) != fmt.Sprint(sorted(gone, pinned)) {
+		t.Fatalf("rebuilt index: released %v", re.Released())
+	}
+}
+
+// TestReleaseOrderAcrossDevices: a device whose clock is behind still stamps
+// what it writes after a release it has seen, so its re-upload counts.
+func TestReleaseOrderAcrossDevices(t *testing.T) {
+	fx := newFixture(t)
+	laptop := fx.open(fx.laptop, t.TempDir())
+	sh, _ := NewShares(laptop, nil)
+	refs, err := NewBlobRefs(laptop, sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := hashOfString("x")
+	if _, err := laptop.Append("files", "tree", []byte(`{"blob":"sha256:`+h+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The phone, its clock five minutes ahead, releases it.
+	addr := Address(identity.ID(fx.laptop.Person()), "files", "tree")
+	ahead := time.Now().Add(5 * time.Minute).UnixMilli()
+	w := sign(t, fx.phone, Wire{Feed: addr, Seq: 1, Device: identity.ID(fx.phone.DevicePublic()), Time: ahead,
+		Body: []byte(`{"release":["sha256:` + h + `"]}`)})
+	first, err := laptop.Accept(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs.Mine(h) {
+		t.Fatal("release from the phone ignored")
+	}
+	e, err := laptop.Append("files", "tree", []byte(`{"blob":"sha256:`+h+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Time.UnixMilli() <= ahead || !refs.Mine(h) {
+		t.Fatalf("re-upload stamped %v (release at %v), mine %v", e.Time.UnixMilli(), ahead, refs.Mine(h))
+	}
+	// A clock a year ahead does not drag this device's entries along: they stay within
+	// maxClockLead of its own clock.
+	far := time.Now().Add(365 * 24 * time.Hour).UnixMilli()
+	w = sign(t, fx.phone, Wire{Feed: addr, Seq: 2, Prev: first.Hash, Device: identity.ID(fx.phone.DevicePublic()), Time: far,
+		Body: []byte(`{"note":"from the future"}`)})
+	if _, err := laptop.Accept(w); err != nil {
+		t.Fatal(err)
+	}
+	e, err = laptop.Append("files", "tree", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lim := time.Now().Add(maxClockLead + time.Second).UnixMilli(); e.Time.UnixMilli() > lim {
+		t.Fatalf("stamped %v, more than %v ahead", e.Time, maxClockLead)
+	}
+}
+
+func sorted(s ...string) []string {
+	slices.Sort(s)
+	return s
 }
 
 func TestBlobPermission(t *testing.T) {
@@ -156,7 +327,8 @@ func TestBlobRefsScale(t *testing.T) {
 	const n = 100_000
 	for i := range n {
 		addr := Address(me, "files", "f"+itoa(i%100))
-		refs.add(addr, []byte(`{"a":"sha256:`+hashOfString(itoa(i))+`","b":"sha256:`+hashOfString("common")+`"}`))
+		refs.add(Entry{Feed: addr, Device: me, Seq: uint64(i + 1), Time: start,
+			Body: []byte(`{"a":"sha256:` + hashOfString(itoa(i)) + `","b":"sha256:` + hashOfString("common") + `"}`)})
 	}
 	add := time.Since(start)
 	start = time.Now()

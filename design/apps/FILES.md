@@ -144,11 +144,18 @@ restore, "delete forever", "empty trash", an expiry), and `{"op": "trash-setting
   purge for what expired, from a single timer set to the next expiry; nothing polls. The UI also
   sets one timer to the `next_expiry` the listing returns.
 - **Blobs.** A trashed or earlier content stays fetchable from any of my devices and the anchor
-  with nothing extra: the entries that put and deleted it reference its hash, feed entries are
-  never removed, and the daemon never collects a blob a feed of mine references (API.md §4). The
-  same rule is the limit of "delete forever": it forgets the record everywhere, but the bytes stay
-  referenced by the old entries, because the API has no way to drop or compact feed entries. Freeing
-  the space needs feed compaction in the API first (not designed yet).
+  with nothing extra: the entries that put and deleted it reference its hash, and the daemon keeps
+  a blob a feed of mine references (API.md §4). Every purge (a restore, "delete forever", "empty
+  trash", an expiry, a version delete, the per-file cap) ends with a `{"op": "release", "release":
+  [...]}` entry naming every blob the tree feed references that nothing uses any more: no head of
+  a file (nor the base a conflict merge needs), no Trash item, no kept version. Content is
+  addressed by hash, so bytes another file, item or version still holds are never released. Every
+  device of mine and the anchor then delete the bytes. My share feeds release, at the same moment,
+  what is no longer in the shared folder, so the people it is shared with can no longer fetch it.
+  The versions beyond the cap (hidden at once everywhere) are purged by my first device, like
+  expiry. If a release crosses a new use of the same bytes on another device (put while offline,
+  stamped before the release), whichever device sees both appends `{"op": "keep", "keep": [...]}`
+  naming them again, within the daemon's grace before it deletes released bytes.
 
 ## Actions (everything the UI can do)
 
@@ -210,7 +217,10 @@ whole folder, one row) show on the other device with path, device and size, and 
 device; retention hides old rows at once and the first device alone appends the purge (fake
 clock); settings set on one device hold on the other; versions come from an overwrite, an edit on
 another device, a merge and a conflict choice, restore and delete everywhere and honour the cap;
-dry runs change nothing. The viewer's
+dry runs change nothing; purge, empty, version delete and the cap free the bytes (never ones a
+live file, Trash item or version shares), share feeds release them too, and a crossing release
+is answered with a keep (`release_test.go`; e2e: a purged file's blob leaves both of my devices'
+disks and the contact can no longer fetch it). The viewer's
 step, swipe and slide rules, the send rules (`ui/send.js`) and the Trash wording and expiry timer
 (`ui/trash.js`) run in a browser:
 `apps/files/test/index.html` (`make browser-test`).

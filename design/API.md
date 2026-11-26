@@ -36,7 +36,7 @@ A program Sol does not start, such as a separate Android APK, can be a Sol app t
 (design/APPS_EVERYWHERE.md M5). It is **registered**, not installed: on Android through the
 `app.sol.action.CONNECT` handshake (android/README.md "For Android developers"), which ends in
 `sol app connect` on the device; that is `POST /admin/v1/apps/external`
-`{"manifest": {...}, "package": "org.example.music", "cert": "<sha256 hex>"}` →
+`{"manifest": {...}, "package": "org.example.music", "cert": "<sha256 hex>", "icon_png": "<base64>"}` →
 `{"id", "token", "api"}`, admin token only (never a browser session).
 
 - The manifest is validated like any (§9); `exec` is set by the daemon to `external` or
@@ -55,6 +55,20 @@ A program Sol does not start, such as a separate Android APK, can be a Sol app t
 - The app calls `/v1/...` with `Authorization: Bearer <token>` like any app, events stream
   included. It does not listen, so Sol cannot call into it: actions its manifest declares
   answer `not_implemented` when called. `sol apps` lists it as `external (<package>)`.
+- **Icon:** `icon_png` (optional) is the app's launcher icon, which the Android shell reads from
+  PackageManager (never from the app's own claims) and draws as a 192 px PNG. The daemon accepts
+  a PNG (magic bytes, header decoded) of at most 256 KB and 512×512 px, else refuses the
+  registration (`bad_request`), and keeps it as `icon.png` beside the binding; each registration
+  replaces it (none removes it) and removing the app removes it. `GET /admin/v1/apps` gives an
+  external app's `icon` as `/app-icons/<id>?v=<version>` on the UI root (session cookie, like the
+  wallpapers; `image/png`, `nosniff`). The manifest's own `icon` of an external app is listed only
+  when it is a kit glyph name, never a path or URL.
+- **Opening it:** the Sol app's Apps grid and sidebar list an external Android app with its icon
+  (design/ADMIN.md). On Android, tapping it asks the shell (`SolAndroid.openApp(id)`, which takes
+  the package from the node's app list, not from the page) to start its launcher activity; in a
+  browser it shows as "Android app" and opens nothing. The action `sol.apps.open {id}` opens a
+  web app in this computer's browser and answers `not_implemented` for an external app (the
+  daemon has no channel to start a native app; it opens from the phone's grid).
 
 ## Names
 
@@ -166,11 +180,25 @@ daemon fetches it from `from` (or any person who shared a feed referencing it) a
 
 ### `POST /v1/blobs/pin` / `POST /v1/blobs/unpin`
 Body `{"hashes": [...]}`. A pinned blob is kept and copied to my anchors. Unpinned blobs that no
-feed of mine references may be garbage collected.
+feed of mine references may be garbage collected; released ones (below) are.
 
 **Who can fetch a blob:** a person can fetch a blob from me only if it is referenced (by hash,
 anywhere in the body) by an entry of a feed I share with them. That is the whole blob permission
 rule; there is no separate blob ACL.
+
+**Releasing a blob.** Feeds are append-only, so an old entry would reference its blobs forever.
+An app that no longer needs blobs appends an entry with the one top-level field the daemon reads,
+`"release": ["sha256:…", …]` (any other fields alongside): the earlier entries of that feed no
+longer reference those blobs. A feed references a blob while its newest reference comes after its
+newest release, in the order that merges a feed's device chains (`time` in ms, device, seq;
+PROTOCOL.md §Feeds on the wire). A reference elsewhere in the releasing entry wins over the
+release, and a later entry that names the blob again (the same bytes uploaded again) references
+it again. A released blob stops being fetchable through that feed at once, and when no feed of
+mine references it and it is not pinned (a pin wins), every device of mine, anchors included,
+deletes its bytes once the release reaches it, after a short grace (one minute; bytes uploaded
+again within it are kept). A release only says what the app no longer needs: content is
+addressed by hash, so the app must check that nothing else it keeps in that feed holds the same
+bytes. The SDK has `sol.Release`, `sol.BlobRefs` and `sol.BlobIndex` for this.
 
 ## 5. Sharing
 

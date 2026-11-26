@@ -95,6 +95,7 @@ type App struct {
 	petnames   map[string]string // address labels: used in Shared/<petname>/ paths
 	names      map[string]string // display names (Contact.DisplayName): used in messages and Received/<name>/
 	devStats   map[string]*devStat
+	blobs      sol.BlobIndex // blob references and releases of my own feeds (release.go)
 	rev        uint64
 	view       *view
 

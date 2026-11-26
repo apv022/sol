@@ -54,6 +54,10 @@ type body struct {
 	IDs      []string `json:"ids,omitempty"`
 	Days     int      `json:"days,omitempty"`
 	Versions *int     `json:"versions,omitempty"`
+	// release (sol.ReleaseField, read by the daemon): blobs this feed's earlier entries no longer
+	// reference; keep: released blobs named again because they are still used (release.go).
+	Release []string `json:"release,omitempty"`
+	Keep    []string `json:"keep,omitempty"`
 
 	// share ops
 	ID     string   `json:"id,omitempty"`

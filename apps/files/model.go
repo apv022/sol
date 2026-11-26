@@ -44,6 +44,9 @@ func (a *App) applyEntry(addr string, e sol.Entry) {
 	if err != nil {
 		return
 	}
+	if owner == a.me {
+		a.blobs.Add(e) // what my feeds reference and released (release.go)
+	}
 	if _, _, ok := isSendFeed(feed); ok {
 		a.applySendEntry(owner, feed, e)
 		return

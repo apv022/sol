@@ -124,7 +124,12 @@ type chain struct {
 	offs   []int64  // offs[seq-1]: offset of that record
 	hashes []string // hashes[seq-1]
 	size   int64
+	maxMs  int64 // the newest unix_ms in the chain (Append stamps after it)
 }
+
+// maxClockLead bounds how far Append stamps an entry ahead of this device's clock to order it
+// after entries from devices whose clocks run ahead.
+const maxClockLead = 10 * time.Minute
 
 func (c *chain) last() uint64 { return uint64(len(c.offs)) }
 
@@ -251,6 +256,7 @@ func (s *Store) scanChain(addr string, c *chain) error {
 		e, _ := w.signed()
 		c.offs = append(c.offs, off)
 		c.hashes = append(c.hashes, hashOf(e, w.Sig))
+		c.maxMs = max(c.maxMs, w.Time)
 		off += n
 	}
 	c.size = off
@@ -424,7 +430,17 @@ func (s *Store) Append(app, name string, body []byte) (Entry, error) {
 	dev := s.self.DevicePublic()
 	f.mu.Lock()
 	c := f.chains[identity.ID(dev)]
-	w := Wire{Feed: addr, Device: identity.ID(dev), Time: time.Now().UnixMilli(), Body: body, Seq: 1}
+	// The new entry is stamped after every entry this device holds in the feed, even when
+	// another device's clock runs ahead: what was written knowing an entry then comes after
+	// it in the (unix_ms, device, seq) order, which blob releases rely on (BlobRefs).
+	// It is never pulled more than maxClockLead ahead of this clock, so one device whose clock
+	// is far ahead (set to next year) can't drag every later entry of every device with it.
+	clock := time.Now().UnixMilli()
+	now := clock
+	for _, c := range f.chains {
+		now = max(now, min(c.maxMs+1, clock+maxClockLead.Milliseconds()))
+	}
+	w := Wire{Feed: addr, Device: identity.ID(dev), Time: now, Body: body, Seq: 1}
 	if c != nil {
 		w.Seq, w.Prev = c.last()+1, c.lastHash()
 	}
@@ -543,6 +559,7 @@ func (s *Store) store(f *feed, w Wire, hash string, sync bool) (Entry, error) {
 	c.offs = append(c.offs, c.size)
 	c.hashes = append(c.hashes, hash)
 	c.size += int64(len(rec))
+	c.maxMs = max(c.maxMs, w.Time)
 	f.idxSize += idxRecSize
 	f.refs = append(f.refs, ref{c, w.Seq})
 	person, _, _, _ := ParseAddress(f.addr)

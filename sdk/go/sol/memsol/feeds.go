@@ -1,10 +1,10 @@
 package memsol
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/apv022/sol/sdk/go/sol"
 )
@@ -51,13 +51,22 @@ func (c *Client) Append(_ context.Context, feed string, body any) (sol.Entry, er
 		n.feeds[addr] = fs
 	}
 	prev := fs.last[c.device.ID]
+	now := n.Now().UTC()
+	// Like the daemon, never stamp an entry before one the feed holds, so blob releases and the
+	// references after them keep their order (API.md §4) even with a frozen test clock.
+	if k := len(fs.entries); k > 0 && now.UnixMilli() <= fs.entries[k-1].Time.UnixMilli() {
+		now = time.UnixMilli(fs.entries[k-1].Time.UnixMilli() + 1).UTC()
+	}
 	e := sol.Entry{Feed: addr, Seq: prev.Seq + 1, Pos: uint64(len(fs.entries)) + 1, Device: c.device.ID,
-		Time: n.Now().UTC(), Body: raw, Prev: prev.Hash}
+		Time: now, Body: raw, Prev: prev.Hash}
 	if e.Hash, err = e.ComputeHash(); err != nil {
 		return sol.Entry{}, sol.Errorf("bad_request", err.Error())
 	}
 	fs.entries = append(fs.entries, e)
 	fs.last[c.device.ID] = e
+	if rel := n.refs.Add(e); len(rel) > 0 {
+		n.collect(c.person, rel)
+	}
 	n.append(logged{kind: sol.EventEntry, app: c.app, entry: &e})
 	return e, nil
 }
@@ -108,8 +117,38 @@ func (c *Client) Feeds(_ context.Context, owner string) ([]sol.FeedInfo, error) 
 	return out, nil
 }
 
-func containsHash(body json.RawMessage, hash string) bool {
-	return bytes.Contains(body, []byte(hash))
+// collect drops released blobs from the person who released them, as their daemons' collectors
+// would (without the daemon's grace period: memsol is synchronous): unless they pinned it or
+// another feed of theirs still references it. Copies other people fetched are theirs. n.mu held.
+func (n *Network) collect(p *Person, hashes []string) {
+	for _, h := range hashes {
+		if !n.holders[h][p.ID] || p.pinned[h] {
+			continue
+		}
+		mine := false
+		for _, addr := range n.refs.Feeds(h) {
+			if o, _, _, _ := sol.ParseAddress(addr); o == p.ID {
+				mine = true
+				break
+			}
+		}
+		if mine {
+			continue
+		}
+		delete(n.holders[h], p.ID)
+		if len(n.holders[h]) == 0 {
+			delete(n.holders, h)
+			delete(n.blobs, h)
+		}
+	}
+}
+
+// HasBlob reports whether person holds the blob ("sha256:<hex>") locally: tests use it to see
+// that a release freed it.
+func (n *Network) HasBlob(person, hash string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.holders[hash][person]
 }
 
 // Share implements sol.API.

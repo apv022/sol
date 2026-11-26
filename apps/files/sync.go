@@ -288,6 +288,12 @@ func (a *App) afterPull(ctx context.Context) {
 	if a.tryMerges(ctx) {
 		return // the merge's own pull runs afterPull again with the new state
 	}
+	if err := a.keepNeeded(ctx); err != nil {
+		a.noteErr(err)
+	}
+	if err := a.trimVersions(ctx); err != nil {
+		a.noteErr(err)
+	}
 	a.notifySends(ctx)
 	v := a.getView()
 	a.mu.RLock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,5 +135,45 @@ func TestServerAuth(t *testing.T) {
 	}
 	if _, err := c.Events(ctx, sol.EventOptions{}); !errors.Is(err, sol.ErrUnauthorized) {
 		t.Fatal(err)
+	}
+}
+
+// TestReleaseFreesBlob: a release drops the releaser's copy unless it is pinned or another feed
+// of theirs still references it; copies other people fetched stay theirs.
+func TestReleaseFreesBlob(t *testing.T) {
+	ctx := context.Background()
+	n := memsol.New()
+	alice, bob := n.AddPerson("Alice"), n.AddPerson("Bob")
+	n.Pair(alice, bob)
+	a, b := alice.Devices[0].Client("docs"), bob.Devices[0].Client("docs")
+	put := func(s string) string {
+		info, err := a.PutBlob(ctx, strings.NewReader(s), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Hash
+	}
+	gone, other, pinned := put("gone"), put("other"), put("pinned")
+	for _, h := range []string{gone, other, pinned} {
+		if _, err := a.Append(ctx, "f", map[string]string{"blob": h}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _ = a.Append(ctx, "g", map[string]string{"blob": other})
+	_ = a.Share(ctx, sol.ShareRequest{Feed: "f", People: []string{bob.ID}})
+	rc, err := b.GetBlob(ctx, gone, sol.BlobOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	_ = a.Pin(ctx, []string{pinned})
+	if _, err := a.Append(ctx, "f", sol.Release{Release: []string{gone, other, pinned}}); err != nil {
+		t.Fatal(err)
+	}
+	if n.HasBlob(alice.ID, gone) || !n.HasBlob(alice.ID, other) || !n.HasBlob(alice.ID, pinned) {
+		t.Fatal("release freed the wrong blobs")
+	}
+	if !n.HasBlob(bob.ID, gone) {
+		t.Fatal("Bob's fetched copy was dropped")
 	}
 }

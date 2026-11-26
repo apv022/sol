@@ -28,10 +28,10 @@ import (
 // moment, whichever of them is online), and made durable by a purge entry that my first device
 // appends from one timer set to the next expiry (App.expire); nothing polls.
 //
-// The blobs need nothing extra to stay: the entries that put and deleted them reference them, and
-// feed entries are never removed, so the daemon never collects them and fetches them from
-// whichever of my devices (or my anchor) holds them. The flip side: a purge forgets the record but
-// cannot make the bytes collectable, because the API has no way to drop old feed entries.
+// The blobs need nothing extra to stay: the entries that put and deleted them reference them, so
+// the daemon keeps them and fetches them from whichever of my devices (or my anchor) holds them.
+// A purge ends with a release of every blob nothing uses any more (release.go), so deleting
+// forever, emptying Trash, expiry and the version cap free the bytes on every device.
 
 // Retention defaults and bounds.
 const (
@@ -281,6 +281,31 @@ func (h *history) sameContent(p, blob string) []string {
 			ids = append(ids, v.ID)
 		}
 	}
+	return ids
+}
+
+// overCap lists the ids of the versions beyond the per-file cap at now: the ones
+// visibleVersions no longer lists because Versions newer contents come first. Versions holding
+// a current content (cur: the heads of the path) or a content kept anyway are left alone, and so
+// are expired ones (expired purges those).
+func (h *history) overCap(cur func(p string) map[string]bool, now int64) []string {
+	var ids []string
+	for p, vs := range h.vers {
+		seen := cur(p)
+		n := 0
+		for _, v := range vs {
+			if v.At+h.settings.keepMs() <= now || seen[v.Blob] {
+				continue
+			}
+			if n < h.settings.Versions {
+				seen[v.Blob] = true
+				n++
+				continue
+			}
+			ids = append(ids, v.ID)
+		}
+	}
+	sort.Strings(ids)
 	return ids
 }
 

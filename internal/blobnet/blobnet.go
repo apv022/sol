@@ -36,6 +36,15 @@
 //     new sessions.
 //   - One fetch per blob at a time: readers, Fetch calls and the anchor
 //     copier share it.
+//   - Released blobs are collected without asking: when an entry of a feed of
+//     mine releases blobs (feeds.ReleaseField, API.md §4), here or replicated
+//     from another device of mine, each is removed once ReleaseGrace has
+//     passed, if it is then still unpinned, unreferenced by any feed of mine,
+//     unlabelled, not being fetched, and its bytes were not stored again in
+//     the last ReleaseGrace (an app re-uploading the same bytes puts them
+//     before it appends the entry that references them again). One timer,
+//     set to the next due blob; nothing polls. Nothing else is collected
+//     automatically: GC is still an explicit decision.
 package blobnet
 
 import (
@@ -43,6 +52,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +83,11 @@ var (
 	RangeTimeout = 2 * time.Minute
 	// IdleTimeout ends a fetch opened by Get that nobody reads from.
 	IdleTimeout = time.Minute
+	// ReleaseGrace is how long a released blob waits before it is collected,
+	// and how recently stored bytes must not be: room for an app that
+	// re-uploads the same content, or a device that sees a release crossing
+	// a concurrent new reference, to reference it again.
+	ReleaseGrace = time.Minute
 )
 
 // Errors.
@@ -113,6 +128,11 @@ type Service struct {
 
 	mu   sync.Mutex
 	jobs map[string]*job // fetches in progress, by hash
+
+	relMu    sync.Mutex
+	released map[string]time.Time // released blobs waiting to be collected, by hash: when
+	relTimer *time.Timer          // set to the earliest of them
+	closed   bool
 }
 
 // New returns a Service and starts its anchor copier.
@@ -123,11 +143,16 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
-	s := &Service{cfg: cfg, log: cfg.Log, wake: make(chan struct{}, 1), jobs: map[string]*job{}}
+	s := &Service{cfg: cfg, log: cfg.Log, wake: make(chan struct{}, 1), jobs: map[string]*job{},
+		released: map[string]time.Time{}}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	sub := cfg.Feeds.Bus().Subscribe(64)
 	s.wg.Add(1)
 	go s.copier(sub)
+	cfg.Refs.OnRelease(s.release)
+	// Releases stored while the daemon was down (or before this device
+	// collected them) are collected too.
+	s.release(cfg.Refs.Released())
 	return s, nil
 }
 
@@ -137,6 +162,12 @@ func (s *Service) Close() {
 	s.mu.Lock() // job checks ctx under mu, so no fetch starts after this
 	s.cancel()
 	s.mu.Unlock()
+	s.relMu.Lock()
+	s.closed = true
+	if s.relTimer != nil {
+		s.relTimer.Stop()
+	}
+	s.relMu.Unlock()
 	s.wg.Wait()
 }
 
@@ -187,13 +218,19 @@ func (s *Service) Pin(refs []string) error {
 }
 
 // Unpin unpins blobs; they become collectable once no feed of mine
-// references them.
+// references them. One a feed of mine released while it was pinned is
+// collected like any released blob.
 func (s *Service) Unpin(refs []string) error {
 	hs, err := parseAll(refs)
 	if err != nil {
 		return err
 	}
-	return s.cfg.Pins.Unpin(hs)
+	if err := s.cfg.Pins.Unpin(hs); err != nil {
+		return err
+	}
+	rel := s.cfg.Refs.Released()
+	s.release(slices.DeleteFunc(hs, func(h string) bool { _, ok := slices.BinarySearch(rel, h); return !ok }))
+	return nil
 }
 
 // copier keeps pinned blobs on this device while it is an anchor. It wakes
@@ -266,6 +303,90 @@ func (s *Service) GC() ([]string, error) {
 		removed = append(removed, h)
 	}
 	return removed, errors.Join(errs...)
+}
+
+// release queues released blobs (hex) for collection after ReleaseGrace. It
+// is the feeds.BlobRefs hook, so it runs inside the store's hook and only
+// records and sets the timer.
+func (s *Service) release(hashes []string) {
+	if len(hashes) == 0 {
+		return
+	}
+	due := time.Now().Add(ReleaseGrace)
+	s.relMu.Lock()
+	defer s.relMu.Unlock()
+	for _, h := range hashes {
+		s.released[h] = due
+	}
+	s.armLocked()
+}
+
+// armLocked sets the one timer to the earliest released blob. relMu held.
+func (s *Service) armLocked() {
+	if s.closed || len(s.released) == 0 {
+		return
+	}
+	var next time.Time
+	for _, t := range s.released {
+		if next.IsZero() || t.Before(next) {
+			next = t
+		}
+	}
+	if s.relTimer != nil {
+		s.relTimer.Stop()
+	}
+	s.relTimer = time.AfterFunc(max(time.Until(next), 0), s.collectReleased)
+}
+
+// collectReleased removes the released blobs that are due and still
+// collectable (see the package invariants), and sets the timer again for
+// the rest.
+func (s *Service) collectReleased() {
+	now := time.Now()
+	s.relMu.Lock()
+	var due []string
+	for h, t := range s.released {
+		if !t.After(now) {
+			due = append(due, h)
+			delete(s.released, h)
+		}
+	}
+	s.relMu.Unlock()
+	var later []string
+	s.mu.Lock()
+	for _, h := range due {
+		if s.ctx.Err() != nil {
+			break
+		}
+		if s.jobs[h] != nil {
+			later = append(later, h) // being fetched: look again once the grace has passed
+			continue
+		}
+		if s.cfg.Pins.Pinned(h) || s.cfg.Refs.Mine(h) || s.cfg.Blobs.Labelled(h) {
+			continue // kept; a later release queues it again
+		}
+		if f, err := s.cfg.Blobs.Open(h); err == nil {
+			st, err := f.Stat()
+			f.Close()
+			if err == nil && now.Sub(st.ModTime()) < ReleaseGrace {
+				later = append(later, h) // stored again just now: its new reference may be on its way
+				continue
+			}
+		}
+		if !s.cfg.Blobs.Has(h) && !slices.Contains(s.cfg.Blobs.PartialHashes(), h) {
+			continue // never held here, or already gone
+		}
+		if err := s.cfg.Blobs.Remove(h); err != nil {
+			s.log.Warn("collecting a released blob", "blob", short(h), "err", err)
+			continue
+		}
+		s.log.Info("collected a released blob", "blob", short(h))
+	}
+	s.mu.Unlock()
+	s.release(later)
+	s.relMu.Lock()
+	s.armLocked()
+	s.relMu.Unlock()
 }
 
 func short(id string) string { return id[:min(12, len(id))] }

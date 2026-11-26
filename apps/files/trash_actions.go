@@ -300,7 +300,8 @@ func (a *App) actTrashRestore(ctx context.Context, c sol.Call) (any, error) {
 	return map[string]any{"restored": done}, nil
 }
 
-// purge appends purge entries for ids. a.syncMu held.
+// purge appends purge entries for ids, then releases the blobs nothing uses any more, so the
+// bytes of what was deleted forever are freed on every device (release.go). a.syncMu held.
 func (a *App) purge(ctx context.Context, ids []string) error {
 	for len(ids) > 0 {
 		n := min(len(ids), purgeChunk)
@@ -309,7 +310,7 @@ func (a *App) purge(ctx context.Context, ids []string) error {
 		}
 		ids = ids[n:]
 	}
-	return nil
+	return a.releaseUnused(ctx)
 }
 
 func (a *App) actTrashPurge(ctx context.Context, c sol.Call) (any, error) {

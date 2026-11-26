@@ -44,22 +44,17 @@ func (c *Client) locate(hash, from string) (data []byte, local bool, err error) 
 		if !n.holders[hash][h.ID] || (from != "" && h.ID != from) || !n.paired(me, h.ID) {
 			continue
 		}
-		// API.md rule: referenced by an entry of a feed h shares with me.
-		for addr, fs := range n.feeds {
+		// API.md rule: referenced (and not released since) by an entry of a feed h shares with me.
+		for _, addr := range n.refs.Feeds(hash) {
 			if o, _, _, _ := sol.ParseAddress(addr); o != h.ID || !n.readable(me, addr) {
 				continue
 			}
-			for _, e := range fs.entries {
-				if containsHash(e.Body, hash) {
-					if !h.online {
-						sawOffline = true
-						goto next
-					}
-					return data, false, nil
-				}
+			if !h.online {
+				sawOffline = true
+				break
 			}
+			return data, false, nil
 		}
-	next:
 	}
 	if sawOffline {
 		return nil, false, sol.Errorf("unavailable", "the holder is offline")

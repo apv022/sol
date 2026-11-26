@@ -73,6 +73,7 @@ type Network struct {
 	shares  map[string]map[string]string // address -> person -> mode
 	blobs   map[string][]byte
 	holders map[string]map[string]bool // hash -> persons holding it locally
+	refs    sol.BlobIndex              // blob references and releases of every feed (API.md §4)
 	log     []logged
 	notify  chan struct{}
 	nextIn  int

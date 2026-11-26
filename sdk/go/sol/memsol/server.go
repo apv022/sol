@@ -183,6 +183,13 @@ func (s *Server) blob(c *Client, w http.ResponseWriter, r *http.Request) (any, e
 		w.Header().Set("Sol-Local", "0")
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
+	if r.Method == http.MethodHead {
+		// HEAD only learns the size, like the daemon's: it must not cache the blob.
+		w.Header().Set("Content-Length", strconv.FormatInt(st.Size, 10))
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+		return nil, nil
+	}
 	rc, err := c.GetBlob(r.Context(), hash, sol.BlobOptions{From: from})
 	if err != nil {
 		return nil, err

@@ -115,6 +115,7 @@ func Run(t *testing.T, f Factory) {
 		{"ShareReadAndEvents", ShareReadAndEvents},
 		{"BodyLimitAndNames", BodyLimitAndNames},
 		{"BlobPermissions", BlobPermissions},
+		{"BlobRelease", BlobRelease},
 		{"WriteShareCoAuthors", WriteShareCoAuthors},
 		{"Actions", ActionsScenario},
 		{"InboxNotice", InboxNotice},
@@ -334,6 +335,44 @@ func BodyLimitAndNames(t *testing.T, w *World) {
 	if err := w.A.Share(ctx, sol.ShareRequest{Feed: "f", People: []string{"nobody"}}); !errors.Is(err, sol.ErrNotFound) {
 		t.Fatalf("unknown person: %v", err)
 	}
+}
+
+// BlobRelease: an entry's top-level "release" ends the references of its feed's earlier entries,
+// so a person the feed is shared with can no longer fetch the blob; naming it again afterwards
+// references it again (API.md §4).
+func BlobRelease(t *testing.T, w *World) {
+	put := func(s string) string {
+		info, err := w.A.PutBlob(ctx, strings.NewReader(s), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.A.Append(ctx, "rel", map[string]string{"op": "put", "blob": info.Hash}); err != nil {
+			t.Fatal(err)
+		}
+		return info.Hash
+	}
+	kept := put("bytes to keep")
+	if err := w.A.Share(ctx, sol.ShareRequest{Feed: "rel", People: []string{w.BobID}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the blob to be fetchable", func() bool {
+		_, err := w.B.StatBlob(ctx, kept, sol.BlobOptions{})
+		return err == nil
+	})
+	// A blob Bob never asked for (a daemon may cache what was asked), released right away.
+	gone := put("bytes to release")
+	if _, err := w.A.Append(ctx, "rel", sol.Release{Release: []string{gone}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.B.StatBlob(ctx, gone, sol.BlobOptions{}); !errors.Is(err, sol.ErrNotFound) {
+		t.Fatalf("a released blob: %v", err)
+	}
+	// Uploading the same bytes again and naming them in a new entry brings them back.
+	put("bytes to release")
+	eventually(t, "the blob to be fetchable again", func() bool {
+		_, err := w.B.StatBlob(ctx, gone, sol.BlobOptions{})
+		return err == nil
+	})
 }
 
 // BlobPermissions: the API.md §4 rule, ranges, caching and pins.
