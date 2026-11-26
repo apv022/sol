@@ -34,7 +34,7 @@ import java.util.Set;
  * restart); one answered or dismissed anywhere (another device, the web UI, the CLI) cancels its
  * notification. Each time the node comes up the open items are read with `inbox --json` as well,
  * so items from while the stream was down are not missed. An "app" event refreshes the launcher
- * shortcuts.
+ * shortcuts; a "nearby" event tells WifiDirect whether its switch is on.
  *
  * Each app has its own channel (named after the app, created when first needed), so the person
  * turns an app's notifications off in Android's own settings; Sol's own items and those of apps
@@ -129,6 +129,8 @@ final class Notifier {
             CalendarSync.onAppsChanged(svc);
         } else if ("inbox".equals(type) && data != null) {
             item(data, false);
+        } else if ("nearby".equals(type) && data != null) {
+            svc.wifiDirect.onNearby(data); // the Wi-Fi Direct switch, from any device or agent
         }
     }
 

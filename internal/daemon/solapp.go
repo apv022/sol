@@ -81,8 +81,10 @@ func solActions() ActionApp {
 			Effect: sol.EffectDestructive, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.notifications", Description: "Show or set desktop notifications for Inbox items on this device (desktop: on|off; no arguments shows the state)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"desktop": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
-		{Name: "sol.nearby", Description: "Show or set LAN discovery: private beacons that let my devices and my buddies' devices on the same network find each other without the internet (state: on|off; no arguments shows it)",
-			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"state": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
+		{Name: "sol.nearby", Description: "Show or set LAN discovery: private beacons that let my devices and my buddies' devices on the same network find each other without the internet (state: on|off), and on Android Wi-Fi Direct, which links two phones with no network at all (wifi_direct: on|off; Android asks for the Nearby devices permission); no arguments shows both",
+			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{
+				"state":       {Type: "string", Enum: enumOf([]string{"on", "off"})},
+				"wifi_direct": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
 	}}
 }
 
@@ -235,13 +237,25 @@ func (d *Daemon) callSol(ctx context.Context, c sol.ActionCall) (out json.RawMes
 		}
 	case "sol.nearby":
 		switch {
-		case args["state"] == "":
+		case args["state"] == "" && args["wifi_direct"] == "":
 			res = d.Nearby()
+		case args["wifi_direct"] != "" && !AndroidShell():
+			return nil, true, errNoWifiDirect()
 		case c.DryRun:
 			res = map[string]any{"dry_run": true, "would_set": args["state"]}
+			if args["wifi_direct"] != "" {
+				res = map[string]any{"dry_run": true, "would_set": args["state"], "would_set_wifi_direct": args["wifi_direct"]}
+			}
 		default:
-			if res, err = d.SetNearby(args["state"] == "on"); err != nil {
-				return nil, true, err
+			if args["state"] != "" {
+				if res, err = d.SetNearby(args["state"] == "on"); err != nil {
+					return nil, true, err
+				}
+			}
+			if args["wifi_direct"] != "" {
+				if res, err = d.SetWifiDirect(args["wifi_direct"] == "on"); err != nil {
+					return nil, true, err
+				}
 			}
 		}
 	case "sol.theme.settings":

@@ -217,6 +217,28 @@ are opened by the caller, even by the callee. Initial window 256 KiB per stream.
 Each mux stream carries one HTTP/1.1 request and response (or an upgraded raw stream). So peer
 calls are plain HTTP handlers, testable with the stdlib, in both directions.
 
+**Replacing a session drains the old one.** When a newer session to the same device takes over
+(the dialer moved it to a better path, or the tie-break below picked the other of two
+simultaneous dials), the old one, if still alive, is not closed: it **drains**. Both sides apply
+the same tie-break, so both agree which session is current. A draining session:
+
+- starts no new streams: every new stream, from either side, goes over the current session
+  (`internal/session`'s `Session.Open` and `HTTPClient` redirect there even through a handle to
+  the old session), but it still serves a stream the peer opens on it before it learned of the
+  new one;
+- carries every stream already open on it (a port-sharing tunnel, a blob download, an app's
+  dial) until it ends;
+- is *retired* at once, so owners of long-lived streams (`/p/sync` replication) end them and
+  start again on the current session, rather than keeping the old one up;
+- closes once it has had no stream for `DrainIdle` (2 s: about the time the peer takes to learn
+  of the new session, and to flush the last close frames), or after `DrainGrace` (5 min) with
+  streams still open, whichever comes first.
+
+A session that is dead (missed pongs, its local address gone, no answer after a network change)
+still closes at once, and so does every session to a device that is cut off (removed from its
+person's list, forgotten, or a contact turned anonymous: their direct sessions, draining ones
+included).
+
 ### Session endpoints (served by every daemon to authenticated peers)
 
 The caller's verified person, device and relation (`self` or `contact`) are known to every handler.
@@ -289,8 +311,9 @@ Anchors pull pinned blobs themselves when the replicated `sol/pins` feed changes
 
 Built in C3b (`internal/session/paths.go`, `push.go`, `internal/netwatch`), ported from the PoC's
 dialer and liveness supervisor. One session per pair of devices; if both dial at once, the session
-opened by the device with the lower ID wins and the other is closed; between two sessions dialed
-by the same side, the newer wins (the older is likely dead).
+opened by the device with the lower ID wins and the other drains; between two sessions dialed
+by the same side, the newer wins (the older is likely dead, or was moved to a better path) and
+the older drains (§Sessions: its open streams finish, new ones go over the winner).
 
 - **Ranking.** A device's endpoints are tried in order: WireGuard, TLS direct, clearnet (LAN,
   tests), relay, Tor, I2P. Among the healthy ones, direct paths come first, then the path that last
@@ -306,7 +329,8 @@ by the same side, the newer wins (the older is likely dead).
 - **Backoff and probation.** A failed path backs off (1 min, doubling to 1 h). While a session
   this device dialed runs on a worse path, its keeper probes the better one (op `probe`) when the
   backoff ends; it is preferred again only after 3 probes in a row succeeded over at least 2 min,
-  and then the session moves to it (a new session over that path replaces the old one). Any
+  and then the session moves to it (a new session over that path replaces the old one, which
+drains: streams open on it, a tunnel or a download, finish undisturbed). Any
   failure meanwhile doubles the backoff, so a flaky path drifts towards being tried rarely
   instead of flapping. A healthy better path the session doesn't use (a new endpoint, a lost
   hedge) is probed a minute after the session came up. Only the dialing side moves a session.
@@ -420,6 +444,99 @@ the wildcard address, so datagrams that arrive on several sockets are deduplicat
 receive-side option); other systems report nearby as unavailable. On Android the shell holds a
 `WifiManager.MulticastLock` while the node runs and nearby isn't off in its config (many Wi-Fi
 drivers drop multicast without it), released when the node stops.
+
+### Wi-Fi Direct (Android, nearby step 2)
+
+Two phones with no shared Wi-Fi and no mobile data have no LAN for beacons. On Android the shell
+can make one: a Wi-Fi Direct (P2P) group between the two phones, over which the beacons above,
+and then the sessions, run unchanged. Android only for now: desktops answer `not_implemented`
+(Linux would need wpa_supplicant's P2P interface, macOS and Windows have no comparable API).
+
+**Who does what.** The Java shell drives `WifiP2pManager` (advertising, discovery, forming and
+leaving the group); the daemon owns every key, tag and decision, through short commands that
+the shell runs (`libsol.so nearby ...`, below), so Java never handles a key. Nothing here grants
+anything: as with beacons, a match is a candidate, and the handshake authenticates.
+
+**Advertising.** The shell registers a DNS-SD service (`WifiP2pDnsSdServiceInfo`, instance `sol`,
+type `_sol._udp`) whose TXT record is `sol nearby ad`'s output: `v=1` and the entries, base64url
+without padding, split into `t0`, `t1`, ... of at most 200 characters. One entry per kept device
+(the same set as beacons: my devices and my buddies', never an anonymous contact's), those
+without a live session first, at most 8, padded with random entries to a multiple of 4 and
+shuffled:
+
+```
+out     = HMAC-SHA256(K, "wifi-direct" | D_sender | u64(w))      K and w as for beacons
+entry   = out[0:8] | (payload XOR out[8:32])                       32 bytes
+payload = u8 kind | ssid[6] | pass[15] | u16 0                     24 bytes
+```
+
+`kind` is 0 (no group: the rest is zero) or 1: this device owns a group, whose network name is
+`DIRECT-` + base64url(ssid) and passphrase base64url(pass), both random per group (`crypto/rand`).
+So only the devices of the pairs it is meant for can read the credentials, and no-one else can
+join the group (WPA2 with a 20-character random passphrase). The ad is re-registered when the
+window turns (`sol nearby ad` says when: `expires`) and whenever the group changes. A different
+label from beacons (`"wifi-direct"`) keeps ads and beacons unlinkable.
+
+**Discovering.** The shell asks for `_sol._udp` services (`discoverServices`) when the feature
+starts, after every group change, and again every 2 minutes while it is on (Android ends a
+discovery on its own after about 2 minutes; this is the protocol's scan, not polling of state). It hands
+every TXT record seen in the last 5 minutes, keyed by the peer's P2P device address, to `sol
+nearby match`, which checks each entry against the tags kept devices send in windows `w-1`,
+`w`, `w+1` and decides one of:
+
+- `join` (with that record's `id`, `ssid`, `pass`): a kept device without a session owns a group
+  and gave me its credentials. Of several, the one whose device key sorts lowest.
+- `lead` (with fresh credentials): kept devices without a session are around, none offers a
+  group, and my device key sorts below all of theirs. The shell creates the group with those
+  credentials (`WifiP2pConfig.Builder`, Android 10+), re-advertises with them, and the others
+  join it. The lowest key leads, so two phones never both create a group, and a third device
+  joins the same one.
+- `wait`: a device with a lower key should lead; its next ad will carry the credentials.
+- `stay`: this device is already in a group (one group per phone); `none`: nothing to do.
+
+Joining with the credentials (`connect` with a `WifiP2pConfig` built from network name and
+passphrase) needs no dialog on either phone: unlike classic Wi-Fi Direct negotiation, Android
+shows no "invitation to connect". It needs Android 10 (API 29) or later; older phones show the
+switch as unavailable.
+
+**Beacons over the group.** Once the P2P interface has an address (`192.168.49.x` on
+`p2p-wlan0-0` or similar; the group owner is `.1`), the shell runs `sol nearby interfaces
+<ipv4>...` and `sol network-changed`. Android 11+ refuses apps the interface list (netlink), so
+the daemon cannot see the new interface on its own: it opens one more beacon socket per given
+address (joined to the group and sending on that address with `IP_MULTICAST_IF`), in addition
+to the usual ones, and the beacon, hint and dial above carry on. With no addresses (group gone)
+the extra sockets close. Android routes the group's subnet for every app (its `local_network`
+table), so the sessions' unicast reaches the peer even with no default network.
+
+**Leaving.** The group owner removes the group once nobody has been in it for 2 minutes; a client
+leaves when the owner does, and both when the node stops or the switch goes off. The 5-minute
+record age makes a phone that left range drop out of the decision.
+
+**Permissions and the switch.** Off by default (`"wifi_direct": true` in `config.json` turns it
+on) because it needs a permission prompt: `NEARBY_WIFI_DEVICES` (Android 13+, declared
+`neverForLocation`) or `ACCESS_FINE_LOCATION` below that (Android requires location for Wi-Fi
+scanning). Switched with `sol do sol.nearby --wifi_direct on|off` (dry-run as usual) or the
+shell's `SolAndroid.wifiDirect(on)` page bridge, which asks for the permission first. Turned on
+by an agent without the permission, the shell posts a notification that opens Sol to ask. It
+works only while the node runs and nearby itself is on. `sol do sol.nearby` (and `sol status`'s
+`nearby` row detail) shows `wifi_direct`: `{enabled, state, detail}`, with state reported by the
+shell (`sol nearby report <state> [detail]`): `off`, `searching`, `connected`, `unsupported`,
+`needs_permission`, `wifi_off` or `failed`; on desktops `unavailable`. Only the Android shell sets
+`SOL_ANDROID_SHELL=1` for the node, and only then does the daemon accept the switch.
+
+**What an observer in radio range learns.** That a Sol phone is there, and roughly how many kept
+devices it has (entries rounded up to 4). Not who: entries change every window and only a pair
+can compute them, as for beacons. Android itself, not Sol, shows the phone's Wi-Fi Direct
+device name (the phone's name in Android's settings) to anyone scanning while P2P is active,
+and a P2P MAC address (randomised per group on Android 10+): rename the phone in Android's
+settings to hide its model or owner. The group's network name is random.
+
+**Shell commands** (admin API, not user operations; the person's operation is `sol.nearby`):
+`sol nearby ad [-]` (`-`: JSON `{"group":{"ssid","pass"}}` on stdin, so the passphrase is never
+in argv) prints `{"txt":{...},"expires":unix}`; `sol nearby match -` reads `{"state":"none|owner|
+client","seen":[{"id","txt"}]}` and prints `{"role","id","group","matched":[ids]}`; `sol nearby
+interfaces [ipv4...]`; `sol nearby report <state> [detail]`. Endpoints: `POST
+/admin/v1/nearby/wifi-direct/{ad,match,report}`, `POST /admin/v1/nearby/interfaces`.
 
 ## Anonymous contacts (built in C10)
 

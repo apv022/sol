@@ -25,6 +25,7 @@ import (
 //	service  Service, or {"name": ..., "removed": true}
 //	tunnel   TunnelInfo, or {"id": ..., "removed": true}
 //	theme    {"name": ..., "settings": {...}} as on app event streams
+//	nearby   nearby.Status (LAN discovery and Wi-Fi Direct; the Android shell follows it)
 //
 // Ids are "<epoch>.<n>" like the app API's; Last-Event-ID resumes within the window
 // (MaxAdminEvents), and an id from an earlier daemon run replays this run's whole window.
@@ -45,6 +46,8 @@ const (
 	// EvOnion: the public onion services changed, or one got its address (onions.go).
 	EvOnion = "onion"
 	EvTheme = "theme"
+	// EvNearby: nearby or its Wi-Fi Direct switch or state changed (nearby.go).
+	EvNearby = "nearby"
 )
 
 type adminEvent struct {

@@ -46,6 +46,8 @@ final class SolWeb {
     static final int REQ_FILE = 1;
     /** The calendar permissions request (calendarSync(true)); activities forward the result to permissionsResult. */
     static final int REQ_CALENDAR = 3;
+    /** The Nearby devices (or, below Android 13, location) request (wifiDirect(true)). */
+    static final int REQ_WIFI_DIRECT = 4;
 
     private final Activity act;
     private final FrameLayout root;
@@ -378,9 +380,14 @@ final class SolWeb {
     /** Hands a file picker's result to the page that asked. */
     /** The activity's onRequestPermissionsResult: finishes turning calendar sync on, or tells the page it stayed off. */
     void permissionsResult(int req, int[] grants) {
-        if (req != REQ_CALENDAR) return;
         boolean ok = grants.length > 0;
         for (int g : grants) ok &= g == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (req == REQ_WIFI_DIRECT) {
+            if (ok) setWifiDirect(true);
+            else wifiDirectChanged(false, "the Nearby devices permission was refused");
+            return;
+        }
+        if (req != REQ_CALENDAR) return;
         if (ok) setCalendarSync(true);
         else calendarSyncChanged(false);
     }
@@ -401,6 +408,33 @@ final class SolWeb {
             else { CalendarSync.disable(app); now = false; }
             act.runOnUiThread(() -> calendarSyncChanged(now));
         }, "sol-calendar-switch").start();
+    }
+
+    /**
+     * The Wi-Fi Direct switch: on asks for the permission it needs first (Nearby devices on
+     * Android 13+, location below), then runs `sol do sol.nearby --wifi_direct on|off`; the
+     * outcome arrives as a "sol-wifi-direct" event on window (detail.on, detail.error).
+     */
+    void setWifiDirect(boolean on) {
+        if (on && !WifiDirect.permitted(act)) {
+            act.requestPermissions(new String[]{WifiDirect.PERMISSION}, REQ_WIFI_DIRECT);
+            return;
+        }
+        if (on) WifiDirect.permissionGiven(act);
+        android.content.Context app = act.getApplicationContext();
+        new Thread(() -> {
+            String[] r = NodeService.cli2(app, "do", "sol.nearby", "--wifi_direct", on ? "on" : "off", "--json");
+            boolean ok = r[0].equals("0");
+            act.runOnUiThread(() -> wifiDirectChanged(ok ? on : WifiDirect.wanted(app), ok ? "" : r[1]));
+        }, "sol-wifi-direct-switch").start();
+    }
+
+    private void wifiDirectChanged(boolean on, String error) {
+        if (web == null) return;
+        String u = web.getUrl();
+        if (u == null || !isLocal(Uri.parse(u))) return;
+        web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sol-wifi-direct',{detail:{on:" + on
+                + ",error:" + org.json.JSONObject.quote(error == null ? "" : error) + "}}))", null);
     }
 
     private void calendarSyncChanged(boolean on) {
@@ -508,6 +542,27 @@ final class SolWeb {
             act.runOnUiThread(() -> setCalendarSync(on));
             return true;
         }
+
+        /**
+         * The Wi-Fi Direct switch (nearby without any network, phone to phone): true asks for
+         * the Nearby devices permission first, then turns it on; false turns it off. Answers at
+         * once whether the request was taken; the outcome is a "sol-wifi-direct" event on window
+         * (detail.on, detail.error).
+         */
+        @android.webkit.JavascriptInterface
+        public boolean wifiDirect(boolean on) {
+            if (!local()) return false;
+            act.runOnUiThread(() -> setWifiDirect(on));
+            return true;
+        }
+
+        /** Whether Wi-Fi Direct is switched on (config.json; state: `sol do sol.nearby`). */
+        @android.webkit.JavascriptInterface
+        public boolean wifiDirectEnabled() { return local() && WifiDirect.wanted(act); }
+
+        /** Whether the Nearby devices permission Wi-Fi Direct needs is granted. */
+        @android.webkit.JavascriptInterface
+        public boolean wifiDirectPermitted() { return local() && WifiDirect.permitted(act); }
 
         /** Whether Sol's calendars are in the phone's calendar apps now. */
         @android.webkit.JavascriptInterface

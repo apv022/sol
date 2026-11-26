@@ -93,6 +93,8 @@ type Status struct {
 	Interfaces int `json:"interfaces,omitempty"`
 	// Seen counts the peer devices recognised in the last SeenFor.
 	Seen int `json:"seen"`
+	// WifiDirect is the Android shell's Wi-Fi Direct (the daemon fills it in).
+	WifiDirect *WifiDirectStatus `json:"wifi_direct,omitempty"`
 }
 
 // Service sends and receives beacons. Safe for concurrent use.

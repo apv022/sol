@@ -94,7 +94,8 @@ one VPN slot.
 
 Internet; foreground service and notifications (the running notification and the Inbox
 notifications above); network state (to notice Wi-Fi/cellular switches); calendar, only if you
-turn on calendar sync.
+turn on calendar sync; Nearby devices (Android 13+; location below), only if you turn on Wi-Fi
+Direct.
 
 ### Limits
 
@@ -217,6 +218,21 @@ debug). The node restarts with the app and keeps its identity, contacts and file
 - **Network changes**: a new default network (Wi-Fi back, Wi-Fi to cellular) runs
   `libsol.so network-changed`, so peers are redialled and Tor restarted at once. The node's own
   netlink watch is denied to apps.
+- **Wi-Fi Direct** (off until turned on; Android 10+; design/PROTOCOL.md §Nearby "Wi-Fi
+  Direct"): two phones with no shared network and no mobile data link up directly. `WifiDirect`
+  advertises a DNS-SD service (`_sol._udp`) whose TXT record the node makes (`libsol.so nearby
+  ad`: rotating tags only kept devices recognise, never a name or key), discovers the same on
+  other phones, and asks `libsol.so nearby match` what to do: the phone whose device key sorts
+  lowest creates a group with random credentials, which its ad carries masked for each kept
+  device; the other joins with them (`WifiP2pConfig.Builder`, so no dialog on either phone).
+  The group's address goes to the node (`nearby interfaces <ipv4>` + `network-changed`), whose
+  beacons and sessions then run over it. The owner removes a group empty for 2 minutes; all of
+  it stops with the node or the switch. The switch is `sol do sol.nearby --wifi_direct on|off`
+  or `SolAndroid.wifiDirect(on)` (asks for the Nearby devices permission first; the outcome is
+  a `sol-wifi-direct` event, `SolAndroid.wifiDirectEnabled()` / `wifiDirectPermitted()` say
+  how it is); turned on without the permission (by an agent), a notification opens Sol to ask.
+  The shell runs the node with `SOL_ANDROID_SHELL=1`, the only case in which the node accepts
+  the switch. Android shows the phone's own Wi-Fi Direct name to anyone scanning while it runs.
 - **Share**: Sol is a share target for text and files (one or many). They are copied into
   `SolDrive/Inbox-from-share` and Files opens.
 - **Edge to edge**: the WebView fills the screen under transparent status and navigation bars.
@@ -343,6 +359,13 @@ calendar_sync true`, and look with `adb shell content query --uri
 content://com.android.calendar/events`. A `content insert|update|delete` on that URI (without
 the sync-adapter parameter) acts like an edit in a calendar app and reaches Sol within seconds
 (`sol do calendar.agenda` via `run-as app.sol`). `--ez calendar_sync false` removes it all.
+
+Wi-Fi Direct: `adb shell am start -n app.sol/.MainActivity --ez wifi_direct true|false` (debug
+builds) is the page switch: Android asks for Nearby devices, then `sol.nearby` shows
+`wifi_direct.state` `searching`. The emulator has a Wi-Fi Direct framework but no peer to find
+or radio to form a group with, so it checks the switch, the permission, advertising and
+discovery only; the link itself needs two real phones. `android/test/run.sh` runs the shell's
+pure-logic tests (`WifiDirectPolicy`) on a plain JDK.
 
 ### For Android developers: make your app a Sol app
 

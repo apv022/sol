@@ -101,6 +101,9 @@ type Config struct {
 	TorBin string `json:"tor_bin,omitempty"`
 	// Nearby: false turns LAN discovery off (design/PROTOCOL.md §Nearby); absent means on.
 	Nearby *bool `json:"nearby,omitempty"`
+	// WifiDirect: true lets the Android shell form Wi-Fi Direct groups with nearby kept
+	// devices (design/PROTOCOL.md §Nearby "Wi-Fi Direct"); absent means off.
+	WifiDirect *bool `json:"wifi_direct,omitempty"`
 }
 
 // InitOptions are the choices of a first run.
@@ -319,6 +322,7 @@ type Daemon struct {
 	ports      *portShare
 	onions     *publicOnions   // public onion services (onions.go)
 	near       *nearby.Service // LAN discovery (nearby.go)
+	wd         wifiDirect      // the Android shell's Wi-Fi Direct (nearby.go)
 	admin      http.Handler
 	wg         sync.WaitGroup // background goroutines (the theme watcher, the folder measurement)
 	folder     folderSize     // cached size of the synced folder (foldersize.go)
@@ -732,6 +736,14 @@ func (d *Daemon) onSession(s *session.Session) {
 	go d.ports.push(s)
 	defer func() {
 		now := time.Now().UTC()
+		// A session replaced by a newer one (a better path, the tie-break) is not the device
+		// going away: the new session's onSession already reported it up.
+		if cur, ok := d.Sessions.Session(p.Device); ok && cur != s {
+			d.mu.Lock()
+			d.lastSeen[did], d.lastSeen[pid] = now, now
+			d.mu.Unlock()
+			return
+		}
 		d.mu.Lock()
 		delete(d.since, did)
 		d.lastSeen[did], d.lastSeen[pid] = now, now
@@ -760,6 +772,9 @@ func (d *Daemon) onSession(s *session.Session) {
 			d.online[pid]--
 			last := d.online[pid] == 0
 			d.mu.Unlock()
+			if cur, ok := d.Sessions.Session(p.Device); ok && cur != s {
+				last = false // replaced, not gone: its successor counts itself
+			}
 			if last && d.ctx.Err() == nil {
 				d.API.PersonChanged(pid)
 			}

@@ -73,6 +73,8 @@ public class NodeService extends Service {
     private ConnectivityManager.NetworkCallback netCallback;
     /** Inbox items as notifications, from the node's own event stream (no push service). */
     private final Notifier notifier = new Notifier(this);
+    /** Nearby over Wi-Fi Direct (off unless switched on; it follows the node's "nearby" events). */
+    final WifiDirect wifiDirect = new WifiDirect(this);
 
     /** Where the node keeps its identity and config. */
     static File dataDir(Context c) { return new File(c.getFilesDir(), "sol"); }
@@ -145,6 +147,7 @@ public class NodeService extends Service {
         stopping = true;
         ready = false;
         notifier.stop();
+        wifiDirect.stop();
         CalendarSync.nodeStopped(this);
         Process p = node;
         if (p != null) p.destroy(); // SIGTERM: the node closes cleanly
@@ -217,6 +220,8 @@ public class NodeService extends Service {
                         new Thread(notifier::sync, "sol-inbox-sync").start();
                         // Calendars in the phone's calendar apps catch up and follow changes.
                         new Thread(() -> CalendarSync.onNodeReady(this), "sol-calendar-ready").start();
+                        // Wi-Fi Direct starts if it is switched on.
+                        wifiDirect.nodeReady();
                     }
                 }
             }
@@ -272,6 +277,8 @@ public class NodeService extends Service {
         pb.environment().put("TMPDIR", c.getCacheDir().getAbsolutePath());
         File tor = new File(c.getApplicationInfo().nativeLibraryDir, "libtor.so");
         if (tor.exists()) pb.environment().put("SOL_TOR_BIN", tor.getAbsolutePath());
+        // The node accepts the Wi-Fi Direct switch only under this shell, which drives the radio.
+        pb.environment().put("SOL_ANDROID_SHELL", "1");
     }
 
     /** The notification text for the node's current state. */

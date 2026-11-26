@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"github.com/apv022/sol/internal/apphost"
 	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/identity"
+	"github.com/apv022/sol/internal/nearby"
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/session"
 	"github.com/apv022/sol/sdk/go/sol"
@@ -745,6 +747,64 @@ func (d *Daemon) adminHandler() http.Handler {
 		_ = body(r, &b)
 		d.NetworkChanged(b.Reason)
 		return nil, nil
+	})
+	// Nearby over Wi-Fi Direct: the Android shell's short commands (`sol nearby ...`,
+	// design/PROTOCOL.md §Nearby "Wi-Fi Direct"). The group passphrase travels in bodies only.
+	j("POST /admin/v1/nearby/wifi-direct/ad", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			Group *nearby.P2PGroup `json:"group"`
+		}
+		if err := body(r, &b); err != nil { // an empty body: no group
+			return nil, err
+		}
+		return d.WifiDirectAdFor(b.Group)
+	})
+	j("POST /admin/v1/nearby/wifi-direct/match", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			State string          `json:"state"`
+			Seen  []nearby.AdSeen `json:"seen"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		return d.WifiDirectMatch(b.State, b.Seen)
+	})
+	j("POST /admin/v1/nearby/wifi-direct/report", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			State  string `json:"state"`
+			Detail string `json:"detail"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		if err := d.ReportWifiDirect(b.State, b.Detail); err != nil {
+			return nil, err
+		}
+		return d.Nearby(), nil
+	})
+	j("POST /admin/v1/nearby/interfaces", "", func(r *http.Request) (any, error) {
+		if err := tokenOnly(r); err != nil { // the Android shell's, never a page's
+			return nil, err
+		}
+		var b struct {
+			Addrs []netip.Addr `json:"addrs"`
+		}
+		if err := body(r, &b); err != nil {
+			return nil, err
+		}
+		if err := d.SetNearbyInterfaces(b.Addrs); err != nil {
+			return nil, err
+		}
+		return d.Nearby(), nil
 	})
 	// sol stop: answer first, then let the owner of the process (sol run) call Close.
 	j("POST /admin/v1/shutdown", "", func(r *http.Request) (any, error) {

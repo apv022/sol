@@ -40,6 +40,8 @@ import java.util.ArrayList;
  */
 public class MainActivity extends Activity {
     private static final int REQ_NOTIF = 2;
+    /** Boolean extra: open Sol to ask for the Wi-Fi Direct permission (WifiDirect's notification). */
+    static final String EXTRA_WIFI_DIRECT_ASK = "wifi_direct_ask";
     /** String extra: a local Sol URL to open (a notification's "Sol inbox"). */
     static final String EXTRA_URL = "url";
 
@@ -72,6 +74,16 @@ public class MainActivity extends Activity {
      * without the page (the same path as window.SolAndroid.calendarSync).
      */
     private void debugCalendarSync(Intent in) {
+        if (in.getBooleanExtra(EXTRA_WIFI_DIRECT_ASK, false)) { // the permission notification
+            in.removeExtra(EXTRA_WIFI_DIRECT_ASK);
+            sw.setWifiDirect(true);
+        }
+        // A debug build also takes `--ez wifi_direct true|false` (the SolAndroid.wifiDirect path).
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0 && in.hasExtra("wifi_direct")) {
+            boolean on = in.getBooleanExtra("wifi_direct", false);
+            in.removeExtra("wifi_direct");
+            sw.setWifiDirect(on);
+        }
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0 || !in.hasExtra("calendar_sync")) return;
         boolean on = in.getBooleanExtra("calendar_sync", false);
         in.removeExtra("calendar_sync");

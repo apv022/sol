@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -16,37 +17,42 @@ import (
 // address. Each interface gets a socket of its own (net.ListenMulticastUDP: it joins the group
 // there and sends out of it), with multicast loopback on, so two Sol devices on one machine
 // see each other. Where interfaces can't be listed (Android 11+ refuses the netlink socket),
-// one socket on the system's default interface.
+// one socket on the system's default interface. Extra adds one socket per given IPv4 address,
+// for an interface the OS won't list (the Android shell's Wi-Fi Direct group, §Nearby
+// "Wi-Fi Direct").
 //
 // The sockets bind the wildcard address, so a datagram may arrive on several of them; the
 // Service drops the copies.
 type UDP struct {
 	// Interfaces overrides which interfaces are used (tests); nil means every usable one.
 	Interfaces func() ([]net.Interface, error)
+	// Extra returns IPv4 addresses of interfaces to use as well (nil: none).
+	Extra func() []netip.Addr
 }
 
 // ifacesForbidden remembers that the OS refused to list interfaces (Android), so it isn't
 // asked again on every network change.
 var ifacesForbidden atomic.Bool
 
-// usable reports whether beacons can go out of ifc.
-func usable(ifc net.Interface) bool {
+// usable reports whether beacons can go out of ifc, and its usable IPv4 addresses.
+func usable(ifc net.Interface) (bool, []netip.Addr) {
 	if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagMulticast == 0 || ifc.Flags&net.FlagLoopback != 0 ||
 		transport.VirtualInterface(ifc.Name) {
-		return false
+		return false, nil
 	}
 	addrs, err := ifc.Addrs()
 	if err != nil {
-		return false
+		return false, nil
 	}
+	var out []netip.Addr
 	for _, a := range addrs {
 		if ipn, ok := a.(*net.IPNet); ok {
 			if ip4 := ipn.IP.To4(); ip4 != nil && !ip4.IsLoopback() && !ip4.IsLinkLocalUnicast() {
-				return true
+				out = append(out, netip.AddrFrom4([4]byte(ip4)))
 			}
 		}
 	}
-	return false
+	return len(out) > 0, out
 }
 
 // Open implements Network.
@@ -59,6 +65,7 @@ func (u UDP) Open() (Conn, error) {
 		list = net.Interfaces
 	}
 	var ifaces []net.Interface
+	covered := map[netip.Addr]bool{} // addresses the listed interfaces already cover
 	fallback := ifacesForbidden.Load()
 	if !fallback {
 		all, err := list()
@@ -69,8 +76,11 @@ func (u UDP) Open() (Conn, error) {
 			return nil, err
 		}
 		for _, ifc := range all {
-			if usable(ifc) {
+			if ok, as := usable(ifc); ok {
 				ifaces = append(ifaces, ifc)
+				for _, a := range as {
+					covered[a] = true
+				}
 			}
 		}
 	}
@@ -88,10 +98,22 @@ func (u UDP) Open() (Conn, error) {
 		c.socks = append(c.socks, s)
 		return nil
 	}
+	var extra []netip.Addr
+	if u.Extra != nil {
+		for _, a := range u.Extra() {
+			if a = a.Unmap(); a.Is4() && !a.IsLoopback() && !a.IsUnspecified() && !covered[a] && !slices.Contains(extra, a) {
+				extra = append(extra, a)
+			}
+		}
+	}
 	var errs []error
 	if fallback {
+		// No default network (only a Wi-Fi Direct group, say) is fine when an extra one works.
 		if err := open(nil); err != nil {
-			return nil, err
+			if len(extra) == 0 {
+				return nil, err
+			}
+			errs = append(errs, err)
 		}
 	} else {
 		for i := range ifaces {
@@ -99,12 +121,23 @@ func (u UDP) Open() (Conn, error) {
 				errs = append(errs, err)
 			}
 		}
-		if len(c.socks) == 0 {
-			if len(errs) > 0 {
-				return nil, errors.Join(errs...)
-			}
-			return nil, ErrNoInterface
+	}
+	listed := len(c.socks)
+	for _, a := range extra {
+		s, err := openAddr(a)
+		if err != nil {
+			errs = append(errs, err)
+			continue
 		}
+		c.socks = append(c.socks, s)
+	}
+	if len(c.socks) == 0 {
+		if len(errs) > 0 {
+			return nil, errors.Join(errs...)
+		}
+		return nil, ErrNoInterface
+	}
+	if !fallback || len(c.socks) > listed {
 		c.n = len(c.socks)
 	}
 	for _, s := range c.socks {

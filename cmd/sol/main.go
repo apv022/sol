@@ -27,6 +27,7 @@
 //	sol backup words|confirm          the 24 recovery words
 //	sol restore --words "..."         set up a fresh directory from the words
 //	sol network-changed [reason]      redial peers now (OS network callbacks)
+//	sol nearby ad|match|interfaces|report   the Android shell's Wi-Fi Direct plumbing (JSON)
 //	sol open [--print] [app]          open the Sol app (or one app, e.g. `sol open files`) in the browser, logged in
 //	sol service add|list|remove       share a local port with people (port sharing)
 //	sol tunnel open|list|close        open a contact's service on a local port
@@ -156,6 +157,8 @@ const usage = `usage: sol <command> [flags]
   reset --confirm NAME              remove Sol from this device (identity archived, synced folder kept), then set up again
   restore --words "..." [--from LINK] [--name N] [--device D] [init's --listen/--transport/--ui/--files]
   network-changed [reason]
+  nearby ad [-] | nearby match - | nearby interfaces [IPv4...] | nearby report <state> [detail]
+                                    the Android app's Wi-Fi Direct plumbing (JSON; requests on stdin)
   open [--print] [app]              open the Sol app, or one app (sol open files), in the browser; --print only prints the URL
   service add <name> <port> [--http] [--with PERSON]... | service list | service remove <name>
   tunnel open <person> <service> [--port N] | tunnel list | tunnel close <id>
@@ -184,7 +187,7 @@ func run(args []string) error {
 			rest = append([]string{"list"}, rest...)
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
-	case "app", "agent", "theme", "backup", "service", "tunnel":
+	case "app", "agent", "theme", "backup", "service", "tunnel", "nearby":
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			return errors.New(usage)
 		}
@@ -628,6 +631,8 @@ func run(args []string) error {
 		return portCmd(ctx, c, cmd, fs.Args(), *asJSON, *svcHTTP, people, *port)
 	case "transports list", "transports enable", "transports disable":
 		return transportsCmd(ctx, c, cmd, fs.Args(), *asJSON)
+	case "nearby ad", "nearby match", "nearby interfaces", "nearby report":
+		return nearbyCmd(ctx, c, cmd, fs.Args(), os.Stdin, os.Stdout)
 	case "people list", "people set":
 		return peopleCmd(ctx, c, cmd, fs.Args(), *asJSON, *inviteAnon, *buddy)
 	}
