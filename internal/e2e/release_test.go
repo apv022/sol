@@ -21,7 +21,9 @@ import (
 func TestFilesPurgeFreesBlobEverywhere(t *testing.T) {
 	old := blobnet.ReleaseGrace
 	blobnet.ReleaseGrace = 300 * time.Millisecond
-	defer func() { blobnet.ReleaseGrace = old }()
+	// Restored by a cleanup registered before the daemons start: cleanups run last-in first-out,
+	// so this runs after every daemon is closed (a defer would run while they still read it).
+	t.Cleanup(func() { blobnet.ReleaseGrace = old })
 
 	bi := builtins.All()
 	laptop := startNode(t, sold.InitOptions{Name: "Alice", Device: "laptop"}, bi)
