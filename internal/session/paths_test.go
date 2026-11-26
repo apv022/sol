@@ -104,8 +104,10 @@ func TestFallbackAndReturn(t *testing.T) {
 		fb, ok = dialedSession(alice, bob)
 		return ok && fb.Path().Transport == "tor"
 	})
-	if !strings.Contains(fb.Path().Reason, "direct failed") {
-		t.Fatalf("fallback reason: %q", fb.Path().Reason)
+	// "direct failed" when this dial tried direct first; "best path" when an earlier attempt
+	// had already marked direct as failing, so tor ranked first (seen on slow Windows runners).
+	if r := fb.Path().Reason; !strings.Contains(r, "direct failed") && r != "best path" {
+		t.Fatalf("fallback reason: %q", r)
 	}
 	caller, callee := alice, bob
 	if bytes.Equal(fb.Caller(), bob.kr.DevicePublic()) {

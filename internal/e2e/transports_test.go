@@ -583,10 +583,12 @@ func TestTunnelSurvivesPathMove(t *testing.T) {
 
 	// UDP back: the session moves to WireGuard while the tunnel keeps going.
 	natL.Block(false)
-	rounds := 0
+	// Time, not a count of round trips: a fast machine finishes thousands before the path is
+	// even probed again.
+	deadline := time.Now().Add(60 * time.Second)
 	for pathBetween(laptop, phone) != "wg" {
 		trip("during the move")
-		if rounds++; rounds > 2000 {
+		if time.Now().After(deadline) {
 			t.Fatal("the session never moved to WireGuard")
 		}
 	}

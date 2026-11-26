@@ -23,7 +23,11 @@ func TestTwoDevicesConverge(t *testing.T) {
 		t.Fatalf("mtime not carried: %v want %v", st.ModTime(), mt)
 	}
 
-	// A folder move on a (as a program would do it) arrives on b as a move.
+	// A folder move on a (as a program would do it) arrives on b as a move. Settle first: this
+	// checks a move made while nothing is in flight (a rename racing an incoming write is its own
+	// case).
+	a.settle(t)
+	b.settle(t)
 	if err := osRename(a.path("Notes"), a.path("Archive")); err != nil {
 		t.Fatal(err)
 	}
