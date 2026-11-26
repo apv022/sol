@@ -11,6 +11,13 @@
   recognise (nothing in it identifies you to anyone else; anonymous contacts never see it).
   `sol do sol.nearby --state off` (or `sol transports disable nearby`) turns it off; `sol
   transports list` shows it.
+- **Steadier connections.** When Sol moved a connection to a better path (from Tor to a direct
+  link, say, or when two devices dialled each other at once), everything open on the old one was
+  cut: a shared service's tunnel, a file download, a sync. Those now finish on the old path while
+  new ones use the new path.
+- **Wi-Fi Direct (Android, off by default):** two phones link with no Wi-Fi network or mobile data
+  at all, privately (only your devices and contacts recognise each other). Settings > Advanced >
+  Transports > Wi-Fi Direct. Needs Android 10 or later.
 - **Public onion services in the Sharing page:** host a local port on Tor, copy its address,
   remove it.
 - The "It is a website" switch in "Share a service" was squashed under its label.
