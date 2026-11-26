@@ -6,13 +6,18 @@
 //
 // Invariants:
 //
-//   - At most one live session per pair of devices. If both dial at once,
-//     both sides keep the session whose caller has the lower device ID and
-//     close the other, so they converge without talking about it.
+//   - At most one current session per pair of devices. If both dial at once,
+//     both sides keep the session whose caller has the lower device ID; of
+//     two dialed by the same side, the newer. So they converge without
+//     talking about it.
+//   - A replaced session that is still alive drains instead of closing
+//     (register, drain): new streams go over the current session, the open
+//     ones finish, and it closes when idle or after DrainGrace. Moving a
+//     session to a better path never cuts a stream.
 //   - A peer is admitted only if its verified person is me (and its device is
 //     in my current device list) or a contact (and its device is in the
 //     newest list I know for them). Learning a newer list closes the
-//     sessions of devices it no longer contains.
+//     sessions of devices it no longer contains, draining ones included.
 //   - Pair and join secrets are burned on first use (internal/pairing).
 //   - A kept peer is redialed whenever its session dies, with exponential
 //     backoff between RedialMin and RedialMax.
@@ -99,7 +104,9 @@ type Config struct {
 	OnProfile func(person ed25519.PublicKey)
 	// OnSession, if set, is called (in its own goroutine) for every session
 	// that comes up and wins the tie-break, e.g. to start feed replication
-	// over it. It should return once the session is Done.
+	// over it. It should return once the session is Retired: long-lived
+	// streams then move to the session that replaced it (whose OnSession
+	// call starts them again).
 	OnSession func(*Session)
 	Log       *slog.Logger
 }
@@ -122,17 +129,20 @@ type Manager struct {
 	announce chan struct{}
 	probes   chan struct{}
 
-	mu        sync.Mutex
-	closed    bool
-	sessions  map[string]*Session // by peer device key
-	keepers   map[string]*keeper
-	endpoints map[string]identity.EndpointRecord // newest seen per device
-	dialing   map[string]*sync.Mutex
-	listeners map[net.Listener]struct{}
-	links     map[string]*link      // path state per peer device (paths.go)
-	auth      clientAuth            // client-auth keys installed for peers' onions (toraccess.go)
-	peerAddrs map[string]string     // "<device>|<transport>" -> address given to a PeerSetter
-	nearby    map[string]nearbyHint // LAN addresses from beacons, by device (nearby.go)
+	mu       sync.Mutex
+	closed   bool
+	sessions map[string]*Session // the current one, by peer device key
+	draining map[*Session]bool   // replaced but still carrying streams (drain)
+	// drainGrace and drainIdle are DrainGrace and DrainIdle when the manager was created.
+	drainGrace, drainIdle time.Duration
+	keepers               map[string]*keeper
+	endpoints             map[string]identity.EndpointRecord // newest seen per device
+	dialing               map[string]*sync.Mutex
+	listeners             map[net.Listener]struct{}
+	links                 map[string]*link      // path state per peer device (paths.go)
+	auth                  clientAuth            // client-auth keys installed for peers' onions (toraccess.go)
+	peerAddrs             map[string]string     // "<device>|<transport>" -> address given to a PeerSetter
+	nearby                map[string]nearbyHint // LAN addresses from beacons, by device (nearby.go)
 
 	trMu sync.RWMutex
 	ts   []transport.Transport // Config.Transports, replaced by SetTransports
@@ -155,11 +165,13 @@ func New(cfg Config) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		cfg: cfg, kr: cfg.Keyring, cache: cfg.Cache, profiles: cfg.Profiles,
-		log:       cfg.Log.With("device", short(cfg.Keyring.DevicePublic())),
-		ctx:       ctx,
-		cancel:    cancel,
-		slots:     make(chan struct{}, MaxPendingHandshakes),
-		sessions:  map[string]*Session{},
+		log:        cfg.Log.With("device", short(cfg.Keyring.DevicePublic())),
+		ctx:        ctx,
+		cancel:     cancel,
+		slots:      make(chan struct{}, MaxPendingHandshakes),
+		sessions:   map[string]*Session{},
+		draining:   map[*Session]bool{},
+		drainGrace: DrainGrace, drainIdle: DrainIdle,
 		keepers:   map[string]*keeper{},
 		endpoints: map[string]identity.EndpointRecord{},
 		dialing:   map[string]*sync.Mutex{},
@@ -210,6 +222,9 @@ type Session struct {
 	pathKey string    // the endpoint it was dialed over ("" inbound)
 	started time.Time // when it came up
 	anon    bool      // it runs over an anonymous transport (Tor, I2P)
+
+	retired    chan struct{} // closed when it stops being current (Retired)
+	retireOnce sync.Once
 }
 
 // Path says how the session was reached and why that path.
@@ -221,17 +236,65 @@ func (s *Session) Peer() Peer { return s.peer }
 // Caller returns the device key of the side that dialed this session.
 func (s *Session) Caller() ed25519.PublicKey { return s.caller }
 
-// Done is closed when the session dies.
+// Done is closed when the session dies (its connection is gone, and every stream on it).
 func (s *Session) Done() <-chan struct{} { return s.mux.Done() }
+
+// Retired is closed when the session stops being the device's current one: a newer session
+// replaced it (it lost the tie-break, or moved to a better path), or it died. A retired
+// session that is still alive is draining (PROTOCOL.md §Sessions): the streams open on it
+// carry on, new ones go over the current session. Owners of long-lived streams (feed
+// replication) stop at Retired and start again on the new session.
+func (s *Session) Retired() <-chan struct{} { return s.retired }
+
+func (s *Session) retire() { s.retireOnce.Do(func() { close(s.retired) }) }
 
 // Alive reports whether the session is still up.
 func (s *Session) Alive() bool { return s.mux.Err() == nil }
 
-// Close closes the session.
-func (s *Session) Close() error { return s.mux.Close() }
+// Close closes the session at once, streams and all. Closing a session that is not draining
+// (the current one, or one just taken out of the manager to cut a device off) also closes
+// the sessions to that device that are draining: whoever closes a device's session means to
+// stop talking to it.
+func (s *Session) Close() error {
+	s.mux.Close()
+	m := s.m
+	m.mu.Lock()
+	if m.draining[s] {
+		m.mu.Unlock()
+		return nil
+	}
+	old := m.drainingLocked(s.peer.Device)
+	m.mu.Unlock()
+	for _, o := range old {
+		o.mux.Close()
+	}
+	return nil
+}
 
-// Open opens a raw stream to the peer.
-func (s *Session) Open(ctx context.Context) (net.Conn, error) { return s.mux.Open(ctx) }
+// drainingLocked returns the draining sessions to device. Called with m.mu held.
+func (m *Manager) drainingLocked(device ed25519.PublicKey) []*Session {
+	var out []*Session
+	for d := range m.draining {
+		if bytes.Equal(d.peer.Device, device) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// Open opens a raw stream to the peer: over this session while it is current, over the
+// current one once it is retired (so a holder of an old handle never pins new work to a
+// draining session). With no live current session it falls back on this one.
+func (s *Session) Open(ctx context.Context) (net.Conn, error) {
+	select {
+	case <-s.retired:
+		if cur, ok := s.m.Session(s.peer.Device); ok && cur != s {
+			return cur.mux.Open(ctx)
+		}
+	default:
+	}
+	return s.mux.Open(ctx)
+}
 
 // HTTPClient returns a client that sends each request over a new stream of
 // this session. The URL's host is ignored; use e.g. "http://peer/p/bundle".
@@ -291,6 +354,9 @@ func (m *Manager) Close() error {
 	m.cancel()
 	var all []*Session
 	for _, s := range m.sessions {
+		all = append(all, s)
+	}
+	for s := range m.draining {
 		all = append(all, s)
 	}
 	for ln := range m.listeners {
@@ -488,6 +554,11 @@ func (m *Manager) prune(person ed25519.PublicKey) {
 			delete(m.sessions, key)
 		}
 	}
+	for s := range m.draining {
+		if bytes.Equal(s.peer.Person, person) && !m.listed(person, s.peer.Device) {
+			drop = append(drop, s)
+		}
+	}
 	for key, k := range m.keepers {
 		if bytes.Equal(k.person, person) && !m.listed(person, k.device) {
 			stop = append(stop, k)
@@ -642,10 +713,11 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 	} else {
 		ms = mux.Server(conn)
 	}
-	s := &Session{m: m, mux: ms, peer: peer, caller: caller, path: path, pathKey: pk, started: time.Now(), anon: anon}
+	s := &Session{m: m, mux: ms, peer: peer, caller: caller, path: path, pathKey: pk, started: time.Now(), anon: anon,
+		retired: make(chan struct{})}
 	s.client = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return ms.Open(ctx)
+			return s.Open(ctx) // the current session's, once this one is retired
 		},
 		DisableKeepAlives:  true, // one request per stream
 		DisableCompression: true,
@@ -656,11 +728,13 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 		BaseContext:       func(net.Listener) context.Context { return withPeer(m.ctx, peer) },
 		ErrorLog:          slog.NewLogLogger(m.log.Handler(), slog.LevelDebug),
 	}
-	winner := m.register(s)
-	if winner != s {
+	winner, kept := m.register(s)
+	if !kept {
 		return winner
 	}
-	// register counted both goroutines in m.wg.
+	// register counted these goroutines in m.wg. A session that lost the tie-break is served
+	// too, while it drains: the peer may have opened streams on it before it learned of the
+	// winner.
 	go func() {
 		defer m.wg.Done()
 		s.srv.Serve(ms.Listener())
@@ -668,17 +742,22 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 	go func() {
 		defer m.wg.Done()
 		<-ms.Done()
+		s.retire()
 		s.srv.Close()
 		s.client.CloseIdleConnections()
 		m.unregister(s)
 	}()
+	if winner != s {
+		go m.drain(s)
+		return winner
+	}
 	m.log.Info("session up", "peer", short(peer.Device), "relation", peer.Relation, "caller", short(caller),
 		"path", path.Transport, "why", path.Reason)
 	if m.cfg.OnSession != nil {
 		go m.cfg.OnSession(s)
 	}
 	// Tell the peer this device's current bundle. Changes are pushed only to sessions open at the
-	// time, and the tie-break for two simultaneous dials closes one session and opens another, so
+	// time, and the tie-break for two simultaneous dials retires one session for another, so
 	// without this a change made in that gap would never reach the peer (until the next change).
 	m.goBG(func() { m.pushMine([]*Session{s}) })
 	// Profiles (profile.go): fetched from the peer; a sibling also gets my contacts' bundles,
@@ -695,35 +774,94 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 // register installs s as the session with its device, applying the
 // tie-break: the session whose caller has the lower device ID wins; between
 // two sessions dialed by the same side, the newer one (the older is likely
-// dead). It returns the winner and closes the loser.
-func (m *Manager) register(s *Session) *Session {
+// dead, or the dialer moved it to a better path). The loser, if alive,
+// drains (drain): it is retired, and closes once its streams are done.
+// register returns the winner, and whether s was kept (current or draining;
+// the caller then serves it). It counts start's goroutines for s in m.wg (3
+// for a draining s: drain too).
+func (m *Manager) register(s *Session) (winner *Session, kept bool) {
 	key := string(s.peer.Device)
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		s.Close()
-		return nil
+		s.mux.Close()
+		return nil, false
 	}
 	old := m.sessions[key]
 	if old != nil && old.Alive() {
 		oc, nc := identity.ID(old.caller), identity.ID(s.caller)
 		if oc < nc {
+			m.draining[s] = true
+			m.wg.Add(3)
 			m.mu.Unlock()
-			s.Close()
-			return old
+			s.retire()
+			m.log.Info("a second session lost the tie-break; draining it", "peer", short(s.peer.Device))
+			return old, true
 		}
 	}
 	m.sessions[key] = s
 	m.wg.Add(2) // under m.mu, so Close's Wait sees them: start's two goroutines
+	drainOld := old != nil && old.Alive()
+	if drainOld {
+		m.draining[old] = true
+		m.wg.Add(1) // drain(old)
+	}
 	k := m.keepers[key]
 	m.mu.Unlock()
 	if old != nil {
-		old.Close()
+		old.retire()
+	}
+	if drainOld {
+		go m.drain(old)
 	}
 	if k != nil {
 		k.poke()
 	}
-	return s
+	return s, true
+}
+
+// Drain tunables (PROTOCOL.md §Sessions). Package variables so tests can shorten them; set
+// them before creating a Manager.
+var (
+	// DrainGrace is the longest a replaced session keeps carrying streams.
+	DrainGrace = 5 * time.Minute
+	// DrainIdle is how long a replaced session lingers once it has no stream: about the
+	// time the peer may take to learn of the new session (a stream it opens on the old one
+	// meanwhile still works), and to flush the last close frames.
+	DrainIdle = 2 * time.Second
+)
+
+// drain closes a retired session once it has had no stream for DrainIdle, or after
+// DrainGrace, whichever comes first. register counted it in m.wg.
+func (m *Manager) drain(s *Session) {
+	defer m.wg.Done()
+	grace := time.NewTimer(m.drainGrace)
+	defer grace.Stop()
+	idle := time.NewTimer(m.drainIdle)
+	defer idle.Stop()
+	if s.mux.NumStreams() > 0 {
+		idle.Stop()
+	}
+	for {
+		select {
+		case <-s.mux.Done():
+			return
+		case <-s.mux.Idle():
+			if s.mux.NumStreams() == 0 {
+				idle.Reset(m.drainIdle)
+			}
+		case <-idle.C:
+			if s.mux.CloseIfIdle() {
+				m.log.Debug("a replaced session drained", "peer", short(s.peer.Device))
+				return
+			}
+		case <-grace.C:
+			m.log.Info("closing a replaced session after the grace", "peer", short(s.peer.Device),
+				"streams", s.mux.NumStreams())
+			s.mux.Close()
+			return
+		}
+	}
 }
 
 func (m *Manager) unregister(s *Session) {
@@ -732,6 +870,7 @@ func (m *Manager) unregister(s *Session) {
 	if m.sessions[key] == s {
 		delete(m.sessions, key)
 	}
+	delete(m.draining, s)
 	k := m.keepers[key]
 	m.mu.Unlock()
 	if k != nil {
@@ -1143,6 +1282,7 @@ func (m *Manager) Forget(device ed25519.PublicKey) {
 	k := m.keepers[string(device)]
 	delete(m.keepers, string(device))
 	s := m.sessions[string(device)]
+	old := m.drainingLocked(device)
 	m.mu.Unlock()
 	if k != nil {
 		k.cancel()
@@ -1150,6 +1290,9 @@ func (m *Manager) Forget(device ed25519.PublicKey) {
 	}
 	if s != nil {
 		s.Close()
+	}
+	for _, o := range old {
+		o.mux.Close()
 	}
 	m.deauthorize(device)
 }
@@ -1184,7 +1327,7 @@ func (m *Manager) keep(k *keeper) {
 				due = t.C
 			}
 			select {
-			case <-s.Done():
+			case <-s.Retired(): // replaced or dead: look again
 			case <-k.wake:
 			case <-due:
 				m.tryUpgrade(k.ctx, s, ep)

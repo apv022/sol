@@ -58,7 +58,7 @@ func newPathNode(t *testing.T, name string) *pathNode {
 	n := &node{kr: kr, contacts: NewMemContacts(), tokens: pairing.NewTokens()}
 	n.m, err = New(Config{Keyring: kr, Contacts: n.contacts, Tokens: n.tokens,
 		Transports: []transport.Transport{renamed{cl, "direct"}, renamed{cl, "tor"}},
-		Handler:    http.HandlerFunc(whoami), Log: slog.New(slog.DiscardHandler)})
+		Handler:    http.Handler(testHandler()), Log: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
 	}

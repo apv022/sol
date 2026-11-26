@@ -4,6 +4,7 @@ package e2e
 // and anonymous (Tor-only) contacts.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -520,4 +522,99 @@ func TestAnonymousBothWays(t *testing.T) {
 	if err := dialDirect(bob, alice, clearOf(alice)); err == nil {
 		t.Fatal("the redeemer's direct dial was admitted by the anonymous inviter")
 	}
+}
+
+// TestTunnelSurvivesPathMove: a port-sharing tunnel that is open while the session moves
+// from Tor to WireGuard keeps carrying bytes, intact, through the move (the old session
+// drains instead of closing, PROTOCOL.md §Sessions), and new tunnel connections and file sync
+// go over the new path.
+func TestTunnelSurvivesPathMove(t *testing.T) {
+	shortPaths(t)
+	transport.SetWGLiveness(t, 1, 1500*time.Millisecond)
+	fake := faultnet.NewFakeTor(t.TempDir())
+	bi := builtins.All()
+	node := func(o sold.InitOptions) (*sold.Daemon, *faultnet.NAT) {
+		nat, err := faultnet.NewNAT()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(nat.Close)
+		d := startNet(t, netNode{o: o, tor: fake.Provider(), builtins: bi, wrap: behindNAT(nat),
+			transports: []sold.TransportConfig{{Name: "wg", Listen: "127.0.0.1:0", Advertise: []string{nat.Addr()}}, {Name: "tor"}}})
+		waitOnion(t, d, time.Minute)
+		return d, nat
+	}
+	laptop, natL := node(sold.InitOptions{Name: "Alice", Device: "laptop"})
+	phone, _ := node(sold.InitOptions{Join: true, Device: "phone"})
+	natL.Block(true) // no UDP: the session stays on Tor until it is unblocked
+	link, err := laptop.Invite(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeem(t, phone, link)
+	waitSession(t, laptop, phone)
+	eventually(t, "the session on Tor", func() bool { return pathBetween(laptop, phone) == "tor" })
+	lapDev, _ := identity.ParseID(laptop.DeviceID())
+	first, _ := phone.Sessions.Session(lapDev)
+
+	port := echoServer(t)
+	A, P := admin(t, laptop), admin(t, phone)
+	if err := A("POST", "/admin/v1/services", sold.Service{Name: "echo", Port: port}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var tun sold.TunnelInfo
+	eventually(t, "a tunnel to the laptop's service", func() bool {
+		return P("POST", "/admin/v1/tunnels", map[string]any{"person": laptop.PersonID(), "service": "echo"}, &tun) == nil
+	})
+	conn, err := net.Dial("tcp", tun.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	big := strings.Repeat("0123456789abcdef", 64<<10/16) // 64 KiB a line
+	trip := func(what string) {
+		t.Helper()
+		if got, err := roundTrip(conn, br, big); err != nil || got != big+"\n" {
+			t.Fatalf("%s: round trip: %d bytes, %v", what, len(got), err)
+		}
+	}
+	trip("before the move")
+
+	// UDP back: the session moves to WireGuard while the tunnel keeps going.
+	natL.Block(false)
+	rounds := 0
+	for pathBetween(laptop, phone) != "wg" {
+		trip("during the move")
+		if rounds++; rounds > 2000 {
+			t.Fatal("the session never moved to WireGuard")
+		}
+	}
+	for range 20 {
+		trip("after the move")
+	}
+	if cur, _ := phone.Sessions.Session(lapDev); cur == first {
+		t.Fatal("the session did not move")
+	}
+	select {
+	case <-first.Retired():
+	default:
+		t.Fatal("the Tor session is not retired")
+	}
+	if !first.Alive() {
+		t.Fatal("the Tor session closed under the open tunnel")
+	}
+
+	// New connections ride the new session; the old one closes once the tunnel ends.
+	c2, err := net.Dial("tcp", tun.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := roundTrip(c2, bufio.NewReader(c2), "new"); err != nil || got != "new\n" {
+		t.Fatalf("new connection: %q %v", got, err)
+	}
+	c2.Close()
+	conn.Close()
+	eventually(t, "the drained Tor session to close", func() bool { return !first.Alive() })
+	syncs(t, laptop, phone, "after-move.txt", "replication moved too")
 }

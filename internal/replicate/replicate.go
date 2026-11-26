@@ -330,8 +330,10 @@ func (st *stream) sendFeed(addr string) error {
 	}
 }
 
-// Attach pulls over s until it dies (or the Replicator closes), retrying
-// with backoff. It is meant as session.Config.OnSession.
+// Attach pulls over s until it is retired (it died, or a newer session to
+// the device replaced it, whose own Attach takes over: a live pull must not
+// pin a draining session), or the Replicator closes, retrying with backoff.
+// It is meant as session.Config.OnSession.
 func (r *Replicator) Attach(s *session.Session) {
 	r.mu.Lock()
 	if r.closed {
@@ -345,7 +347,7 @@ func (r *Replicator) Attach(s *session.Session) {
 	defer cancel()
 	go func() {
 		select {
-		case <-s.Done():
+		case <-s.Retired():
 			cancel()
 		case <-ctx.Done():
 		}

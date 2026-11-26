@@ -475,3 +475,48 @@ func TestWriteWhileBlockedRead(t *testing.T) {
 		t.Fatal("writer stuck")
 	}
 }
+
+// TestIdleAndCloseIfIdle: Idle signals when the last stream goes away, CloseIfIdle refuses
+// while a stream is open and closes once none is, and Opened counts this side's opens.
+func TestIdleAndCloseIfIdle(t *testing.T) {
+	c, s := pair(t)
+	go echo(s)
+	if c.Opened() != 0 || s.Opened() != 0 {
+		t.Fatalf("opened before any stream: %d %d", c.Opened(), s.Opened())
+	}
+	st, err := c.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Opened() != 1 {
+		t.Fatalf("opened: %d", c.Opened())
+	}
+	if c.CloseIfIdle() {
+		t.Fatal("closed with a stream open")
+	}
+	if _, err := st.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	st.CloseWrite()
+	io.ReadAll(st)
+	st.Close()
+	select {
+	case <-c.Idle():
+	case <-time.After(5 * time.Second):
+		t.Fatal("no idle signal after the last stream ended")
+	}
+	waitFor(t, func() bool { return c.NumStreams() == 0 })
+	if !c.CloseIfIdle() {
+		t.Fatal("an idle session did not close")
+	}
+	if c.Err() == nil {
+		t.Fatal("still alive after CloseIfIdle")
+	}
+	if _, err := c.Open(context.Background()); err == nil {
+		t.Fatal("opened a stream on a closed session")
+	}
+	<-s.Done() // the peer sees the connection go
+	if s.Opened() != 0 {
+		t.Fatalf("callee opened: %d", s.Opened())
+	}
+}

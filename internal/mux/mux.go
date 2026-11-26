@@ -18,6 +18,8 @@
 //     drains first, so two sessions writing to each other cannot deadlock.
 //   - A ping goes out every PingInterval; MaxMissedPongs unanswered pings in
 //     a row close the session, and every stream with it.
+//   - CloseIfIdle never cuts a stream: the emptiness check and the refusal
+//     of new streams happen under one lock.
 package mux
 
 import (
@@ -132,11 +134,13 @@ type Session struct {
 	nextID     uint32 // next ID this side opens
 	lastRemote uint32 // highest ID the peer opened
 	missed     int    // pings sent since the last pong
+	closing    bool   // CloseIfIdle decided to close: no new streams
 
 	pingEvery time.Duration // PingInterval and MaxMissedPongs at creation
 	maxMissed int
 
 	accept chan *Stream
+	idle   chan struct{} // a token whenever the last stream goes away (Idle)
 
 	ctrlMu  sync.Mutex
 	ctrlQ   [][]byte
@@ -161,6 +165,7 @@ func newSession(conn net.Conn, caller bool) *Session {
 		streams: map[uint32]*Stream{},
 		nextID:  2,
 		accept:  make(chan *Stream, AcceptBacklog),
+		idle:    make(chan struct{}, 1),
 		ctrlSig: make(chan struct{}, 1),
 		dataCh:  make(chan writeReq),
 		done:    make(chan struct{}),
@@ -210,6 +215,33 @@ func (s *Session) NumStreams() int {
 	return len(s.streams)
 }
 
+// Opened returns how many streams this side has opened so far.
+func (s *Session) Opened() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return (s.nextID - 1) / 2 // IDs start at 1 (caller) or 2 (callee) and go up by 2
+}
+
+// Idle returns a channel that receives a token (never blocking the session) whenever the
+// last tracked stream goes away. It has room for one token and is meant for one reader, e.g.
+// the owner draining a session that should close once its streams are done.
+func (s *Session) Idle() <-chan struct{} { return s.idle }
+
+// CloseIfIdle closes the session if no stream is tracked, and reports whether it did. The
+// check and the close are atomic with respect to Open and to the peer's opens being
+// handled, so no stream can be cut by it.
+func (s *Session) CloseIfIdle() bool {
+	s.mu.Lock()
+	if len(s.streams) > 0 {
+		s.mu.Unlock()
+		return false
+	}
+	s.closing = true // from here on Open fails and the peer's opens are dropped
+	s.mu.Unlock()
+	s.shutdown(ErrSessionClosed)
+	return true
+}
+
 func (s *Session) shutdown(err error) {
 	s.closeOnce.Do(func() {
 		s.err = err
@@ -234,6 +266,10 @@ func (s *Session) Open(ctx context.Context) (*Stream, error) {
 		s.mu.Unlock()
 		return nil, ErrSessionClosed
 	default:
+	}
+	if s.closing {
+		s.mu.Unlock()
+		return nil, ErrSessionClosed
 	}
 	if s.nextID > 1<<31 {
 		s.mu.Unlock()
@@ -426,6 +462,10 @@ func (s *Session) handle(h header, p []byte) error {
 			return fmt.Errorf("bad open of stream %d", h.id)
 		}
 		s.lastRemote = h.id
+		if s.closing {
+			s.mu.Unlock()
+			return nil // closing for being idle: the connection goes down with it
+		}
 		st := newStream(s, h.id)
 		s.streams[h.id] = st
 		s.mu.Unlock()
@@ -469,5 +509,12 @@ func (s *Session) handle(h header, p []byte) error {
 func (s *Session) remove(id uint32) {
 	s.mu.Lock()
 	delete(s.streams, id)
+	empty := len(s.streams) == 0
 	s.mu.Unlock()
+	if empty {
+		select {
+		case s.idle <- struct{}{}:
+		default:
+		}
+	}
 }

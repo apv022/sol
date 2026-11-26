@@ -80,6 +80,11 @@ func (m *Manager) ContactChanged(person ed25519.PublicKey) {
 			drop = append(drop, s)
 		}
 	}
+	for s := range m.draining { // a replaced direct session must not carry on either
+		if bytes.Equal(s.peer.Person, person) && anon && !s.anon {
+			drop = append(drop, s)
+		}
+	}
 	for _, k := range m.keepers {
 		if bytes.Equal(k.person, person) {
 			devs = append(devs, k.device)
