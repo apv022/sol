@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.0-beta.4 (beta, unreleased)
+
+- **Your name and picture.** Settings has a profile card: change your name or picture, and your
+  devices and contacts see it. Anonymous contacts get your name but never your picture. A phone
+  passes the change to the device that set Sol up, so that one must be online.
+- **Nearby: devices on the same network find each other.** Your devices and your buddies'
+  devices on one Wi-Fi or LAN now connect directly even when their addresses changed while they
+  were apart, or the internet is down: each sends a small private beacon that only they can
+  recognise (nothing in it identifies you to anyone else; anonymous contacts never see it).
+  `sol do sol.nearby --state off` (or `sol transports disable nearby`) turns it off; `sol
+  transports list` shows it.
+- **Public onion services in the Sharing page:** host a local port on Tor, copy its address,
+  remove it.
+- The "It is a website" switch in "Share a service" was squashed under its label.
+- Switching themes quickly could leave the previous theme showing, or put back an earlier
+  setting.
+
 ## v0.2.0-beta.3 (beta)
 
 - `sol start` printed `UI: http://localhost:0/` when the UI hadn't opened yet; it now waits for it.
@@ -23,12 +40,6 @@
 - **Public onion services.** `sol do sol.onions.host --name blog --port 8080` publishes a local
   port at a fixed `.onion` address anyone can reach (Tor must be on); `sol.onions.remove` takes it
   down and deletes the address for good. Sol's own ports can't be published.
-- **Nearby: devices on the same network find each other.** Your devices and your buddies'
-  devices on one Wi-Fi or LAN now connect directly even when their addresses changed while they
-  were apart, or the internet is down: each sends a small private beacon that only they can
-  recognise (nothing in it identifies you to anyone else; anonymous contacts never see it).
-  `sol do sol.nearby --state off` (or `sol transports disable nearby`) turns it off; `sol
-  transports list` shows it.
 - **Notes:** a tap below the text of a short note starts editing (on phones it did nothing). A
   note started with "New note" is no longer saved as `Untitled.md`: leaving it names the file
   after its first heading. `sol do notes.tidy_names` renames the `Untitled*.md` notes you already
