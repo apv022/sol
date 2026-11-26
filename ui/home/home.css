@@ -131,7 +131,9 @@ sol-qr svg { display: block; width: 100%; height: 100%; }
 .link-line code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: var(--space-2) var(--space-3); background: var(--surface-2); border-radius: var(--radius-control); font-size: var(--fs-footnote); text-align: left; user-select: all; }
 .form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 .form .check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-body); color: var(--label); font-weight: 400; }
-.form .check input { width: auto; }
+.form .check input:not([role="switch"]) { width: auto; }
+/* A switch keeps the kit's size (a plain width: auto collapsed it under its label). */
+.form .check input[role="switch"] { flex: none; }
 .form fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
 .form legend { padding: 0; margin-bottom: var(--space-1); font-size: var(--fs-subhead); color: var(--label-2); font-weight: 500; }
 details.adv > summary { list-style: none; cursor: pointer; }

@@ -36,9 +36,17 @@ const fetchers = {
   services: () => admin.services(), onions: () => admin.onions(), tunnels: () => admin.tunnels(), inbox: () => admin.inbox(), theme: () => admin.theme(),
   themes: () => admin.themes(), backup: () => admin.backup(), agents: () => admin.agents(), wallpapers: () => admin.wallpapers(), notifications: () => admin.notifications(),
 };
+// Loads of one key can overlap (an event per change); only the newest answer is kept, or an older
+// one arriving last would show stale data (appearance flipping back after quick changes).
+const loadSeq = {};
+// Appearance settings saved but not confirmed yet: kept over whatever a load returns meanwhile.
+let pendingSettings = {};
 async function load(key) {
+  const n = (loadSeq[key] = (loadSeq[key] || 0) + 1);
   try {
-    state[key] = await fetchers[key]();
+    const v = await fetchers[key]();
+    if (n !== loadSeq[key]) return; // a newer load of this key is on its way
+    state[key] = key === 'theme' && v ? { ...v, settings: { ...(v.settings || {}), ...pendingSettings } } : v;
     if (key === 'theme' || key === 'wallpapers') applyTheme();
     saveCache(); draw();
   } catch (e) { if (e.status !== 401) console.warn('load', key, e.message); }
@@ -81,10 +89,14 @@ function applyTheme() {
  * is in, so a theme change shows at once without a flash. kit.js linked the first one.
  */
 function swapThemeCss() {
+  // A swap still loading is dropped for the newer one: two quick theme changes used to leave both
+  // links in, and whichever loaded last won (often the older theme).
+  for (const stale of document.querySelectorAll('link[data-theme-pending]')) stale.remove();
   const old = document.getElementById('sol-theme');
   const next = document.createElement('link');
   next.rel = 'stylesheet'; next.href = `/_sol/theme.css?v=${Date.now()}`;
-  const done = () => { if (old && old !== next) old.remove(); next.id = 'sol-theme'; };
+  next.setAttribute('data-theme-pending', '');
+  const done = () => { if (old && old !== next) old.remove(); next.removeAttribute('data-theme-pending'); next.id = 'sol-theme'; };
   next.addEventListener('load', done);
   next.addEventListener('error', () => next.remove());
   (old || document.head.lastElementChild).after(next);
@@ -646,9 +658,13 @@ function openNative(id) {
 /** Saves an appearance setting: updates the screen first, then tells the daemon. */
 async function setSetting(patch) {
   const prev = state.theme;
+  pendingSettings = { ...pendingSettings, ...patch };
   state.theme = { ...(prev || {}), settings: { ...settings(), ...patch } };
   applyTheme(); draw();
-  try { await admin.themeSettings(patch); } catch (e) { state.theme = prev; applyTheme(); draw(); fail(e); }
+  try { await admin.themeSettings(patch); } catch (e) { state.theme = prev; applyTheme(); draw(); fail(e); } finally {
+    // Confirmed (or refused): drop what this call set, unless a newer change of the same key is pending.
+    for (const [k, v] of Object.entries(patch)) if (pendingSettings[k] === v) delete pendingSettings[k];
+  }
 }
 
 document.addEventListener('click', (e) => {
