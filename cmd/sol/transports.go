@@ -69,7 +69,7 @@ func transportsCmd(ctx context.Context, c *daemon.Client, cmd string, args []str
 		}
 	default:
 		if len(args) != 1 {
-			return errors.New("usage: sol " + cmd + " <wg|direct|tor>")
+			return errors.New("usage: sol " + cmd + " <wg|direct|tor|nearby>")
 		}
 		on := cmd == "transports enable"
 		if err := c.Do(ctx, "POST", "/admin/v1/transports/"+args[0], map[string]bool{"enabled": on}, &ts); err != nil {

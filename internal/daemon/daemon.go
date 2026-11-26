@@ -64,6 +64,7 @@ import (
 	"github.com/apv022/sol/internal/feeds"
 	"github.com/apv022/sol/internal/fsutil"
 	"github.com/apv022/sol/internal/identity"
+	"github.com/apv022/sol/internal/nearby"
 	"github.com/apv022/sol/internal/pairing"
 	"github.com/apv022/sol/internal/replicate"
 	solruntime "github.com/apv022/sol/internal/runtime"
@@ -98,6 +99,8 @@ type Config struct {
 	// TorBin is a tor the platform provides (`sol init --tor-bin`), run without a checksum
 	// check; SOL_TOR_BIN overrides it (internal/runtime, provider "platform").
 	TorBin string `json:"tor_bin,omitempty"`
+	// Nearby: false turns LAN discovery off (design/PROTOCOL.md §Nearby); absent means on.
+	Nearby *bool `json:"nearby,omitempty"`
 }
 
 // InitOptions are the choices of a first run.
@@ -261,6 +264,9 @@ type Options struct {
 	// whenever that set changes, so `sol run` can keep the app-menu entries in step
 	// (internal/autostart). Tests leave it nil: they must never touch the real desktop.
 	OnApps func([]apphost.MenuApp)
+	// NearbyNet, if set, carries nearby beacons instead of UDP multicast (tests: an in-memory
+	// nearby.Bus, on which loopback sources count as the LAN).
+	NearbyNet nearby.Network
 }
 
 // Daemon is one running device.
@@ -311,7 +317,8 @@ type Daemon struct {
 	browser    *browserAuth
 	pets       *petnames
 	ports      *portShare
-	onions     *publicOnions // public onion services (onions.go)
+	onions     *publicOnions   // public onion services (onions.go)
+	near       *nearby.Service // LAN discovery (nearby.go)
 	admin      http.Handler
 	wg         sync.WaitGroup // background goroutines (the theme watcher, the folder measurement)
 	folder     folderSize     // cached size of the synced folder (foldersize.go)
@@ -428,7 +435,12 @@ func Start(o Options) (_ *Daemon, err error) {
 	d.transports = d.newTransports(cfg.Transports)
 	d.tokens, d.accessKick = pairing.NewTokens(), make(chan struct{}, 1)
 	d.tokens.OnChange = d.kickAccess
+	profiles, err := session.NewProfiles(o.Dir)
+	if err != nil {
+		return nil, err
+	}
 	if d.Sessions, err = session.New(session.Config{Keyring: kr, Cache: d.Cache, Contacts: d.Contacts,
+		Profiles: profiles, OnProfile: d.profileChanged,
 		Tokens: d.tokens, Transports: d.transports, Handler: peerMux, OnSession: d.onSession,
 		OnBundle: func(b identity.Bundle) { d.peers.put(b); d.kickAccess() }, OnIdentity: d.kickAccess,
 		Log: d.log}); err != nil {
@@ -457,6 +469,7 @@ func Start(o Options) (_ *Daemon, err error) {
 		return nil, err
 	}
 	d.peers.keep(kr, d.Cache, d.Contacts, d.Sessions)
+	d.startNearby()
 	if err := d.startAPI(); err != nil {
 		return nil, err
 	}
@@ -867,6 +880,9 @@ func (d *Daemon) Close() error {
 	d.closeExternalAPI()
 	if d.apiSrv != nil {
 		_ = d.apiSrv.Close()
+	}
+	if d.near != nil {
+		d.near.Close()
 	}
 	if d.Sessions != nil {
 		_ = d.Sessions.Close()

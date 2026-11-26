@@ -23,6 +23,12 @@
 - **Public onion services.** `sol do sol.onions.host --name blog --port 8080` publishes a local
   port at a fixed `.onion` address anyone can reach (Tor must be on); `sol.onions.remove` takes it
   down and deletes the address for good. Sol's own ports can't be published.
+- **Nearby: devices on the same network find each other.** Your devices and your buddies'
+  devices on one Wi-Fi or LAN now connect directly even when their addresses changed while they
+  were apart, or the internet is down: each sends a small private beacon that only they can
+  recognise (nothing in it identifies you to anyone else; anonymous contacts never see it).
+  `sol do sol.nearby --state off` (or `sol transports disable nearby`) turns it off; `sol
+  transports list` shows it.
 - **Notes:** a tap below the text of a short note starts editing (on phones it did nothing). A
   note started with "New note" is no longer saved as `Untitled.md`: leaving it names the file
   after its first heading. `sol do notes.tidy_names` renames the `Untitled*.md` notes you already

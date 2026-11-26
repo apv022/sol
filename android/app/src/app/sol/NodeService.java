@@ -11,6 +11,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -21,6 +22,8 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -193,6 +196,7 @@ public class NodeService extends Service {
         for (String a : args) cmd.add(a);
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         env(this, pb);
+        WifiManager.MulticastLock mlock = args[0].equals("run") ? multicastLock() : null;
         try {
             Process p = pb.start();
             node = p;
@@ -224,6 +228,34 @@ public class NodeService extends Service {
             return -1;
         } finally {
             alive = false;
+            if (mlock != null && mlock.isHeld()) mlock.release();
+        }
+    }
+
+    /**
+     * Nearby (LAN discovery, design/PROTOCOL.md §Nearby) receives UDP multicast beacons, which
+     * many Wi-Fi drivers drop unless an app holds a MulticastLock. It is held only while the
+     * node runs, and only when nearby isn't switched off in config.json ("nearby": false);
+     * switching it off at run time takes effect on the lock at the node's next start (the node
+     * itself closes its sockets at once). Returns null when nearby is off or the lock can't be
+     * had (the node still works, it just may not hear beacons with the screen off).
+     */
+    private WifiManager.MulticastLock multicastLock() {
+        try {
+            File cfg = new File(dataDir(this), "config.json");
+            if (cfg.exists()) {
+                String json = new String(Files.readAllBytes(cfg.toPath()), StandardCharsets.UTF_8);
+                if (!new org.json.JSONObject(json).optBoolean("nearby", true)) return null;
+            }
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) return null;
+            WifiManager.MulticastLock l = wm.createMulticastLock("sol-nearby");
+            l.setReferenceCounted(false);
+            l.acquire();
+            return l;
+        } catch (IOException | org.json.JSONException | RuntimeException e) {
+            Log.w(TAG, "nearby: no multicast lock: " + e.getMessage());
+            return null;
         }
     }
 

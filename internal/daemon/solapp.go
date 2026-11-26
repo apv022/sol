@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/apv022/sol/internal/identity"
 	"github.com/apv022/sol/sdk/go/sol"
 )
 
@@ -39,7 +40,18 @@ func solActions() ActionApp {
 		return &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
 			"name": {Type: "string", Enum: enumOf(names)}}}
 	}
-	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: appearance, transports, people's privacy and opening apps", Actions: []sol.ActionSpec{
+	return ActionApp{ID: SolAppID, Name: "Sol", Description: "Sol itself: my profile, appearance, transports, people's privacy and opening apps", Actions: []sol.ActionSpec{
+		{Name: "sol.profile.show", Description: "Show my profile: the name and picture my devices and contacts see", Effect: sol.EffectRead,
+			Input: &sol.Schema{Type: "object"}},
+		{Name: "sol.profile.set", Description: "Change my name, on all my devices and for my contacts (an empty name shows the name I started with)",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{
+				"name": {Type: "string"}}}},
+		{Name: "sol.profile.avatar", Description: "Change my picture: a square JPEG, PNG or WebP of at most 64 KiB, as base64 data or the absolute path of a file on this computer. Anonymous contacts never see it",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{
+				"data": {Type: "string"},
+				"path": {Type: "string"}}}},
+		{Name: "sol.profile.clear_avatar", Description: "Remove my picture (the letter shows again)",
+			Effect: sol.EffectWrite, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object"}},
 		{Name: "sol.transports.list", Description: "List the transports, whether each is on and how it is doing", Effect: sol.EffectRead,
 			Input: &sol.Schema{Type: "object"}, Columns: []string{"name", "enabled", "state", "detail"}},
 		{Name: "sol.transports.enable", Description: "Turn a transport on (wg, direct, tor), now and after restarts", Effect: sol.EffectWrite, Input: name(KnownTransports)},
@@ -69,6 +81,8 @@ func solActions() ActionApp {
 			Effect: sol.EffectDestructive, Approval: sol.ApprovalAgents, Input: &sol.Schema{Type: "object", Required: []string{"name"}, Properties: map[string]*sol.Schema{"name": {Type: "string"}}}},
 		{Name: "sol.notifications", Description: "Show or set desktop notifications for Inbox items on this device (desktop: on|off; no arguments shows the state)", Effect: sol.EffectWrite,
 			Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"desktop": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
+		{Name: "sol.nearby", Description: "Show or set LAN discovery: private beacons that let my devices and my buddies' devices on the same network find each other without the internet (state: on|off; no arguments shows it)",
+			Effect: sol.EffectWrite, Input: &sol.Schema{Type: "object", Properties: map[string]*sol.Schema{"state": {Type: "string", Enum: enumOf([]string{"on", "off"})}}}},
 	}}
 }
 
@@ -83,7 +97,7 @@ func solSpec(action string) (sol.ActionSpec, bool) {
 }
 
 // callSol runs a built-in action. handled is false when the action is not Sol's own.
-func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessage, handled bool, err error) {
+func (d *Daemon) callSol(ctx context.Context, c sol.ActionCall) (out json.RawMessage, handled bool, err error) {
 	if !strings.HasPrefix(c.Action, SolAppID+".") {
 		return nil, false, nil
 	}
@@ -122,6 +136,33 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 	}
 	var res any
 	switch c.Action {
+	case "sol.profile.show":
+		res = d.Me()
+	case "sol.profile.set":
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "would_set": map[string]string{"name": strings.TrimSpace(args["name"])}}
+		} else if res, err = d.SetName(ctx, args["name"]); err != nil {
+			return nil, true, err
+		}
+	case "sol.profile.avatar":
+		b, err := avatarArg(args)
+		if err != nil {
+			return nil, true, err
+		}
+		if _, err := identity.AvatarType(b); err != nil {
+			return nil, true, sol.Errorf("bad_request", strings.TrimPrefix(err.Error(), "identity: invalid object: "))
+		}
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "would_set": map[string]any{"avatar": identity.AvatarHash(b), "size": len(b)}}
+		} else if res, err = d.SetAvatar(ctx, b); err != nil {
+			return nil, true, err
+		}
+	case "sol.profile.clear_avatar":
+		if c.DryRun {
+			res = map[string]any{"dry_run": true, "would_clear": "avatar"}
+		} else if res, err = d.ClearAvatar(ctx); err != nil {
+			return nil, true, err
+		}
 	case "sol.theme.list":
 		res = d.Themes()
 	case "sol.theme.set":
@@ -189,6 +230,17 @@ func (d *Daemon) callSol(_ context.Context, c sol.ActionCall) (out json.RawMessa
 			res = map[string]any{"dry_run": true, "would_set": args["desktop"]}
 		default:
 			if res, err = d.SetNotifications(args["desktop"] == "on"); err != nil {
+				return nil, true, err
+			}
+		}
+	case "sol.nearby":
+		switch {
+		case args["state"] == "":
+			res = d.Nearby()
+		case c.DryRun:
+			res = map[string]any{"dry_run": true, "would_set": args["state"]}
+		default:
+			if res, err = d.SetNearby(args["state"] == "on"); err != nil {
 				return nil, true, err
 			}
 		}

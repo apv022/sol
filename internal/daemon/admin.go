@@ -50,10 +50,12 @@ type Status struct {
 	Files        string           `json:"files"`
 }
 
-// StatusMe is who this device is.
+// StatusMe is who this device is. Person.Name is the name shown for me (my profile's, else my
+// certificate's); Profile has the rest of my profile (GET /admin/v1/me).
 type StatusMe struct {
-	Person IDName `json:"person"`
-	Device IDName `json:"device"`
+	Person  IDName `json:"person"`
+	Device  IDName `json:"device"`
+	Profile MeInfo `json:"profile"`
 }
 
 // IDName is an ID with its display name.
@@ -118,8 +120,9 @@ func (d *Daemon) status(browser string) Status {
 	st := Status{Version: Version, PID: os.Getpid(), API: d.apiURL, UI: d.UIURL(), Files: d.cfg.Files, Endpoints: []EndpointInfo{},
 		Transports: d.Transports(), PeerSessions: []SessionInfo{}, Sessions: d.browser.list(browser)}
 	st.Me.Person.ID, st.Me.Device.ID = d.me()
+	st.Me.Profile = d.Me()
 	if b, err := d.Keyring.Bundle(); err == nil {
-		st.Me.Person.Name = b.Person.Name
+		st.Me.Person.Name = st.Me.Profile.Name
 		if dv, ok := b.Devices.Find(d.Keyring.DevicePublic()); ok {
 			st.Me.Device.Name = dv.Name
 		}
@@ -297,6 +300,29 @@ func (d *Daemon) adminHandler() http.Handler {
 
 	j("GET /admin/v1/status", "", func(r *http.Request) (any, error) { return d.status(browserSession(r.Context())), nil })
 
+	// My profile (IDENTITY.md §Profile): name and picture, synced to my devices and contacts.
+	j("GET /admin/v1/me", "", func(r *http.Request) (any, error) { return d.Me(), nil })
+	j("PATCH /admin/v1/me", "profile.set", func(r *http.Request) (any, error) {
+		var in struct {
+			Name *string `json:"name"`
+		}
+		if err := body(r, &in); err != nil {
+			return nil, err
+		}
+		if in.Name == nil {
+			return d.Me(), nil
+		}
+		return d.SetName(r.Context(), *in.Name)
+	})
+	j("PUT /admin/v1/me/avatar", "profile.avatar", func(r *http.Request) (any, error) {
+		b, err := readAvatarBody(r)
+		if err != nil {
+			return nil, err
+		}
+		return d.SetAvatar(r.Context(), b)
+	})
+	j("DELETE /admin/v1/me/avatar", "profile.clear_avatar", func(r *http.Request) (any, error) { return d.ClearAvatar(r.Context()) })
+
 	// Browser login.
 	j("POST /admin/v1/login-code", "login-code", func(r *http.Request) (any, error) {
 		if err := tokenOnly(r); err != nil {
@@ -315,11 +341,10 @@ func (d *Daemon) adminHandler() http.Handler {
 		if err := body(r, &in); err != nil {
 			return nil, err
 		}
-		name := ""
-		if b, err := d.Keyring.Bundle(); err == nil {
-			name = b.Person.Name
-		}
-		if strings.TrimSpace(in.Confirm) == "" || !strings.EqualFold(strings.TrimSpace(in.Confirm), strings.TrimSpace(name)) {
+		me := d.Me()
+		name, typed := me.Name, strings.TrimSpace(in.Confirm)
+		// The shown name (what the page asks for) or the certificate's.
+		if typed == "" || !strings.EqualFold(typed, strings.TrimSpace(name)) && !strings.EqualFold(typed, strings.TrimSpace(me.CertName)) {
 			return nil, sol.Errorf("bad_request", "type your name ("+name+") to confirm")
 		}
 		tok := d.requestReset()

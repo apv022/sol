@@ -58,7 +58,9 @@ certificates back to it. The root signs rarely, so it can stay offline.
 - **Your own devices** trust each other fully and share your contacts and app data.
 - **Sharing** is one model for every app: "this person (or group) can read / write this thing".
   The daemon enforces it; apps only ask "who is calling?" and get a verified answer.
-- **Discovery** widens slowly from real trust: a QR code or link; nearby on the LAN;
+- **Discovery** widens slowly from real trust: a QR code or link; nearby on the LAN (a multicast
+  beacon only my devices and my buddies' devices can recognise, so devices whose addresses
+  changed, or that share a network without internet, still find each other: PROTOCOL.md §Nearby);
   introductions through a contact (the other side must agree); later, optional public listings
   for things you choose to make public. There is no global list of people.
 
@@ -115,7 +117,9 @@ The daemon itself never runs a model.
 
 Reused from the PoC, which already works: LAN, WireGuard direct with hole punching, TLS direct,
 and Tor. New: relaying through one of your own reachable devices when two peers can't connect
-directly, before falling back to Tor. Each peer connection is one long-lived session that carries
+directly, before falling back to Tor. Devices on the same LAN find each other's current address
+with private multicast beacons (`internal/nearby`), so they connect directly even when their
+addresses changed while apart or the internet is down. Each peer connection is one long-lived session that carries
 sync, blobs, actions and app streams together, and heals itself after sleep or a network change.
 
 Any local service (an app you didn't write) can still be shared to a peer as today, which is what

@@ -220,7 +220,7 @@ func TestAdminEndpoints(t *testing.T) {
 	}
 	var st Status
 	must(do("GET", "/admin/v1/status", nil, &st))
-	if st.Me.Person.Name != "A" || len(st.Transports) != 4 || !st.Transports[0].Enabled || st.Transports[0].State == "" || st.Transports[1].Enabled || st.Storage == nil || st.Storage.Total == 0 {
+	if st.Me.Person.Name != "A" || len(st.Transports) != 5 || !st.Transports[0].Enabled || st.Transports[0].State == "" || st.Transports[1].Enabled || st.Storage == nil || st.Storage.Total == 0 {
 		t.Fatalf("%+v", st)
 	}
 	fail(sol.ErrNotFound, do("GET", "/admin/v1/nope", nil, nil))

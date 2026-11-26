@@ -50,7 +50,8 @@ func defaultTransport(name string) (TransportConfig, error) {
 type TransportState struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
-	// State is "up", "starting", "stopped" or "failed" (empty while disabled).
+	// State is "up", "starting", "stopped" or "failed" (empty while disabled); the "nearby"
+	// row (LAN discovery, nearby.go) may also be "idle", with the reason in Detail.
 	State  string `json:"state,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	Listen string `json:"listen,omitempty"`
@@ -150,7 +151,8 @@ func (d *Daemon) Transports() []TransportState {
 			out = append(out, TransportState{Name: n})
 		}
 	}
-	return out
+	// LAN discovery is not a transport, but it is switched and watched alongside them.
+	return append(out, d.nearbyRow())
 }
 
 // transportState is t's state as the admin API words it.
@@ -166,6 +168,12 @@ func transportState(t transport.Transport) (string, string) {
 // and drops its address from the endpoint record (pushed to every peer); turning one on
 // starts it (Tor in the background) and adds its address. The last transport stays on.
 func (d *Daemon) SetTransport(name string, on bool) ([]TransportState, error) {
+	if name == "nearby" {
+		if _, err := d.SetNearby(on); err != nil {
+			return nil, err
+		}
+		return d.Transports(), nil
+	}
 	d.trMu.Lock()
 	idx := slices.IndexFunc(d.cfg.Transports, func(tc TransportConfig) bool { return tc.Name == name })
 	switch {
@@ -226,6 +234,9 @@ func (d *Daemon) SetTransport(name string, on bool) ([]TransportState, error) {
 		}
 	}
 	d.refreshEndpoints()
+	if d.near != nil {
+		d.near.Update() // the ports a beacon advertises changed
+	}
 	d.activity("sol.transports."+map[bool]string{true: "enable", false: "disable"}[on], map[string]string{"name": name}, nil)
 	d.emitStatus()
 	return d.Transports(), nil

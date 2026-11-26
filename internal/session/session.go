@@ -91,6 +91,12 @@ type Config struct {
 	// device list, names, endpoints), e.g. to recompute who may reach its onion. It must not
 	// block.
 	OnIdentity func()
+	// Profiles stores my and my contacts' profiles and pictures (profile.go); nil keeps them in
+	// memory only.
+	Profiles *Profiles
+	// OnProfile, if set, is called when the profile (or the picture) of a person, me included,
+	// changed here. It must not block.
+	OnProfile func(person ed25519.PublicKey)
 	// OnSession, if set, is called (in its own goroutine) for every session
 	// that comes up and wins the tie-break, e.g. to start feed replication
 	// over it. It should return once the session is Done.
@@ -100,10 +106,12 @@ type Config struct {
 
 // Manager runs the sessions of one device. Safe for concurrent use.
 type Manager struct {
-	cfg   Config
-	kr    *identity.Keyring
-	cache *identity.Cache
-	log   *slog.Logger
+	cfg      Config
+	kr       *identity.Keyring
+	cache    *identity.Cache
+	profiles *Profiles
+	profMu   sync.Mutex // serializes changes to the stored profiles (profile.go)
+	log      *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -121,9 +129,10 @@ type Manager struct {
 	endpoints map[string]identity.EndpointRecord // newest seen per device
 	dialing   map[string]*sync.Mutex
 	listeners map[net.Listener]struct{}
-	links     map[string]*link  // path state per peer device (paths.go)
-	auth      clientAuth        // client-auth keys installed for peers' onions (toraccess.go)
-	peerAddrs map[string]string // "<device>|<transport>" -> address given to a PeerSetter
+	links     map[string]*link      // path state per peer device (paths.go)
+	auth      clientAuth            // client-auth keys installed for peers' onions (toraccess.go)
+	peerAddrs map[string]string     // "<device>|<transport>" -> address given to a PeerSetter
+	nearby    map[string]nearbyHint // LAN addresses from beacons, by device (nearby.go)
 
 	trMu sync.RWMutex
 	ts   []transport.Transport // Config.Transports, replaced by SetTransports
@@ -140,9 +149,12 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
+	if cfg.Profiles == nil {
+		cfg.Profiles, _ = NewProfiles("")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		cfg: cfg, kr: cfg.Keyring, cache: cfg.Cache,
+		cfg: cfg, kr: cfg.Keyring, cache: cfg.Cache, profiles: cfg.Profiles,
 		log:       cfg.Log.With("device", short(cfg.Keyring.DevicePublic())),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -357,6 +369,9 @@ func (m *Manager) endpointsFor(person, device ed25519.PublicKey) (identity.Endpo
 	m.mu.Unlock()
 	if c, cok := m.cache.Endpoints(person, device); cok && (!ok || c.Seq > rec.Seq) {
 		rec, ok = c, true
+	}
+	if ok {
+		rec = m.withNearby(rec)
 	}
 	if ok && m.Anonymous(person) {
 		rec = onlyAnonymous(rec)
@@ -666,9 +681,14 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 	// time, and the tie-break for two simultaneous dials closes one session and opens another, so
 	// without this a change made in that gap would never reach the peer (until the next change).
 	m.goBG(func() { m.pushMine([]*Session{s}) })
-	if peer.Relation == Self {
-		m.goBG(func() { m.relayAll(s) })
-	}
+	// Profiles (profile.go): fetched from the peer; a sibling also gets my contacts' bundles,
+	// then their profiles, which it verifies against those bundles.
+	m.goBG(func() {
+		if peer.Relation == Self {
+			m.relayAll(s)
+		}
+		m.syncProfiles(s)
+	})
 	return s
 }
 
@@ -722,6 +742,10 @@ func (m *Manager) unregister(s *Session) {
 func (m *Manager) handler() http.Handler {
 	mx := http.NewServeMux()
 	mx.HandleFunc("POST "+BundlePath, m.servePush)
+	mx.HandleFunc("GET "+ProfilePath, m.serveProfile)
+	mx.HandleFunc("POST "+ProfilePath, m.servePushProfile)
+	mx.HandleFunc("POST "+ProfileEditPath, m.serveEdit)
+	mx.HandleFunc("GET "+AvatarPath+"{hash}", m.serveAvatar)
 	mx.HandleFunc("GET "+BundlePath, func(w http.ResponseWriter, r *http.Request) {
 		p, _ := PeerFrom(r.Context())
 		b, err := m.bundleFor(p.Person)

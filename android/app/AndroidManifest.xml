@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Nearby (LAN discovery): receive multicast beacons while the node runs (NodeService). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- ConnectActivity hides other apps' overlays while it asks for approval. -->
     <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />

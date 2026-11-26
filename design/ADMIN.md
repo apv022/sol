@@ -70,7 +70,9 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | Endpoint | Does |
 |---|---|
 | `GET status` | me (person, device), endpoints, transports and their state, `sessions` (browser), `peer_sessions` (live device sessions), `storage` (`{used, free, total, measured}`: `used` is what the synced folder (SolDrive) holds, measured in the background at start and refreshed at most once a minute when status is asked, `measured` false until the first measurement ends; `free` is what the device has left for this user (`Bavail`), `total` the disk) |
-| `GET people` | contacts: id, name, petname, `anonymous`, devices (online, anchor), what they share with me, what I share with them |
+| `GET people` | contacts: id, name (their certificate's), `display_name` and `name_source` (`petname` when I renamed them, else `profile`, else `certificate`), `profile_name`, `avatar` (URL of their picture on the UI root, once this device holds it), petname, `anonymous`, devices (online, anchor), what they share with me, what I share with them |
+| `GET me` · `PATCH me` `{name}` · `PUT me/avatar` (raw JPEG, PNG or WebP, at most 64 KiB) · `DELETE me/avatar` | my profile (below): `{id, name, name_source, cert_name, avatar, avatar_hash, can_sign}`; `status.me.profile` is the same object and `status.me.person.name` the shown name |
+| `GET /avatars/{hex}` (UI root, not under `/admin/v1/`) | a picture this device holds, mine or a contact's (session cookie; its real type, `nosniff`, cached as immutable) |
 | `PATCH people/{id}` `{petname?, anonymous?}` | rename locally; `anonymous` true makes them Tor-only both ways (PROTOCOL.md §Anonymous contacts), false a buddy |
 | `DELETE people/{id}` | unpair (both sides drop the contact; their copies of shared data stay with them) |
 | `GET devices` | my devices: id, name, online, admin, anchor, last seen, this one |
@@ -92,7 +94,7 @@ other users on the same computer can reach loopback. So the browser needs a sess
 | `GET /app-icons/{id}` (UI root, not under `/admin/v1/`) | an external app's icon (session cookie; `image/png`, `nosniff`) |
 | `GET wallpapers` · `POST wallpapers` (raw image body, `Content-Type` png, jpeg or webp, at most 15 MB) · `DELETE wallpapers/{id}` | the person's own wallpapers (below) |
 | `POST network-changed` | re-dial now |
-| `GET transports` · `POST transports/{name}` `{enabled}` | the transports (`wg`, `direct`, `tor`, and any other configured): `{name, enabled, state: up\|starting\|stopped\|failed, detail, listen}`; turning one on or off applies now and is kept in `config.json` (the last one stays on). Also `sol transports` and the `sol.transports.*` actions |
+| `GET transports` · `POST transports/{name}` `{enabled}` | the transports (`wg`, `direct`, `tor`, and any other configured): `{name, enabled, state: up\|starting\|stopped\|failed, detail, listen}`; turning one on or off applies now and is kept in `config.json` (the last one stays on). Also `sol transports` and the `sol.transports.*` actions. The last row is `nearby` (LAN discovery, PROTOCOL.md §Nearby; state may also be `idle`, with why in `detail`), switched the same way (or with `sol do sol.nearby`), and never counted as the last transport |
 | `GET sessions` · `DELETE sessions/{id}` | browser sessions (list, revoke) |
 | `GET events` | SSE: `status`, `person`, `device`, `session`, `app`, `inbox`, `service`, `tunnel`, `theme` with `Last-Event-ID` resume. The page never polls |
 
@@ -114,6 +116,30 @@ session was reached and why; `transport` is empty and `inbound` true when the pe
 `paths` lists the paths to that device in trouble, `{transport, state: backoff|probation,
 failures, last_error, failed_at, next_probe}` (C3b, for the Advanced view); `people[].last_seen` is optional (absent means unknown); `POST invite`
 answers `{link, expires}`.
+
+## Profile
+
+My name and picture as my devices and contacts show them (IDENTITY.md §Profile): signed by P,
+synced over sessions (`/p/profile`, `/p/avatar`), not part of the bundle. Changing them never
+needs the 24 words. The person certificate's name stays as the name of last resort (and is what
+`sol reset --confirm` also accepts).
+
+- **Name.** `PATCH /admin/v1/me {name}` (trimmed, at most 64 characters; "" shows the
+  certificate's name again). On a device without P the change is forwarded to an admin device of
+  mine, which must be reachable: otherwise `unavailable`, naming the admin devices.
+- **Picture.** The Sol app crops the chosen image to a centred square and re-encodes it to
+  256 × 256 px with a canvas (WebP, else JPEG, lowering the quality until it fits in 64 KiB), then
+  `PUT /admin/v1/me/avatar` with the bytes. The daemon decodes nothing: it checks the size and
+  the magic bytes (JPEG, PNG, WebP), stores it as `avatars/<hex>` (0600) and names its hash in my
+  profile. Anonymous contacts never receive it. `DELETE /admin/v1/me/avatar` removes it.
+- **Shown names** everywhere in the app: my petname for a contact if I renamed them, else their
+  profile's name, else their certificate's; `<sol-avatar src>` shows their picture (the letter
+  while it loads or when there is none).
+- **Actions** (`sol do`, agents through approval): `sol.profile.show`, `sol.profile.set --name
+  NAME`, `sol.profile.avatar --data BASE64 | --path /abs/file.jpg` (validated the same way; the
+  CLI does no resizing, so the file must already be small), `sol.profile.clear_avatar`. The three
+  that change something need the person's approval when an agent asks.
+- **Events.** A change to my profile is a `status` event; a contact's is a `person` event.
 
 ## Wallpapers
 
@@ -207,7 +233,8 @@ Per design/UI.md: a plain sidebar app, not a desktop OS.
   camera"), rename, mark as anchor, remove.
 - **Inbox:** notices and approvals with Approve / Deny.
 - **Sharing:** services I share (port sharing) and tunnels I opened; add a service.
-- **Settings:** appearance (theme, accent, density, corners, glass, font, wallpaper), **Notifications** (Desktop notifications on/off; hidden where unsupported), backup words
+- **Settings:** a profile card at the top (my picture or letter, my name, **Change name**,
+  **Change picture**, **Remove picture**; ADMIN.md §Profile), appearance (theme, accent, density, corners, glass, font, wallpaper), **Notifications** (Desktop notifications on/off; hidden where unsupported), backup words
   (show once, confirm), agents (list, revoke, **New agent key**: name, scopes picked from the installed apps' actions, expiry; the key is shown once with Copy and the exact `sol do` commands), browser sessions, advanced (endpoints,
   transports with on/off switches, sessions, network re-check).
 - Phone: tab bar Home · People · Inbox · Settings. Desktop: sidebar.

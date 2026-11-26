@@ -8,6 +8,7 @@ import { icons } from '/kit/icons.js';
 import '/kit/qr.js';
 import { createAdmin } from '/admin.js';
 import { gridApps, appArt, appTile, sideApp } from '/grid.js';
+import { profileCard, meView, avatarFileError, encodeAvatar } from '/profile.js';
 import { greetingFor, dateText, msToNextMinute, relTime, minutesLeft, parseRoute, wallpaperOf, wallpaperFileError, accentChoice, storageView, isAndroidApp, AGENT_NAME_RE, agentScopes, agentCommand, callText } from '/util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -49,9 +50,11 @@ const EVENT_KEYS = { status: ['status'], person: ['people'], device: ['devices']
 
 const ic = (n) => html`<sol-icon name="${n}"></sol-icon>`;
 const list = (v) => v || [];
-const meName = () => state.status?.me?.person?.name || '';
-// A petname is an address label (lowercase, DNS-safe): show it only when I renamed the person.
-const nameOf = (p) => (p.renamed && p.petname) || p.name || p.petname || p.id;
+const meName = () => meView(state.status).name;
+const meAvatar = () => meView(state.status).avatar;
+// The daemon picks the shown name (my petname for them, else their profile's, else their
+// certificate's). A petname is an address label: older daemons only meant it when I renamed them.
+const nameOf = (p) => p.display_name || (p.renamed && p.petname) || p.name || p.petname || p.id;
 const fail = (e) => { if (e?.status !== 401) toast(e?.message || String(e), { kind: 'error' }); };
 const act = async (fn, done) => { try { await fn(); if (done) toast(done); } catch (e) { fail(e); } };
 const onlineDevices = (p) => list(p.devices).filter((d) => d.online).length;
@@ -308,6 +311,30 @@ function addWallpaper() {
   input.click();
 }
 
+/** Puts a changed profile (`MeInfo`) into the status at once, so the screen shows it before the next event. */
+async function withMe(p) {
+  const me = await p;
+  const st = state.status || {};
+  return { ...st, me: { ...(st.me || {}), person: { ...(st.me?.person || {}), name: me.name }, profile: me } };
+}
+
+/** Change picture: pick an image, crop and shrink it to a small square here, upload it. */
+function changePicture() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/*';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    const bad = avatarFileError(file);
+    if (bad) { toast(bad, { kind: 'error' }); return; }
+    act(async () => {
+      let pic;
+      try { pic = await encodeAvatar(file); } catch { throw new Error('Sol could not read that image'); }
+      state.status = await withMe(admin.setAvatar(pic)); draw();
+    }, 'Picture changed');
+  };
+  input.click();
+}
+
 /** "Remove Sol from this device": warns, asks for the person's name, then the daemon stops and serves setup here. */
 function resetDialog() {
   const bk = state.backup || {}, me = meName();
@@ -347,7 +374,7 @@ function resetDialog() {
 
 function personRow(p) {
   const on = isOnline(p), n = onlineDevices(p);
-  return html`<a data-item data-chevron href="#/people/${encodeURIComponent(p.id)}"><sol-avatar name="${nameOf(p)}" id="${p.id}" ${on ? raw('online') : ''}></sol-avatar>
+  return html`<a data-item data-chevron href="#/people/${encodeURIComponent(p.id)}"><sol-avatar name="${nameOf(p)}" id="${p.id}" src="${p.avatar || ''}" ${on ? raw('online') : ''}></sol-avatar>
     <span class="grow"><span class="row-title">${nameOf(p)}</span><span class="row-sub">${on ? `Online on ${n} device${n === 1 ? '' : 's'}` : (p.last_seen ? `Last seen ${relTime(p.last_seen)}` : 'Offline')}${p.anonymous ? ' · Anonymous' : ''}</span></span></a>`;
 }
 
@@ -371,8 +398,8 @@ function personView(id) {
   if (!p) return html`<div class="page">${pageHead('Person', '', '#/people')}<div class="empty"><h3>Not found</h3><p>This person is not in your contacts any more.</p></div></div>`;
   const on = isOnline(p);
   return html`<div class="page">${pageHead('', '', '#/people')}
-    <div class="person-head"><sol-avatar name="${nameOf(p)}" id="${p.id}" size="84px" ${on ? raw('online') : ''}></sol-avatar><h1>${nameOf(p)}</h1>
-      <span class="muted">${p.renamed && p.name !== p.petname ? `${p.name} · ` : ''}<span class="${on ? 'dot-online' : 'dot-off'}"></span>${on ? 'Online' : `Last seen ${relTime(p.last_seen)}`}</span>
+    <div class="person-head"><sol-avatar name="${nameOf(p)}" id="${p.id}" size="84px" src="${p.avatar || ''}" ${on ? raw('online') : ''}></sol-avatar><h1>${nameOf(p)}</h1>
+      <span class="muted">${p.name_source === 'petname' || (!p.name_source && p.renamed) ? `${p.profile_name || p.name} · ` : ''}<span class="${on ? 'dot-online' : 'dot-off'}"></span>${on ? 'Online' : `Last seen ${relTime(p.last_seen)}`}</span>
       <div class="person-actions"><button type="button" data-act="rename-person" data-id="${p.id}">${ic('edit')}Rename</button><button type="button" class="danger" data-act="unpair" data-id="${p.id}">Unpair</button></div></div>
     <section class="section"><h3 class="group-title">Privacy</h3><div class="list"><div data-item><span class="grow">Anonymous<span class="row-sub">${p.anonymous ? 'Tor only, both ways: they only know your onion address' : 'Off: the fastest path (WireGuard, then direct, Tor last)'}</span></span><input type="checkbox" role="switch" data-anon="${p.id}" aria-label="Anonymous" ${p.anonymous ? raw('checked') : ''}></div></div></section>
     <section class="section"><h3 class="group-title">Devices</h3><div class="list">${list(p.devices).map((d) => html`<div data-item><span class="row-icon">${ic('device')}</span><span class="grow"><span class="row-title">${d.name}</span><span class="row-sub">${d.online ? 'Online' : 'Offline'}</span></span>${d.anchor ? html`<span class="badge tint">Anchor</span>` : ''}</div>`)}</div></section>
@@ -423,6 +450,7 @@ function settingsView() {
   const customs = list(state.wallpapers).filter((c) => /^[a-f0-9]{16}$/.test(c.id));
   const inApp = isAndroidApp();
   return html`<div class="page">${pageHead('Settings')}
+    ${profileCard(st)}
     ${phoneQ.matches ? html`<div class="list section"><a data-item data-chevron href="#/devices"><span class="row-icon">${ic('device')}</span><span class="grow">Devices</span></a><a data-item data-chevron href="#/sharing"><span class="row-icon">${ic('share')}</span><span class="grow">Sharing</span></a></div>` : ''}
     <section class="section"><h3 class="group-title">Appearance</h3><div class="list">
       <div data-item><span class="grow">Look</span>${seg('scheme', [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], s.scheme || 'auto')}</div>
@@ -454,12 +482,13 @@ function settingsView() {
       <p class="group-footer"><button type="button" class="tinted" data-act="network">${ic('refresh')}Check network now</button></p></details></section></div>`;
 }
 
-const TRANSPORTS = { wg: ['WireGuard', 'Direct and fast; punches through home routers'], direct: ['Direct (TLS)', 'For networks that block UDP'], tor: ['Tor', 'Works anywhere; hides your address'], clearnet: ['Clearnet', 'Unencrypted; tests and LAN only'] };
+const TRANSPORTS = { wg: ['WireGuard', 'Direct and fast; punches through home routers'], direct: ['Direct (TLS)', 'For networks that block UDP'], tor: ['Tor', 'Works anywhere; hides your address'], clearnet: ['Clearnet', 'Unencrypted; tests and LAN only'], nearby: ['Nearby', 'Find your devices and people on the same Wi-Fi, even offline'] };
 function transportRows(ts) {
-  const on = ts.filter((t) => t.enabled).length;
+  // Nearby only finds devices; it carries nothing, so it never counts as the last one on.
+  const on = ts.filter((t) => t.enabled && t.name !== 'nearby').length;
   return ts.map((t) => {
     const [title, sub] = TRANSPORTS[t.name] || [t.name, ''];
-    const last = t.enabled && on === 1;
+    const last = t.enabled && on === 1 && t.name !== 'nearby';
     return html`<div data-item><span class="grow">${title}<span class="row-sub">${t.enabled && t.detail ? t.detail : sub}</span></span>${t.enabled ? html`<span class="badge ${t.state === 'up' ? 'ok' : ''}">${t.state}</span>` : ''}<input type="checkbox" role="switch" data-transport="${t.name}" aria-label="${title}" ${t.enabled ? raw('checked') : ''} ${last ? raw('disabled') : ''}></div>`;
   });
 }
@@ -474,10 +503,10 @@ function homeView() {
   const st = storageView(state.status?.storage);
   const items = list(state.inbox), apps = gridApps(state.apps);
   return html`<div class="home">
-    <header class="hero"><h1 class="greet" id="greet">${greetingFor(meName(), now)}</h1><p class="date" id="date">${dateText(now)}</p></header>
+    <header class="hero">${meAvatar() ? html`<sol-avatar class="hero-avatar" name="${meName() || '?'}" id="${meView(state.status).id}" size="56px" src="${meAvatar()}"></sol-avatar>` : ''}<h1 class="greet" id="greet">${greetingFor(meName(), now)}</h1><p class="date" id="date">${dateText(now)}</p></header>
     <div class="widgets">
       <a class="widget" data-var-i="0" href="#/people"><span class="widget-title">${ic('people')}People online</span><span class="widget-body"><span class="widget-value">${online.length}</span>
-        <span class="widget-row"><span class="faces">${online.slice(0, 4).map((p) => html`<sol-avatar name="${nameOf(p)}" id="${p.id}" size="24px"></sol-avatar>`)}</span><span class="widget-sub">${ppl.length ? `of ${ppl.length}` : 'No one yet'}</span></span></span></a>
+        <span class="widget-row"><span class="faces">${online.slice(0, 4).map((p) => html`<sol-avatar name="${nameOf(p)}" id="${p.id}" size="24px" src="${p.avatar || ''}"></sol-avatar>`)}</span><span class="widget-sub">${ppl.length ? `of ${ppl.length}` : 'No one yet'}</span></span></span></a>
       <a class="widget" data-var-i="1" href="#/devices"><span class="widget-title">${ic('device')}My devices</span><span class="widget-body"><span class="widget-value">${ds.length}</span><span class="widget-sub">${ds.filter((d) => d.online).length} online</span></span></a>
       ${st ? html`<a class="widget" data-var-i="2" href="#/settings"><span class="widget-title">${ic('storage')}Storage</span><span class="widget-body"><span class="widget-value">${st.value}</span><span class="widget-sub">${st.sub}</span></span></a>` : ''}
     </div>
@@ -507,7 +536,7 @@ function chrome() {
     <div class="side-group" role="group" aria-label="Apps"><div class="side-label">Apps</div>${apps.length ? apps.map((a) => sideApp(a)) : html`<span class="side-none">None installed</span>`}</div>
     <div class="side-sep"></div>
     ${NAV.filter((n) => SIDE.includes(n[0])).map(([n, l, i, h]) => html`<a class="side-item" href="${h}" aria-current="${n === route.name ? 'page' : 'false'}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge tint') : ''}</a>`)}<span class="spacer"></span>
-    <div class="me"><sol-avatar name="${meName() || '?'}" id="me"></sol-avatar><span><strong>${meName()}</strong><small class="muted">${state.status?.me?.device?.name || ''}</small></span></div>`);
+    <div class="me"><sol-avatar name="${meName() || '?'}" id="${meView(state.status).id}" src="${meAvatar()}"></sol-avatar><span><strong>${meName()}</strong><small class="muted">${state.status?.me?.device?.name || ''}</small></span></div>`);
   render($('tabs'), html`${TABS.map(([n, l, i, h]) => html`<a href="${h}" aria-current="${current(n)}">${ic(i)}${l}${n === 'inbox' ? badge(inboxCount(), 'badge') : ''}</a>`)}`);
 }
 
@@ -569,6 +598,9 @@ const ACTIONS = {
   network: () => act(() => admin.networkChanged(), 'Checking the network'),
   'new-agent': newAgentDialog,
   'add-wallpaper': addWallpaper,
+  'profile-name': () => { const v = meView(state.status); renameDialog('Change name', v.name, async (name) => { state.status = await withMe(admin.setName(name)); draw(); }); },
+  'profile-picture': changePicture,
+  'profile-clear': () => confirmDialog({ title: 'Remove your picture?', text: 'Your devices and contacts see your initial again.', action: 'Remove', run: async () => { state.status = await withMe(admin.clearAvatar()); draw(); toast('Picture removed'); } }),
   'del-wallpaper': (el) => confirmDialog({ title: 'Delete this wallpaper?', text: 'The image is removed from this device.', action: 'Delete', run: async () => { await admin.removeWallpaper(el.dataset.id); await load('wallpapers'); await load('theme'); toast('Deleted'); } }),
   signin: () => act(async () => { await admin.signIn(); locked = false; stream?.close(); await loadAll(); connect(); draw(); }),
 };

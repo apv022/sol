@@ -11,7 +11,7 @@
 //	sol status                   who I am, my endpoints and sessions
 //	sol invite [--join|--anonymous]  print a one-time pair (or join, or anonymous pair) link
 //	sol people [set <name> --anonymous|--buddy]  list contacts; make one Tor-only (anonymous) or a buddy
-//	sol transports [enable|disable <name>]  list the transports (wg, direct, tor); turn one on or off
+//	sol transports [enable|disable <name>]  list the transports (wg, direct, tor) and nearby (LAN discovery); turn one on or off
 //	sol pair <link>              redeem a pair link, or a join link on a fresh --join device
 //	sol apps                     list installed apps and their UI addresses
 //	sol app install <dir>        install (or replace) the app in dir

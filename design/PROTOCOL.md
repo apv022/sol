@@ -225,9 +225,10 @@ The caller's verified person, device and relation (`self` or `contact`) are know
 |---|---|---|
 | `GET /p/bundle` | any | latest identity bundle (to pick up rotations) |
 | `POST /p/bundle` | any (see §Settled in C3) | push bundles: my changed bundle, or a contact's relayed between my devices; 204 |
-| `GET /p/profile` | self, contacts | my latest profile (IDENTITY.md §Profile); an anonymous contact gets the form without the avatar; 404 when I never set one |
-| `POST /p/profile` | self, contacts | push my changed profile, or (between my devices) a contact's, relayed like bundles; 204. Pushed to every open session when it changes, and fetched by the other side when a session comes up |
-| `GET /p/avatar/{hash}` | self, buddies (never anonymous contacts) | the picture my profile names, only if `hash` is my current or previous avatar |
+| `GET /p/profile` | self, contacts | my latest profile (IDENTITY.md §Profile) as `u32 len \| profile` records: a buddy gets the full form, an anonymous contact the form without the avatar, my own devices both; 404 when I never set one |
+| `POST /p/profile` | self, contacts | push profiles (same body): my changed profile, or (between my devices) a contact's, relayed like bundles; 204. Pushed to every open session when it changes here (set here, or learned from a sibling), and fetched by the other side when a session comes up; a sibling that comes up also gets every contact profile, after their bundles |
+| `POST /p/profile/edit` | self | a device of mine without P asks an admin device to sign a change, JSON `{name?, avatar? (base64 bytes), clear_avatar?}`; answers the new records (as `GET /p/profile` to self), 409 on a device without P |
+| `GET /p/avatar/{hash}` | self, buddies (never anonymous contacts) | a picture: to a buddy only my current or previous avatar; to my own devices any picture this device holds (mine and contacts', so a relayed contact profile shows its picture); 403 is decided before looking it up |
 | `POST /p/sync` | self, contacts | feed replication: body is the list of feeds + `have` seqs; the response streams missing entries, then new ones live |
 | `GET /p/blobs/{hash}` | per API.md §4 rule; self always | blob bytes, `Range` supported |
 | `POST /p/actions/{name}` | per sharing + scopes | run an action on this device's app, caller headers attached |
@@ -326,6 +327,100 @@ by the same side, the newer wins (the older is likely dead).
   `probation`, failures, last error, next probe); the admin API's `peer_sessions` shows both for
   the Sol app's Advanced view.
 
+## Nearby (LAN discovery, built in C12)
+
+Endpoint records only travel over sessions, so two devices whose LAN addresses changed while they
+were apart (a new Wi-Fi, a new DHCP lease), or that share a network with no internet, would never
+find each other. Nearby fixes that with a small multicast **beacon** that only my own devices and
+my buddies' devices can recognise. A beacon grants nothing: a match only hands the session layer
+a candidate address, and the handshake authenticates whoever answers as usual.
+
+**Where.** UDP to `239.255.83.79:7748` (IPv4, administratively scoped), TTL 1 (never routed off
+the link), sent from and received on every interface that is up, multicast-capable, not loopback,
+not a container or VM bridge, and has a routable IPv4 address. Multicast loopback is on, so two
+Sol devices on one machine see each other. Where the interfaces can't be listed (Android 11+), one
+socket on the default interface. Not IPv6 yet: on an IPv6-only link the source of a link-local
+multicast is `fe80::/10`, which the transports refuse as a peer candidate (addresses carry no
+zone); IPv4 covers every home and office LAN today.
+
+**When.** At start, at every network change (and again 5 s later, once DHCP and the transports
+settle), every 30 s ±20 %, and once (at most every 5 s) when a beacon matched a device this
+device has no session with, so the other side learns this device's address at once too. Nothing
+is ever sent to the source of a beacon; a beacon is answered only by this device's own beacon to
+the group.
+
+**Who can recognise it.** For every pair of devices, both derive a key nobody else can, from the
+device keys, as for Tor client authorization:
+
+```
+lo, hi = the two device keys, sorted bytewise
+K      = SHA-256("sol nearby v1" | lo | hi | X25519(x(D_me), x(D_peer)))
+w      = floor(unix seconds / 300)                       the time window
+out    = HMAC-SHA256(K, "beacon" | D_sender | u64(w))
+entry  = out[0:8] | (ports XOR out[8:16])                16 bytes
+ports  = u16 wg | u16 direct | u16 clearnet | u16 0      this device's listening ports (0: off)
+```
+
+A beacon has one entry for each device this device keeps a session with: my own devices and the
+devices of every buddy, never an anonymous contact (§Anonymous contacts), never anyone not paired.
+
+```
+datagram = "SOLN" | u8 version (1) | u8 n | n entries
+```
+
+`n` is a multiple of 8 (random entries pad it) and at most 64; more devices take several
+datagrams. Entries are shuffled. There is nothing else: no public key, name, device ID or
+counter.
+
+**Receiving.** A receiver precomputes, for every device it keeps that is not an anonymous
+contact's, the 8-byte tags for windows `w-1`, `w` and `w+1` (clocks may differ by a few minutes),
+recomputed when the window or the set of kept devices changes. Each entry is one map lookup. On a
+match it unmasks the ports (the last two bytes must be zero), and gives the session layer, as an
+unsigned hint for that one device, the beacon's source address with each advertised port, for
+each transport that device's newest signed endpoint record has: `wg` and `direct` get the address
+prepended to the record's candidates (the record's keys stay), `clearnet` (tests) gets an extra
+endpoint. Hints last 3 minutes (beacons renew them). The device's keeper is woken: without a
+session it redials now; on a worse path (Tor) the better one is probed and the session moves as
+in §Liveness and healing. Malformed datagrams, sources that are not unicast IPv4 (loopback only in
+tests) and anything over 50 datagrams a second are dropped without a word.
+
+**What an observer on the network learns, and what it doesn't.**
+
+- That a Sol device is there (the port and the `SOLN` magic), and roughly how many devices it
+  keeps (`n`, rounded up to 8). Discovery can't hide that something is being discovered.
+- Not who it is: tags are HMAC outputs under keys only the two devices of a pair hold, and change
+  every window, so beacons can't be linked across windows (or networks) without a key. Within one
+  5-minute window a device's beacons repeat, as its IP and MAC address do anyway.
+- Not who knows whom: tags are directed (`D_sender` is in the input), so the entry A sends for B
+  never equals the one B sends for A, and two devices' beacons have nothing in common. Once they
+  connect, the connection between their addresses is visible, as any direct path is.
+- Not the ports in a recognisable form: they are masked per pair and window, so stable listening
+  ports can't link a device across networks.
+- **Replay** is the residual risk: someone on the same link can rebroadcast a captured beacon
+  within about 10 minutes (the window tolerance); a device that recognises it dials the replayer,
+  which tells the replayer that a device related to the original sender is on its network (and
+  shows that dial's usual first bytes). It can't make anyone accept anything: the handshake still
+  needs the right device key.
+
+**Who is never told.** An anonymous contact gets no entry (it could match nothing) and its
+devices' beacons are never matched (they aren't in the table), so I never dial them on a LAN.
+Removing a contact or a device drops its entry at the next beacon: the keys are per pair and
+derived, so there is nothing to revoke or rotate.
+
+**The switch.** On by default; `"nearby": false` in `config.json` turns it off, as do `sol do
+sol.nearby --state off`, `sol transports disable nearby` and `POST /admin/v1/transports/nearby`
+`{enabled}` (the Sol app's Advanced view). Off closes the sockets: nothing is sent or received.
+It also stays quiet when no transport listens on a non-loopback address (nothing on the LAN could
+reach this device). `sol transports list` and `sol status` show it as the `nearby` row: `up` with
+the interfaces and how many kept devices were seen in the last 3 minutes, `off`, or `idle` and why.
+
+**Platforms.** Standard library only: a `net.ListenMulticastUDP` socket per interface (it binds
+the wildcard address, so datagrams that arrive on several sockets are deduplicated), plus
+`IP_MULTICAST_LOOP` set per OS (Linux and Android, macOS and the BSDs, Windows, where it is a
+receive-side option); other systems report nearby as unavailable. On Android the shell holds a
+`WifiManager.MulticastLock` while the node runs and nearby isn't off in its config (many Wi-Fi
+drivers drop multicast without it), released when the node stops.
+
 ## Anonymous contacts (built in C10)
 
 Per person, I choose how much of my network a contact may see. **Buddies** (every contact by
@@ -349,7 +444,8 @@ mine that isn't an onion:
   only its own onion, and only itself.
 - **Dialing.** I dial an anonymous contact over anonymous transports only (their record is
   filtered before ranking), never tell WireGuard their key (so nothing punches towards them) and
-  never probe a direct path.
+  never probe a direct path. Nearby beacons carry no entry for them and never match theirs
+  (§Nearby).
 - **Refusing.** The onion's target is a listener of its own; a session with an anonymous contact
   is admitted only on it. Their dial on any other transport (they may know an old address) is
   refused at the callee decision like every refusal: the connection closes unanswered, and no

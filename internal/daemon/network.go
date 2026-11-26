@@ -50,6 +50,9 @@ func (d *Daemon) NetworkChanged(reason string) {
 		}
 	}
 	d.Sessions.NetworkChanged()
+	if d.near != nil {
+		d.near.NetworkChanged() // new interfaces: reopen the beacon sockets and announce
+	}
 	d.refreshEndpoints()
 	d.mu.Lock()
 	if d.settle != nil {

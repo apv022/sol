@@ -90,7 +90,7 @@ func TestTransportsEnableDisable(t *testing.T) {
 	for _, tr := range st.Transports {
 		on[tr.Name] = tr.Enabled
 	}
-	if !on["direct"] || on["wg"] || on["tor"] || len(st.Transports) != 3 {
+	if !on["direct"] || on["wg"] || on["tor"] || !on["nearby"] || len(st.Transports) != 4 {
 		t.Fatalf("status transports %+v", st.Transports)
 	}
 }
@@ -185,5 +185,54 @@ func TestTorBinFromConfigAndEnv(t *testing.T) {
 	run(envTor)
 	if _, err := os.Stat(cfgRan); err == nil {
 		t.Fatal("tor_bin ran although SOL_TOR_BIN was set")
+	}
+}
+
+// LAN discovery is on by default and listed after the transports; sol.nearby shows and
+// switches it (with a dry run), as does the transports switch, and config.json keeps it.
+func TestNearbySetting(t *testing.T) {
+	d := testDaemon(t)
+	c := adminClient(t, d)
+	ctx := context.Background()
+	row := func() TransportState {
+		ts := d.Transports()
+		return ts[len(ts)-1]
+	}
+	if r := row(); r.Name != "nearby" || !r.Enabled || r.State != "idle" {
+		t.Fatalf("nearby row with only a loopback transport: %+v", r)
+	}
+	call := func(args string, dry bool) map[string]any {
+		t.Helper()
+		var out map[string]any
+		if err := c.Do(ctx, "POST", "/admin/v1/actions/call", sol.ActionCall{Action: "sol.nearby",
+			Args: json.RawMessage(args), DryRun: dry}, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if out := call(`{}`, false); out["enabled"] != true {
+		t.Fatalf("show: %v", out)
+	}
+	if out := call(`{"state":"off"}`, true); out["dry_run"] != true || !d.Nearby().Enabled {
+		t.Fatalf("dry run: %v, %+v", out, d.Nearby())
+	}
+	if out := call(`{"state":"off"}`, false); out["enabled"] != false || out["state"] != "off" {
+		t.Fatalf("off: %v", out)
+	}
+	if cfg, _ := LoadConfig(d.Dir()); cfg.Nearby == nil || *cfg.Nearby {
+		t.Fatalf("config.json: %+v", cfg.Nearby)
+	}
+	if r := row(); r.Enabled || r.State != "" {
+		t.Fatalf("row while off: %+v", r)
+	}
+	var ts []TransportState
+	if err := c.Do(ctx, "POST", "/admin/v1/transports/nearby", map[string]bool{"enabled": true}, &ts); err != nil {
+		t.Fatal(err)
+	}
+	if r := ts[len(ts)-1]; r.Name != "nearby" || !r.Enabled {
+		t.Fatalf("after the transports switch: %+v", r)
+	}
+	if cfg, _ := LoadConfig(d.Dir()); cfg.Nearby == nil || !*cfg.Nearby {
+		t.Fatalf("config.json: %+v", cfg.Nearby)
 	}
 }
