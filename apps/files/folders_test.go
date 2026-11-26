@@ -99,8 +99,13 @@ func TestListCountsSyncAndRawCaching(t *testing.T) {
 	a.write(t, "Box/one.txt", "1")
 	a.write(t, "Box/two.txt", "2")
 	a.must(t, "files.mkdir", map[string]any{"path": "Box/In"})
-	waitFor(t, "published", func() bool { return a.app.getView().files["Box/two.txt"] != nil })
-	out := a.must(t, "files.list", map[string]any{"path": ""})
+	// Both files come in through the watcher, in either order: wait for the folder to hold all three.
+	var out map[string]any
+	waitFor(t, "published", func() bool {
+		out = a.must(t, "files.list", map[string]any{"path": ""})
+		es, _ := out["entries"].([]any)
+		return len(es) == 1 && es[0].(map[string]any)["items"] == float64(3)
+	})
 	box := out["entries"].([]any)[0].(map[string]any)
 	if box["name"] != "Box" || box["items"] != float64(3) {
 		t.Fatalf("folder entry: %v", box)
