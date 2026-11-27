@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +36,7 @@ type pathNode struct {
 
 func newPathNode(t *testing.T, name string) *pathNode {
 	t.Helper()
+	dbgStart(t)
 	kr, err := identity.Create(t.TempDir(), name, name+"-1", time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +61,7 @@ func newPathNode(t *testing.T, name string) *pathNode {
 	n := &node{kr: kr, contacts: NewMemContacts(), tokens: pairing.NewTokens()}
 	n.m, err = New(Config{Keyring: kr, Contacts: n.contacts, Tokens: n.tokens,
 		Transports: []transport.Transport{renamed{cl, "direct"}, renamed{cl, "tor"}},
-		Handler:    http.Handler(testHandler()), Log: slog.New(slog.DiscardHandler)})
+		Handler:    http.Handler(testHandler()), Log: slog.New(slog.NewTextHandler(dbgW{t, name}, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +69,48 @@ func newPathNode(t *testing.T, name string) *pathNode {
 	t.Cleanup(func() { n.m.Close(); cl.Stop() })
 	pn.node = n
 	return pn
+}
+
+type dbgW struct {
+	t    *testing.T
+	name string
+}
+
+var dbgMu sync.Mutex
+var dbgBuf = map[*testing.T]*bytes.Buffer{}
+
+func (w dbgW) Write(p []byte) (int, error) {
+	dbgMu.Lock()
+	defer dbgMu.Unlock()
+	b := dbgBuf[w.t]
+	if b == nil {
+		return len(p), nil
+	}
+	b.WriteString(w.name + " " + time.Now().Format("15:04:05.000") + " ")
+	b.Write(p)
+	return len(p), nil
+}
+
+func dbgStart(t *testing.T) {
+	dbgMu.Lock()
+	defer dbgMu.Unlock()
+	if dbgBuf[t] != nil {
+		return
+	}
+	b := &bytes.Buffer{}
+	dbgBuf[t] = b
+	t.Cleanup(func() {
+		dbgMu.Lock()
+		defer dbgMu.Unlock()
+		if t.Failed() {
+			os.Stderr.Write(b.Bytes())
+		}
+		delete(dbgBuf, t)
+	})
+}
+
+func dbg(t *testing.T, msg string) {
+	dbgW{t, "TEST"}.Write([]byte(msg + "\n"))
 }
 
 // dialedSession returns the session between a and b, from the side that dialed it.
@@ -95,10 +140,12 @@ func TestFallbackAndReturn(t *testing.T) {
 		t.Fatalf("first session: %v %+v", ok, s.Path())
 	}
 
+	dbg(t, "alice="+short(alice.kr.DevicePublic())+" bob="+short(bob.kr.DevicePublic()))
 	for _, n := range []*pathNode{alice, bob} {
 		n.wg.Refuse(true)
 		n.wg.ResetAll()
 	}
+	dbg(t, "refused")
 	var fb *Session
 	eventually(t, "a session over tor", func() bool {
 		fb, ok = dialedSession(alice, bob)

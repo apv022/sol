@@ -747,6 +747,7 @@ func (m *Manager) start(conn net.Conn, weCalled bool, peer Peer, caller ed25519.
 	go func() {
 		defer m.wg.Done()
 		<-ms.Done()
+		m.log.Debug("DBG mux done", "peer", short(s.peer.Device), "caller", short(s.caller), "path", s.path.Transport, "err", ms.Err())
 		s.retire()
 		s.srv.Close()
 		s.client.CloseIdleConnections()
@@ -793,6 +794,12 @@ func (m *Manager) register(s *Session) (winner *Session, kept bool) {
 		return nil, false
 	}
 	old := m.sessions[key]
+	m.log.Debug("DBG register", "peer", short(s.peer.Device), "caller", short(s.caller), "path", s.path.Transport, "reason", s.path.Reason, "old", old != nil, "oldAlive", old != nil && old.Alive(), "oldCaller", func() string {
+		if old != nil {
+			return short(old.caller)
+		}
+		return ""
+	}())
 	if old != nil && old.Alive() {
 		oc, nc := identity.ID(old.caller), identity.ID(s.caller)
 		if oc < nc {
@@ -1107,6 +1114,7 @@ func (m *Manager) dial(ctx context.Context, rec identity.EndpointRecord, c wire.
 	}
 	c.Want = rec.Device
 	paths := m.rank(rec)
+	m.log.Debug("DBG dial", "peer", short(rec.Device), "ranked", fmt.Sprint(paths), "op", c.Op)
 	if c.Op == wire.OpPair || c.Op == wire.OpJoin {
 		paths = noWG(paths)
 	}
@@ -1323,6 +1331,7 @@ func (m *Manager) keep(k *keeper) {
 	var notBefore time.Time // no upgrade attempt before this
 	for k.ctx.Err() == nil {
 		if s, ok := m.Session(k.device); ok {
+			m.log.Debug("DBG keep has session", "peer", short(k.device), "caller", short(s.caller), "path", s.path.Transport)
 			backoff = RedialMin
 			var due <-chan time.Time
 			var t *time.Timer
@@ -1333,6 +1342,7 @@ func (m *Manager) keep(k *keeper) {
 			}
 			select {
 			case <-s.Retired(): // replaced or dead: look again
+				m.log.Debug("DBG keep retired", "peer", short(k.device), "alive", s.Alive())
 			case <-k.wake:
 			case <-due:
 				m.tryUpgrade(k.ctx, s, ep)
@@ -1348,6 +1358,7 @@ func (m *Manager) keep(k *keeper) {
 			}
 			continue
 		}
+		m.log.Debug("DBG keep connect", "peer", short(k.device))
 		if _, err := m.Connect(k.ctx, k.person, k.device); err == nil {
 			continue
 		} else if k.ctx.Err() == nil {

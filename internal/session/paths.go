@@ -231,6 +231,7 @@ func (m *Manager) pathFailed(device ed25519.PublicKey, ep identity.Endpoint, why
 		wait, failures = min(f.wait*2, PathBackoffMax), f.failures+1
 	}
 	now := time.Now()
+	m.log.Debug("DBG pathFailed", "peer", short(device), "path", ep.Transport, "why", why)
 	l.fails[k] = &pathFail{at: now, wait: wait, failures: failures, err: why, nextProbe: now.Add(jitter(wait))}
 	if l.lastGood == k {
 		l.lastGood = ""
@@ -453,6 +454,7 @@ func (m *Manager) dialHedged(ctx context.Context, device, wantPerson ed25519.Pub
 		case <-hedge:
 			launch()
 		case a := <-results:
+			m.log.Debug("DBG attempt", "peer", short(device), "path", a.ep.Transport, "err", a.err, "op", call.Op)
 			running--
 			delete(started, pathKey(a.ep))
 			if a.err == nil {
