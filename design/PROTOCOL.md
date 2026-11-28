@@ -338,8 +338,9 @@ drains: streams open on it, a tunnel or a download, finish undisturbed). Any
   The mux pings every 20 s and closes a session after three missed pongs.
 - **Network changes and sleep.** `internal/netwatch` watches the wall clock against the
   monotonic clock (a jump of over 20 s means the machine slept), the kernel's route netlink
-  socket on Linux and Android (address, link and default-route changes), and elsewhere scans the
-  interface addresses every 5 s; bursts collapse after 2 s. A change, or `sol network-changed`,
+  socket on Linux and Android (effective address, link and default-route changes), and elsewhere
+  scans the interface addresses every 5 s; bursts collapse after 2 s. Address notifications that
+  only refresh IPv6 preferred/valid lifetimes are ignored. A change, or `sol network-changed`,
   tells the transports (Tor, WireGuard re-check themselves), closes sessions whose local address
   is gone, checks every other session with a request (closed if no answer within 10 s, 60 s over
   Tor), makes every path backoff and redial due now, and re-signs the endpoint record if this
