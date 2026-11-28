@@ -45,6 +45,10 @@ func watchOS(ctx context.Context, send func(string)) error {
 	if err != nil {
 		return err
 	}
+	// RTM_NEWADDR also arrives when IPv6 router advertisements refresh an
+	// address's preferred/valid lifetimes. Remember the effective addresses so
+	// those notifications don't churn every transport (especially Tor).
+	lastSig, _ := signature()
 	// Non-blocking, so the runtime poller serves Read and Close interrupts it.
 	f := os.NewFile(uintptr(fd), "netlink")
 	go func() {
@@ -70,13 +74,40 @@ func watchOS(ctx context.Context, send func(string)) error {
 				continue
 			}
 			for _, m := range msgs {
-				if r := relevant(m); r != "" {
-					send(r)
+				reason := relevant(m)
+				if reason == "" {
+					continue
 				}
+				sig, sigErr := signature()
+				if reason == ReasonAddresses {
+					if !addressSignatureChanged(&lastSig, sig, sigErr) {
+						continue
+					}
+				} else if sigErr == nil {
+					// Link/route changes matter even when the addresses stay
+					// the same, but keep the baseline current for later address
+					// notifications.
+					lastSig = sig
+				}
+				send(reason)
 			}
 		}
 	}()
 	return nil
+}
+
+// addressSignatureChanged filters address notifications that don't change
+// the usable interface addresses. When the current state can't be read,
+// notify conservatively rather than risk missing a real change.
+func addressSignatureChanged(last *string, current string, err error) bool {
+	if err != nil {
+		return true
+	}
+	if current == *last {
+		return false
+	}
+	*last = current
+	return true
 }
 
 // relevant says why a netlink message matters ("" when it doesn't): an address or link

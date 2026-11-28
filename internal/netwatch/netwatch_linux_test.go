@@ -137,3 +137,28 @@ func TestRelevant(t *testing.T) {
 		t.Error("a loopback address change counted")
 	}
 }
+
+func TestAddressSignatureChanged(t *testing.T) {
+	// A router-advertisement lifetime refresh keeps the stable signature the same.
+	last := "wlan0=2001:db8::1/64"
+	if addressSignatureChanged(&last, last, nil) {
+		t.Fatal("an unchanged address notification should be ignored")
+	}
+	next := "wlan0=2001:db8::2/64"
+	if !addressSignatureChanged(&last, next, nil) {
+		t.Fatal("a changed address notification was ignored")
+	}
+	if last != next {
+		t.Fatalf("last signature = %q, want %q", last, next)
+	}
+	prefixChanged := "wlan0=2001:db8::2/128"
+	if !addressSignatureChanged(&last, prefixChanged, nil) {
+		t.Fatal("a prefix change was ignored")
+	}
+	if !addressSignatureChanged(&last, "", syscall.EIO) {
+		t.Fatal("an unreadable address state should notify conservatively")
+	}
+	if last != prefixChanged {
+		t.Fatalf("an unreadable state changed the baseline to %q", last)
+	}
+}

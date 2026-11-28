@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Linux: ignore netlink address notifications that only refresh IPv6 preferred/valid lifetimes,
+  avoiding unnecessary Tor restarts when the usable addresses have not changed.
+
 ## v0.2.0-beta.4 (beta)
 
 - **Your name and picture.** Settings has a profile card: change your name or picture, and your

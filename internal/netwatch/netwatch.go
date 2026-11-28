@@ -194,7 +194,7 @@ func signature() (string, error) {
 			if !ok || ipn.IP.IsLoopback() || ipn.IP.IsLinkLocalUnicast() {
 				continue
 			}
-			parts = append(parts, ifc.Name+"="+ipn.IP.String())
+			parts = append(parts, ifc.Name+"="+ipn.String())
 		}
 	}
 	sort.Strings(parts)
